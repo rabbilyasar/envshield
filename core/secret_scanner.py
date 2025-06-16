@@ -1,0 +1,1 @@
+# Handles regex-based secret detection

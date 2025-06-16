@@ -1,0 +1,1 @@
+# Handles .env file operations, profiles, switching

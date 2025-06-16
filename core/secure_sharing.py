@@ -1,0 +1,1 @@
+# Handles basic non-sensitive encrypted snippets

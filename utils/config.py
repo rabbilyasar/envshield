@@ -1,0 +1,1 @@
+# Manages EnvGuard's internal configuration (e.g., project mappings)
