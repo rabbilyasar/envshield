@@ -1,1 +1,0 @@
-# Manages Git pre-commit hook installation

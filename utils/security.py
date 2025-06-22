@@ -1,1 +1,0 @@
-# Basic encryption for snippets (e.g., symmetric)

@@ -1,1 +1,0 @@
-# Global constants and regex patterns

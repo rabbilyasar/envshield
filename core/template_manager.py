@@ -1,1 +1,0 @@
-# Manages .env.template generation and syncing

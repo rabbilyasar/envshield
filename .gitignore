@@ -2,5 +2,16 @@ venv/
 __pycache__/
 *.pyc
 .env
+pycache/
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+
 *.encrypted
 .envguard/local_vault/
+.envguard/
+*.envguard_bak
+*.env_encrypted
