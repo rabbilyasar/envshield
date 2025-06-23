@@ -15,3 +15,5 @@ venv/
 .envguard/
 *.envguard_bak
 *.env_encrypted
+
+*.egg-info/
