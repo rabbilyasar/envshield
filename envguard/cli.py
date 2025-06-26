@@ -7,10 +7,13 @@ from envguard.utils.error_handling import EnvGuardError # Import base EnvGuardEr
 console = Console()
 
 @click.group()
-@click.version_option(package_name='envguard')
+@click.version_option(package_name='envguard') # Click will read version from setup.py
 def cli():
     """
     EnvGuard CLI: Secure Environment Variable Management and Secret Prevention.
+
+    This is the main entry point for the EnvGuard command-line tool.
+    All subcommands are registered under this group.
     """
     pass
 
