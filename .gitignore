@@ -1,19 +1,41 @@
-venv/
+# Python bytecode
 __pycache__/
-*.pyc
-.env
 pycache/
+*.pyc
 *.pyo
 *.pyd
-.Python
+
+# Virtual environment directories
+venv/
+.env
 env/
 venv/
 .venv/
 
-*.encrypted
-.envguard/local_vault/
-.envguard/
-*.envguard_bak
-*.env_encrypted
+# Editor/IDE specific files
+.vscode/
+.idea/
+*.swp
+*.bak
 
+# Operating System generated files
+.DS_Store
+Thumbs.db
+
+.Python
+# The actual .env file containing secrets
+.env
+*.env.local
+*.env.development
+*.env.production
+
+# Backup files created by EnvGuard during symlink/file operations
+*.envguard_bak
+
+# Log files
+*.log
+
+# Python build artifacts
+build/
+dist/
 *.egg-info/
