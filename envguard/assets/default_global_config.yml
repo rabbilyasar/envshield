@@ -1,0 +1,23 @@
+# envguard/assets/default_global_config.yml
+# EnvGuard Global Configuration File
+# This file contains settings that apply to all EnvGuard projects.
+# It is typically located in ~/.config/envguard/config.yml (Linux/macOS) or %APPDATA%/EnvGuard/config.yml (Windows).
+
+# --- Audit Logging Settings ---
+# Configure if and how EnvGuard logs sensitive operations.
+# audit_log:
+#   enable: false # Set to true to enable audit logging
+#   path: audit.log # Path to the audit log file (relative to global config dir)
+#   max_bytes: 5242880 # Max size of log file before rotation (5 MB)
+#   backup_count: 5 # Number of backup log files to keep
+#   level: INFO # Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+
+# --- Global Sensitive Keys ---
+# Additional variable names (case-insensitive) that EnvGuard should always
+# consider sensitive across all projects. These are merged with project-specific
+# sensitive keys and built-in defaults.
+# Values for these keys will be masked in `envguard profile view` and replaced
+# with placeholders in `envguard template generate` (unless overridden by schema.placeholder).
+sensitive_keys:
+  - GLOBAL_APP_SECRET # Example: A secret used by all apps in your organization
+  - INFRA_ACCESS_KEY
