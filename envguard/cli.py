@@ -1,54 +1,84 @@
-# envguard/cli.py
-import click
-# Import the custom display and error handling utilities
-from envguard.utils.display import print_error, console, print_warning # Import console for raw printing if needed
-from envguard.utils.error_handling import EnvGuardError
-import sys # For sys.exit
+import typer
+import os
+import questionary
+from rich.console import Console
+from rich.panel import Panel
 
+from .config import manager
 
-@click.group()
-@click.version_option(package_name='envguard') # Gets version from setup.py
-def cli():
+# Create a typer application instance
+app = typer.Typer(
+    name="envguard",
+    help="A CLI tool to manage, secure, and collaborate on environment variables.",
+    rich_markup_mode="markdown"
+)
+console = Console()
+
+@app.command()
+def init():
     """
-    EnvGuard CLI: Secure Environment Variable Management and Secret Prevention.
-
-    EnvGuard streamlines local .env file management, enforces security best
-    practices through pre-commit scanning, simplifies template synchronization,
-    and facilitates secure sharing of non-sensitive environment snippets.
+    Initializes EnvGuard in the current project directory.
+    This command will guide you through creating an `envguard.yml` file
     """
-    pass # No setup needed at the group level yet
+    console.print(Panel(
+        "[bold cyan]Welcome to EnvGuard Initialization![/bold cyan]\n\nThis wizard will help you set up your project.",
+        title="EnvGuard",
+        border_style="green"
+    ))
+    # Check if config file already exists
+    if manager.config_exists():
+        overwrite = questionary.confirm(
+            "An `envguard.yml` file already exists. Do you want to overwrite it?",
+            default=False
+        ).ask()
+        if not overwrite:
+            console.print("[bold yellow]Initialization aborted. No changes made.[/bold yellow]")
+            raise typer.Exit()
 
-# --- Centralized Error Handling ---
-# This decorator registers a callback that runs after any command completes.
-# It allows us to catch custom exceptions and print formatted error messages.
-@cli.result_callback()
-def process_result(result, **kwargs):
-    """
-    Callback function executed after each command.
-    It catches custom EnvGuardError exceptions and prints them gracefully,
-    ensuring a consistent error reporting experience.
-    """
-    if isinstance(result, Exception):
-        if isinstance(result, EnvGuardError):
-            print_error(str(result)) # Print custom EnvGuardError messages
-            sys.exit(1) # Exit with a non-zero code to indicate failure
-        elif isinstance(result, click.exceptions.Exit) and result.exit_code == 0:
-            # Allow Click's clean exit (e.g., from --help or successful command)
-            pass
-        elif isinstance(result, click.exceptions.Abort):
-            # User aborted an interactive prompt (e.g., Ctrl+C)
-            print_warning("Operation aborted by user.")
-            sys.exit(1)
-        else:
-            # Catch any other unexpected exceptions and report them generically.
-            print_error(f"An unexpected internal error occurred: {result}")
-            # For debugging, you might want to print the full traceback here:
-            # console.print_exception(show_locals=True)
-            sys.exit(1)
-    # If result is not an exception, command completed successfully (or handled its own exit)
-    sys.exit(0) # Explicitly exit 0 for success if no exception was raised
+    # ---- Interactive prompts for project details ----
+    try:
+        project_name = questionary.text(
+            "What is the name of your project?",
+            default=os.path.basename(os.getcwd())
+        ).ask()
 
-if __name__ == '__main__':
-    # This block allows running the CLI directly for development/testing,
-    # though the primary way to run is via the `envguard` console script.
-    cli()
+        env_file = questionary.text(
+           "What is your primary environment file for local development?",
+            default=".env"
+        ).ask()
+
+        has_template = questionary.confirm(
+            "Do you use a template file for your environment variables? (e.g., .env.template)",
+            default=True
+        ).ask()
+
+        template_file = None
+        if has_template:
+            template_file = questionary.text(
+                "What is the name of your template file?",
+                default=".env.template"
+            ).ask()
+
+    except KeyboardInterrupt:
+        console.print("[bold red]Initialization cancelled by user.[/bold red]")
+        raise typer.Exit()
+
+
+    # Generate and write the config file
+    console.print("\n[bold]Generating your `envguard.yml` file...[/bold]")
+    config_content = manager.generate_default_config(project_name, env_file, template_file)
+
+    manager.write_config_file(config_content)
+
+    console.print("\n[bold green]Setup Complete![/bold green]")
+    console.print("You can now manage your environments using the `envguard` command.")
+    console.print("Try `envguard --help` to see available commands.")
+
+# This is a placeholder for future commands
+@app.command()
+def use(profile: str = typer.Argument(..., help="The profile to activate, e.g., 'dev' or 'prod'.")):
+    """Switches the active environment to the specified profile."""
+    console.print(f"Feature coming soon: Switching to profile [bold cyan]{profile}[/bold cyan]")
+
+if __name__ == "__main__":
+    app()
