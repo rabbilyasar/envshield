@@ -1,10 +1,5 @@
-cffi==1.17.1
-click==8.2.1
-cryptography==45.0.4
-markdown-it-py==3.0.0
-mdurl==0.1.2
-pycparser==2.22
-Pygments==2.19.2
-python-dotenv==1.1.0
 PyYAML==6.0.2
+questionary==2.1.0
 rich==14.0.0
+setuptools==80.9.0
+typer==0.16.0
