@@ -23,18 +23,21 @@ setup(
     # Pinning exact versions (e.g., Click==8.2.1) is good practice for reproducibility,
     # but for active development, often a range (e.g., Click>=8.0,<9.0) is used.
     install_requires=[
-        'Click==8.2.1',       # For building the command-line interface
         'PyYAML==6.0.2',      # For reading/writing YAML configuration files
-        'python-dotenv==1.1.0', # For robust .env file parsing and manipulation
         'rich==14.0.0',       # For beautiful terminal output (tables, colors)
-        'cryptography==45.0.4', # For secure encryption (used in snippet sharing)
+        'questionary==2.1.0', # For interactive prompts (e.g., for user input)
+        'typer==0.16.0',  # For building the CLI
+        'setuptools==80.9.0', # For packaging and distribution
+        #'Click==8.2.1',       # For building the command-line interface
+        #'cryptography==45.0.4', # For secure encryption (used in snippet sharing)
+        #'python-dotenv==1.1.0', # For robust .env file parsing and manipulation
     ],
     # --- Console Scripts Entry Point ---
     # This creates an executable script (e.g., `envguard`) in your PATH
     # that points to the `cli` function within `envguard.cli` module.
     entry_points={
         'console_scripts': [
-            'envguard=envguard.cli:cli',
+            'envguard=envguard.cli:app',
         ],
     },
     # --- Package Metadata ---
