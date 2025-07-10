@@ -3,7 +3,7 @@ import os
 from typing import Set
 from ._base import BaseParser
 
-class DotEnvParser(BaseParser):
+class DotenvParser(BaseParser):
     """
     Parsers traditional .env files
     """
@@ -29,5 +29,5 @@ class DotEnvParser(BaseParser):
                     key = line.split('=', 1)[0].strip()
                     if key: # Ensure key is not empty
                         variables.add(key)
-            
+
         return variables
