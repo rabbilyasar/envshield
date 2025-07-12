@@ -9,6 +9,10 @@ from envguard.parsers.factory import get_parser
 
 console = Console()
 
+def _get_sync_diff(profile_name: str):
+    """Helper function to calculate differences for checking and syncing."""
+    pass
+
 def check_template(profile_name: str):
     """
     Compares a profile's source file(s) against its template file.
