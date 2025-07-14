@@ -63,3 +63,8 @@ def check_template(profile_name: str):
             console.print(f"[yellow]Warning:[/yellow] Source file '{source_file}' not found. Skipping.")
             continue
 
+    missing_in_source = template_vars - source_vars
+    extra_in_source = source_vars - template_vars
+
+    return template_file, missing_in_source, extra_in_source, config
+
