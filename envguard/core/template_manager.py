@@ -1,3 +1,4 @@
+# envguard/core/template_manager.py
 # Core logic for template checking and syncing.
 
 from rich.console import Console
@@ -8,10 +9,6 @@ from envguard.core.exceptions import ProfileNotFoundError
 from envguard.parsers.factory import get_parser
 
 console = Console()
-
-def _get_sync_diff(profile_name: str):
-    """Helper function to calculate differences for checking and syncing."""
-    pass
 
 def check_template(profile_name: str):
     """
@@ -34,35 +31,30 @@ def check_template(profile_name: str):
     # Get the parser for the template file
     template_parser = get_parser(template_file)
     if not template_parser:
-        console.print(f"[red]No suitable parser found for template file '{template_file}'.[/red]")
+        console.print(f"[red]Error:[/red] No suitable parser found for template file '{template_file}'.")
         return
 
     try:
         template_vars = template_parser.get_vars(template_file)
     except FileNotFoundError:
-        console.print(f"[red]Template file '{template_file}' not found.[/red]")
+        console.print(f"[red]Error:[/red] Template file '{template_file}' not found.")
         return
 
-    # Aggregate all variable from the profile's source files
+    # Aggregate all variables from the profile's source files
     source_vars = set()
     for link in links:
         source_file = link.get("source")
         if not source_file:
-            console.print(f"[yellow]Link '{link}' has no source file defined. Skipping.[/yellow]")
             continue
 
         source_parser = get_parser(source_file)
-        if not source_parser:
-            console.print(f"[red]No suitable parser found for source file '{source_file}'.[/red]")
-            continue
+        if source_parser:
+            try:
+                source_vars.update(source_parser.get_vars(source_file))
+            except FileNotFoundError:
+                console.print(f"[yellow]Warning:[/yellow] Source file '{source_file}' not found. Skipping.")
 
-        try:
-            vars_from_source = source_parser.get_vars(source_file)
-            source_vars.update(vars_from_source)
-        except FileNotFoundError:
-            console.print(f"[yellow]Warning:[/yellow] Source file '{source_file}' not found. Skipping.")
-            continue
-
+    # --- Perform the comparison ---
     missing_in_source = template_vars - source_vars
     extra_in_source = source_vars - template_vars
 
@@ -72,7 +64,6 @@ def check_template(profile_name: str):
     if not missing_in_source and not extra_in_source:
         console.print("[bold green]✓ Your environment files are perfectly in sync with the template![/bold green]")
         return
-
 
     # Display results in a table
     table = Table(title="Sync Status", border_style="blue")
@@ -88,5 +79,3 @@ def check_template(profile_name: str):
 
     console.print(table)
     console.print("\n[bold]Suggestion:[/bold] Run `envguard template sync` to interactively update your template.")
-
-

@@ -17,6 +17,7 @@ class ProfileNotFoundError(EnvGuardException):
     def __init__(self, profile_name: str):
         self.message = f"Profile '{profile_name}' not found in 'envguard.yml'."
         super().__init__(self.message)
+
 class SourceFileNotFoundError(EnvGuardException):
     """Raised when a profile's source file does not exist."""
     def __init__(self, source_path: str):
