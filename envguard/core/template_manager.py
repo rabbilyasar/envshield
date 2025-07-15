@@ -66,5 +66,27 @@ def check_template(profile_name: str):
     missing_in_source = template_vars - source_vars
     extra_in_source = source_vars - template_vars
 
-    return template_file, missing_in_source, extra_in_source, config
+    console.print(f"\n[bold]Template Check for Profile: [cyan]{profile_name}[/cyan][/bold]")
+    console.print(f"  [bold]Template File:[/bold] [magenta]{template_file}[/magenta]")
+
+    if not missing_in_source and not extra_in_source:
+        console.print("[bold green]✓ Your environment files are perfectly in sync with the template![/bold green]")
+        return
+
+
+    # Display results in a table
+    table = Table(title="Sync Status", border_style="blue")
+    table.add_column("Status", style="cyan")
+    table.add_column("Variable Name", style="white")
+    table.add_column("Details", style="yellow")
+
+    for var in sorted(list(missing_in_source)):
+        table.add_row("[red]Missing[/red]", var, "Variable is in the template but not in your source files.")
+
+    for var in sorted(list(extra_in_source)):
+        table.add_row("[yellow]Extra[/yellow]", var, "Variable is in your source files but not in the template.")
+
+    console.print(table)
+    console.print("\n[bold]Suggestion:[/bold] Run `envguard template sync` to interactively update your template.")
+
 
