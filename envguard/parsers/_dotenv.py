@@ -1,3 +1,4 @@
+# envguard/parsers/_dotenv.py
 # A simple parser for key-value .env files.
 import os
 from typing import Set
@@ -5,12 +6,12 @@ from ._base import BaseParser
 
 class DotenvParser(BaseParser):
     """
-    Parsers traditional .env files
+    Parses traditional .env files.
     """
 
     def get_vars(self, file_path: str) -> Set[str]:
         """
-        Extracts variable names from .env file.
+        Extracts variable names from a .env file.
         - Ignores lines starting with '#' (comments).
         - Ignores empty lines.
         - Splits lines by the first '=' to get the key.

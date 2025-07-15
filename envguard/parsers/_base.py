@@ -1,4 +1,6 @@
+# envguard/parsers/_base.py
 # Defines the abstract base class for all file parsers.
+
 from abc import ABC, abstractmethod
 from typing import Set
 
