@@ -101,7 +101,7 @@ def init():
         raise typer.Exit()
 
     console.print("\n[bold]Generating your `envguard.yml` file...[/bold]")
-    config_content = config_manager.generate_default_config_content(project_name, env_file, template_file)
+    config_content = config_manager.generate_default_config(project_name, env_file, template_file)
     config_manager.write_config_file(config_content)
 
     console.print("\n[bold green]✨ Setup Complete! ✨[/bold green]")
