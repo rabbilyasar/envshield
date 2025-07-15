@@ -1,3 +1,4 @@
+# envguard/cli.py
 import typer
 import os
 import questionary
@@ -6,17 +7,16 @@ from rich.panel import Panel
 
 from .config import manager as config_manager
 from .core import profile_manager
-from .core.exceptions import EnvGuardException
 from .core import template_manager
+from .core.exceptions import EnvGuardException
 
-
-# Create the main Typer application instance.
 app = typer.Typer(
     name="envguard",
     help="🛡️  A CLI tool to manage, secure, and collaborate on environment variables.",
     rich_markup_mode="markdown",
     add_completion=False
 )
+
 console = Console()
 
 # --- Create a subcommand for 'template' ---
@@ -27,40 +27,54 @@ template_app = typer.Typer(
 )
 app.add_typer(template_app, name="template")
 
-@template_app.command(name="check")
+@template_app.command("check")
 def template_check(
-    profile: str = typer.Option(None, "--profile", "-p", help="The profile to check against the template. Defaults to the active profile."),
+    profile: str = typer.Option(None, "--profile", "-p", help="The profile to check. Defaults to the active profile.")
 ):
     """Checks if your environment files are in sync with the template."""
     from envguard import state # Local import to avoid circular dependency
 
     try:
-        # If no profile is specified, use the active profile
-        profile = state.get_active_profile()
         if not profile:
-            console.print("[red]Error:[/red] No profile specified and no profile is active.")
-            console.print("Please specify a profile with `--profile <name>` or run `envguard use <name>` first.")
-            raise typer.Exit(code=1)
-        console.print(f"Checking active profile: [cyan]{profile}[/cyan]")
+            profile = state.get_active_profile()
+            if not profile:
+                console.print("[red]Error:[/red] No profile specified and no profile is active.")
+                console.print("Please specify a profile with `--profile <name>` or run `envguard use <name>` first.")
+                raise typer.Exit(code=1)
+            console.print(f"Checking active profile: [cyan]{profile}[/cyan]")
 
         template_manager.check_template(profile)
     except EnvGuardException as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
+        raise typer.Exit(code=1)
 
 @template_app.command("sync")
 def template_sync(
     profile: str = typer.Option(None, "--profile", "-p", help="The profile to sync. Defaults to the active profile.")
 ):
-    """Interactively sync your template file with your source files."""
-    console.print(f"Feature coming soon: Interactively syncing template for profile [bold cyan]{profile}[/bold cyan]")
+    """Interactively add variables from your source files to your template."""
+    from envguard import state
+
+    try:
+        if not profile:
+            profile = state.get_active_profile()
+            if not profile:
+                console.print("[red]Error:[/red] No profile specified and no profile is active.")
+                console.print("Please specify a profile with `--profile <name>` or run `envguard use <name>` first.")
+                raise typer.Exit(code=1)
+            console.print(f"Syncing template for active profile: [cyan]{profile}[/cyan]")
+
+        template_manager.sync_template(profile)
+    except EnvGuardException as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
+        raise typer.Exit(code=1)
+
+# --- Main Commands ---
 
 @app.command()
 def init():
     """
     Initializes EnvGuard in the current project directory.
-
-    This interactive command will guide you through creating an `envguard.yml`
-    configuration file, which is the heart of your project's EnvGuard setup.
     """
     console.print(Panel(
         "[bold cyan]Welcome to EnvGuard Initialization![/bold cyan]\n\nThis wizard will help you set up your project in a few simple steps.",
@@ -82,8 +96,10 @@ def init():
             "What is the name of your project?",
             default=os.path.basename(os.getcwd())
         ).ask()
+        # This part of init is less relevant for the multi-link setup, but we keep it for simple projects.
+        # For complex projects like Issuebear, users will edit the yml manually.
         env_file = questionary.text(
-            "What is your primary environment file for local development?",
+            "What is your primary environment file for local development? (e.g., .env)",
             default=".env"
         ).ask()
         has_template = questionary.confirm(
@@ -105,8 +121,9 @@ def init():
     config_manager.write_config_file(config_content)
 
     console.print("\n[bold green]✨ Setup Complete! ✨[/bold green]")
-    console.print("You can now manage your environments using the `envguard` command.")
+    console.print("You can now edit `envguard.yml` to add more complex profiles and links.")
     console.print("Run `envguard list` to see your profiles.")
+
 
 @app.command(name="list")
 def list_profiles_command():
@@ -117,15 +134,13 @@ def list_profiles_command():
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(code=1)
 
-
 @app.command()
 def use(
-    profile: str = typer.Argument(..., help="The name of the profile to activate, e.g., 'dev'."),
-    target: str = typer.Option(".env", "--target", "-t", help="The target file to create as a symlink.")
+    profile: str = typer.Argument(..., help="The name of the profile to activate, e.g., 'local-dev'."),
 ):
     """Switches the active environment to the specified profile."""
     try:
-        profile_manager.use_profile(profile, target_file=target)
+        profile_manager.use_profile(profile)
     except EnvGuardException as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(code=1)
