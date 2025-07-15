@@ -145,6 +145,27 @@ def use(
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(code=1)
 
+@app.command()
+def onboard(
+    profile: str = typer.Argument(..., help="The name of the profile to set up, e.g., 'local-dev'.")
+):
+    """
+    A guided walkthrough to set up a new environment profile from a template.
+
+    This command is perfect for new developers joining a project. It will:
+    1. Create your local config files from the project's templates.
+    2. Interactively ask you to fill in the required secrets.
+    3. Activate the new environment for you.
+    """
+    try:
+        profile_manager.onboard_profile(profile)
+    except EnvGuardException as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
+        raise typer.Exit(code=1)
+    except (KeyboardInterrupt, TypeError):
+        console.print("\n[yellow]Onboarding cancelled by user.[/yellow]")
+        raise typer.Exit()
+
 
 if __name__ == "__main__":
     app()
