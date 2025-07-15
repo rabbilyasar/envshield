@@ -7,6 +7,8 @@ from rich.panel import Panel
 from .config import manager as config_manager
 from .core import profile_manager
 from .core.exceptions import EnvGuardException
+from .core import template_manager
+
 
 # Create the main Typer application instance.
 app = typer.Typer(
@@ -15,8 +17,42 @@ app = typer.Typer(
     rich_markup_mode="markdown",
     add_completion=False
 )
-
 console = Console()
+
+# --- Create a subcommand for 'template' ---
+template_app = typer.Typer(
+    name="template",
+    help="Manage environment templates.",
+    no_args_is_help=True
+)
+app.add_typer(template_app, name="template")
+
+@template_app.command(name="check")
+def template_check(
+    profile: str = typer.Option(None, "--profile", "-p", help="The profile to check against the template. Defaults to the active profile."),
+):
+    """Checks if your environment files are in sync with the template."""
+    from envguard import state # Local import to avoid circular dependency
+
+    try:
+        # If no profile is specified, use the active profile
+        profile = state.get_active_profile()
+        if not profile:
+            console.print("[red]Error:[/red] No profile specified and no profile is active.")
+            console.print("Please specify a profile with `--profile <name>` or run `envguard use <name>` first.")
+            raise typer.Exit(code=1)
+        console.print(f"Checking active profile: [cyan]{profile}[/cyan]")
+
+        template_manager.check_template(profile)
+    except EnvGuardException as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
+
+@template_app.command("sync")
+def template_sync(
+    profile: str = typer.Option(None, "--profile", "-p", help="The profile to sync. Defaults to the active profile.")
+):
+    """Interactively sync your template file with your source files."""
+    console.print(f"Feature coming soon: Interactively syncing template for profile [bold cyan]{profile}[/bold cyan]")
 
 @app.command()
 def init():

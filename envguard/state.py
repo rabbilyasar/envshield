@@ -12,7 +12,7 @@ def _ensure_state_dir_exists():
     """Ensures the .envguard directory exists."""
     os.makedirs(STATE_DIR, exist_ok=True)
 
-def get_active_profile() -> Optional[str]:
+def get_active_profile() -> Optional[str|None]:
     """
     Retrieves the name of the currently active profile.
 
