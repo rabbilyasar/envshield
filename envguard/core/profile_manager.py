@@ -104,10 +104,8 @@ def use_profile(profile_name: str):
 
 def onboard_profile(profile_name: str):
     """
-    Guides a new user through setting up a profile for the first time.
-    1. Creates necessary source files from templates if they don't exist.
-    2. Interactively prompts the user to fill in secret values.
-    3. Activates the profile by running the 'use' logic.
+    Guides a new user through setting up a profile for the first time with
+    smarter, more versatile logic and pre/post scripts.
     """
     console.print(Panel(
         f"[bold cyan]Welcome to EnvGuard Onboarding for the '[yellow]{profile_name}[/yellow]' profile![/bold cyan]\n\nThis wizard will get you set up and ready to code.",
@@ -123,89 +121,110 @@ def onboard_profile(profile_name: str):
 
     profile_details = profiles[profile_name]
     links = profile_details.get("links", [])
-    template_file = profile_details.get("template")
+    master_template_file = profile_details.get("template")
+    onboarding_prompts = profile_details.get("onboarding_prompts", [])
+
+    pre_script = profile_details.get("pre_onboard_script")
+    post_script = profile_details.get("post_onboard_script")
 
     if not links:
         console.print(f"[yellow]Warning:[/yellow] Profile '{profile_name}' has no 'links' defined. Nothing to onboard.")
         return
 
-    # --- Step 1: Create Missing Source Files from Template ---
+    # --- Step 0: Run Pre-Onboarding Script(s) ---
+    if pre_script:
+        console.print("\n[bold]Step 0: Running pre-onboarding validation script(s)...[/bold]")
+        _run_script(pre_script)
+
+    # --- Step 1: Create Missing Source Files ---
     console.print("\n[bold]Step 1: Checking for necessary configuration files...[/bold]")
     created_files = False
     for link in links:
         source_file = link.get("source")
         if source_file and not os.path.exists(source_file):
-            if not template_file:
-                console.print(f"[red]Error:[/red] Source file '{source_file}' is missing, and no template is defined for this profile.")
-                raise typer.Exit(code=1)
+            console.print(f"  [yellow]![/yellow] Source file [magenta]{source_file}[/magenta] not found. Attempting to create it...")
 
-            # For simplicity, we assume all missing files can be created from the one master template.
-            # A more advanced version could support per-link templates.
-            console.print(f"  [yellow]![/yellow] Source file [magenta]{source_file}[/magenta] not found. Creating from template...")
-            try:
-                shutil.copy(template_file, source_file)
-                created_files = True
-            except IOError as e:
-                console.print(f"[red]Error:[/red] Could not create '{source_file}' from template: {e}")
-                raise typer.Exit(code=1)
+            source_ext = os.path.splitext(source_file)[1]
+            template_to_use = None
+
+            if master_template_file and master_template_file.endswith(source_ext):
+                template_to_use = master_template_file
+
+            if template_to_use and os.path.exists(template_to_use):
+                try:
+                    shutil.copy(template_to_use, source_file)
+                    console.print(f"    [green]✓[/green] Created from template '{template_to_use}'.")
+                    created_files = True
+                except IOError as e:
+                    console.print(f"    [red]Error:[/red] Could not create '{source_file}' from template: {e}")
+                    raise typer.Exit(code=1)
+            else:
+                try:
+                    open(source_file, 'a').close()
+                    console.print(f"    [green]✓[/green] Created a blank file (no suitable template found).")
+                    created_files = True
+                except IOError as e:
+                    console.print(f"    [red]Error:[/red] Could not create blank file '{source_file}': {e}")
+                    raise typer.Exit(code=1)
 
     if created_files:
         console.print("[green]✓ All necessary source files have been created.[/green]")
     else:
         console.print("[green]✓ All source files already exist.[/green]")
 
-   # --- Step 2: Interactively Populate Secrets ---
+    # --- Step 2 & 3: Populate and Save Secrets ---
     console.print("\n[bold]Step 2: Let's configure your secrets.[/bold]")
-    placeholders = ["changeme", "ask_your_team_lead", "get_this_from_1password_vault", ""]
-
+    placeholder_keywords = ["changeme", "ask", "todo", "example", "dummy", "placeholder", "get from", "your-"]
     updates_by_file = {}
-
     for link in links:
         source_file = link.get("source")
-        if not source_file:
+        if not source_file or not os.path.exists(source_file):
             continue
-
-        parser = get_parser(source_file)
-        if not parser:
-            continue
-
         try:
-            # We need to read the values now, not just the keys
-            # Let's add a temporary method to get key-value pairs
-            # A better implementation would refactor parsers to return dicts
             with open(source_file, 'r') as f:
                 lines = f.readlines()
-
             for line in lines:
                 line = line.strip()
                 if not line or line.startswith('#') or '=' not in line:
                     continue
-
                 key, value = line.split('=', 1)
                 key = key.strip()
-                value = value.strip().strip('"\'') # Get raw value
-
-                if value.lower() in [p.lower() for p in placeholders] or not value:
-                    if value:
-                        console.print(f"\nFound placeholder for [bold cyan]{key}[/bold cyan] in [magenta]{source_file}[/magenta].")
+                raw_value = value.strip().strip('"\'')
+                is_explicit_prompt = key in onboarding_prompts
+                is_placeholder = (
+                    not raw_value or
+                    raw_value.lower() == 'x' or
+                    any(keyword in raw_value.lower() for keyword in placeholder_keywords)
+                )
+                if is_explicit_prompt or is_placeholder:
+                    if any(update['key'] == key for updates in updates_by_file.values() for update in updates):
+                        continue
+                    console.print(f"\nFound variable to configure: [bold cyan]{key}[/bold cyan] in [magenta]{source_file}[/magenta].")
+                    if raw_value:
+                        console.print(f"  [dim]Current value/instruction: {raw_value}[/dim]")
                     new_value = Prompt.ask(f"  Please enter the value for [bold cyan]{key}[/bold cyan]", password=True)
-
                     if source_file not in updates_by_file:
                         updates_by_file[source_file] = []
                     updates_by_file[source_file].append({'key': key, 'value': new_value})
-
-        except (FileNotFoundError, IOError):
-            continue # Skip files we can't read
-
-    # --- Step 3: Save the Secrets ---
+        except IOError:
+            continue
     if not updates_by_file:
-        console.print("[green]✓ No placeholders found. Your secrets are already configured.[/green]")
+        console.print("[green]✓ No placeholders found to update. Your secrets appear to be configured.[/green]")
     else:
         console.print("\n[bold]Step 3: Saving your secrets...[/bold]")
         for file_path, updates in updates_by_file.items():
             file_updater.update_variables_in_file(file_path, updates)
         console.print("[green]✓ All secrets have been securely saved to your local files.[/green]")
 
+
     # --- Step 4: Final Activation ---
     console.print("\n[bold]Step 4: Activating the environment...[/bold]")
     use_profile(profile_name)
+
+    # --- Step 5: Run Post-Onboarding Script(s) ---
+    if post_script:
+        console.print("\n[bold]Step 5: Running post-onboarding setup script(s)...[/bold]")
+        _run_script(post_script)
+
+    console.print("\n[bold green]🎉 Onboarding Complete! Your environment is ready. 🎉[/bold green]")
+
