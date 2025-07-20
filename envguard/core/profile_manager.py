@@ -3,6 +3,7 @@
 
 import os
 import shutil
+import subprocess
 import questionary
 import typer
 from rich.console import Console
@@ -15,6 +16,8 @@ from envguard.core.exceptions import ProfileNotFoundError, SourceFileNotFoundErr
 from envguard import state
 from envguard.core import file_updater
 from envguard.parsers.factory import get_parser
+from typing import Union, List
+
 
 console = Console()
 
@@ -101,6 +104,43 @@ def use_profile(profile_name: str):
     # Only set the profile as active if all links were successful.
     state.set_active_profile(profile_name)
     console.print("\n[bold green]Environment is now active![/bold green]")
+
+def _run_script(script_command: Union[str, List[str]]):
+    """
+    Runs a single shell command or a list of shell commands.
+    Raises an exception if any script fails.
+    """
+    if not script_command:
+        return
+
+    commands = script_command if isinstance(script_command, list) else [script_command]
+
+    for command in commands:
+        console.print(f"\n[bold]Executing script:[/bold] [bright_black]{command}[/bright_black]")
+        try:
+            process = subprocess.Popen(
+                command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+            )
+
+            for line in process.stdout:
+                console.print(f"[dim]  {line.strip()}[/dim]")
+
+            process.wait()
+
+            if process.returncode != 0:
+                raise subprocess.CalledProcessError(process.returncode, command)
+
+            console.print(f"[green]✓ Script finished successfully.[/green]")
+
+        except FileNotFoundError:
+            console.print(f"[red]Error:[/red] Command not found: '{command.split()[0]}'. Please ensure it's in your PATH.")
+            raise
+        except subprocess.CalledProcessError:
+            console.print(f"[bold red]Error:[/bold red] Script failed with a non-zero exit code. Halting onboarding.")
+            raise
+        except Exception as e:
+            console.print(f"[bold red]An unexpected error occurred while running the script: {e}[/bold red]")
+            raise
 
 def onboard_profile(profile_name: str):
     """
