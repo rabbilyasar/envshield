@@ -12,14 +12,15 @@ from rich.prompt import Prompt
 from rich.panel import Panel
 
 from envguard.config import manager as config_manager
+from envguard.core import file_updater
 from envguard.core.exceptions import ProfileNotFoundError, SourceFileNotFoundError
 from envguard import state
-from envguard.core import file_updater
 from envguard.parsers.factory import get_parser
 from typing import Union, List
 
 
 console = Console()
+
 
 def list_profiles():
     """
@@ -105,6 +106,7 @@ def use_profile(profile_name: str):
     state.set_active_profile(profile_name)
     console.print("\n[bold green]Environment is now active![/bold green]")
 
+
 def _run_script(script_command: Union[str, List[str]]):
     """
     Runs a single shell command or a list of shell commands.
@@ -141,6 +143,7 @@ def _run_script(script_command: Union[str, List[str]]):
         except Exception as e:
             console.print(f"[bold red]An unexpected error occurred while running the script: {e}[/bold red]")
             raise
+
 
 def onboard_profile(profile_name: str):
     """
