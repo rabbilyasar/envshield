@@ -15,42 +15,40 @@ def update_variables_in_file(file_path: str, updates: List[dict]):
     try:
         with open(file_path, 'r') as f:
             lines = f.readlines()
-    except IOError as e:
+    except IOError:
         return
 
+    update_map = {u['key']: u['value'] for u in updates}
+    updated_keys_handled = set()
+
     new_lines = []
-    updated_keys = {u['key'] for u in updates}
-
-    # Create a dictionary for quick lookup of new values
-    updated_map = {u['key']: u['value'] for u in updates}
-
     for line in lines:
-        # Use regex to find a top-level assignment for any of our keys
-        # This is safer than a simple string search.
-        # It looks for: start of line, optional whitespace, key, optional whitespace, =, anything
         match_found = False
-        for key in updated_keys:
-            # We escape the key to handle special regex characters if any
-            pattern = re.compile(rf"^\s*{re.escape(key)}\s*=\s*.*")
-            if pattern.match(line):
-                # Determine the correct format for the new value
-                if file_path.endswith('.py'):
-                    # For Python files, wrap strings in quotes
-                    new_value = f'"{updated_map[key]}"\n'
-                else:
-                    # For .env or similar files, just use the raw value
-                    new_value = {updated_map[key]}
+        for key, value in update_map.items():
+            # Skip keys we've already updated to avoid duplicate processing
+            if key in updated_keys_handled:
+                continue
 
-                new_lines.append(f"{key}={new_value}\n")
+            # This regex is more specific: it looks for the key at the start of the line,
+            # ignoring whitespace, followed by an equals sign.
+            pattern = re.compile(rf"^\s*{re.escape(key)}\s*=")
+            if pattern.match(line):
+                if file_path.endswith('.py'):
+                    # For Python files, format as: KEY = "VALUE"
+                    new_lines.append(f'{key} = "{value}"\n')
+                else:
+                    # For .env files, format as: KEY=VALUE
+                    new_lines.append(f"{key}={value}\n")
+
+                updated_keys_handled.add(key)
                 match_found = True
-                break # Move to the next line once a key is matched and replaced
+                break
+
         if not match_found:
             new_lines.append(line)
 
-    # Write the modified content back to the file
     try:
         with open(file_path, 'w') as f:
             f.writelines(new_lines)
-    except IOError as e:
-        print(f"Error writing to file {file_path}: {e}")
-        return
+    except IOError:
+        pass
