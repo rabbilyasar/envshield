@@ -11,13 +11,13 @@ Ever had that heart-stopping moment of panic, wondering if you just committed an
 
 Managing secrets and environment variables is more than just an inconvenience; it's a massive security vulnerability.
 
-**The Stakes Are High**:
+#### **The Stakes Are High**:
 
-    - **A Constant Barrage**: Security researchers find that over 1,000 unique, hardcoded secrets are leaked to public GitHub repositories every single day.
+- **A Constant Barrage**: Security researchers find that over 1,000 unique, hardcoded secrets are leaked to public GitHub repositories every single day.
 
-    - **The Cost of a Mistake**: According to IBM's 2024 "Cost of a Data Breach" report, the average cost of a data breach is $4.45 million. A single leaked credential can be the starting point for a catastrophic attack.
+- **The Cost of a Mistake**: According to IBM's 2024 "Cost of a Data Breach" report, the average cost of a data breach is $4.45 million. A single leaked credential can be the starting point for a catastrophic attack.
 
-    - **The Developer Toil**: A single leaked key doesn't just cost money; it costs developer time. The immediate aftermath involves a frantic scramble of revoking keys, auditing for unauthorized access, and deploying hotfixes, often derailing an entire team's sprint.
+- **The Developer Toil**: A single leaked key doesn't just cost money; it costs developer time. The immediate aftermath involves a frantic scramble of revoking keys, auditing for unauthorized access, and deploying hotfixes, often derailing an entire team's sprint.
 
 **The Old Way is Broken**: Manually managing .env files, copying templates, and sharing secrets over Slack is a recipe for disaster. It's not a matter of if a secret will be leaked, but when.
 ### The Solution: EnvGuard's "First Line of Defense"
