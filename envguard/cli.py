@@ -1,9 +1,14 @@
 # envguard/cli.py
+from typing import List
 import typer
 import os
 import questionary
 from rich.console import Console
 from rich.panel import Panel
+from rich.table import Table
+
+from envguard.core import scanner
+from envguard.utils import git_utils
 
 from .config import manager as config_manager
 from .core import profile_manager
@@ -169,6 +174,70 @@ def onboard(
 
         raise typer.Exit(code=1)
 
+@app.command()
+def scan(
+    paths: List[str] = typer.Argument(None, help="Paths to files or directories to scan. Defaults to current directory."),
+    staged: bool = typer.Option(False, "--staged", help="Only scan files staged for the next Git commit.")
+):
+    """
+    Scans files for hardcoded secrets.
+    """
+    console.print("\n[bold cyan]🛡️  Running EnvGuard Secret Scanner...[/bold cyan]")
+
+    files_to_scan = []
+    if staged:
+        console.print("Scanning [yellow]staged files[/yellow]...")
+        files_to_scan = git_utils.get_staged_files()
+        if not files_to_scan:
+            console.print("[green]No staged files to scan.[/green]")
+            raise typer.Exit()
+    elif paths:
+        for path in paths:
+            if os.path.isfile(path):
+                files_to_scan.append(os.path.abspath(path))
+            elif os.path.isdir(path):
+                for root, _, files in os.walk(path):
+                    for file in files:
+                        files_to_scan.append(os.path.join(root, file))
+    else:
+        # Default to scanning the current directory recursively
+        console.print("Scanning [yellow]current directory[/yellow] recursively...")
+        for root, _, files in os.walk("."):
+            for file in files:
+                files_to_scan.append(os.path.join(root, file))
+
+    all_findings = []
+    for file_path in files_to_scan:
+        # A simple check to avoid scanning large binary files
+        if os.path.exists(file_path) and os.path.getsize(file_path) > 1_000_000: # 1MB limit
+            continue
+        findings = scanner.scan_file_for_secrets(file_path)
+        all_findings.extend(findings)
+
+    if not all_findings:
+        console.print("[bold green]✓ No secrets found. You're good to go![/bold green]")
+        raise typer.Exit()
+
+    console.print(f"\n[bold red]🚨 DANGER: Found {len(all_findings)} potential secret(s)![/bold red]")
+
+    table = Table(title="Secret Scan Results", border_style="red")
+    table.add_column("File", style="cyan")
+    table.add_column("Line", style="yellow")
+    table.add_column("Secret Type", style="magenta")
+    table.add_column("Line Content", style="white")
+
+    for finding in all_findings:
+        table.add_row(
+            finding["file_path"],
+            str(finding["line_num"]),
+            finding["secret_type"],
+            finding["line_content"]
+        )
+
+    console.print(table)
+    console.print("\n[bold red]Please remove these secrets from your files before committing.[/bold red]")
+    # Exit with a non-zero code to signal failure to other scripts (like the git hook)
+    raise typer.Exit(code=1)
 
 if __name__ == "__main__":
     app()
