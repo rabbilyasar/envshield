@@ -1,4 +1,5 @@
 # envguard/cli.py
+import stat
 from typing import List
 import typer
 import os
@@ -238,6 +239,50 @@ def scan(
     console.print("\n[bold red]Please remove these secrets from your files before committing.[/bold red]")
     # Exit with a non-zero code to signal failure to other scripts (like the git hook)
     raise typer.Exit(code=1)
+
+@app.command("install-hook")
+def install_hook():
+    """
+    Installs the Git pre-commit hook to scan for secrets automatically.
+    """
+    git_root = git_utils.get_git_root()
+    if not git_root:
+        console.print("[red]Error:[/red] Not inside a Git repository. Cannot install hook.")
+        raise typer.Exit(code=1)
+
+    hooks_dir = os.path.join(git_root, ".git", "hooks")
+    pre_commit_path = os.path.join(hooks_dir, "pre-commit")
+
+    # The content of the script we want to write.
+    hook_script_content = "#!/bin/sh\n\n# Hook installed by EnvGuard\nenvguard scan --staged\n"
+
+    try:
+        if os.path.exists(pre_commit_path):
+            overwrite = questionary.confirm(
+                "A pre-commit hook already exists. Do you want to overwrite it?",
+                default=False
+            ).ask()
+            if not overwrite:
+                console.print("[yellow]Hook installation cancelled.[/yellow]")
+                raise typer.Exit()
+
+        with open(pre_commit_path, "w") as f:
+            f.write(hook_script_content)
+
+        # Make the hook executable (crucial step)
+        # stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH makes it executable for everyone
+        os.chmod(pre_commit_path, stat.S_IMODE(os.stat(pre_commit_path).st_mode) | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+        console.print("[bold green]✓ Git pre-commit hook installed successfully![/bold green]")
+        console.print("EnvGuard will now automatically scan for secrets before every commit.")
+
+    except (IOError, OSError) as e:
+        console.print(f"[red]Error:[/red] Failed to write or set permissions for the hook file: {e}")
+        raise typer.Exit(code=1)
+    except (TypeError): # Catches questionary cancellation
+        console.print("[yellow]Hook installation cancelled by user.[/yellow]")
+        raise typer.Exit()
+
 
 if __name__ == "__main__":
     app()
