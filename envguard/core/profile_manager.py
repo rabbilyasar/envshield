@@ -254,19 +254,17 @@ def onboard_profile(profile_name: str):
     if not updates_by_file:
         console.print("[green]✓ No placeholders found to update. Your secrets appear to be configured.[/green]")
     else:
-        console.print("\n[bold]Step 3: Saving your secrets...[/bold]")
         for file_path, updates in updates_by_file.items():
             file_updater.update_variables_in_file(file_path, updates)
         console.print("[green]✓ All secrets have been securely saved to your local files.[/green]")
 
-
-    # --- Step 4: Final Activation ---
-    console.print("\n[bold]Step 4: Activating the environment...[/bold]")
+    # --- Step 3: Final Activation ---
+    console.print("\n[bold]Step 3: Activating the environment...[/bold]")
     use_profile(profile_name)
 
-    # --- Step 5: Run Post-Onboarding Script(s) ---
+    # --- Step 4: Run Post-Onboarding Script(s) ---
     if post_script:
-        console.print("\n[bold]Step 5: Running post-onboarding setup script(s)...[/bold]")
+        console.print("\n[bold]Step 4: Running post-onboarding setup script(s)...[/bold]")
         _run_script(post_script)
 
     console.print("\n[bold green]🎉 Onboarding Complete! Your environment is ready. 🎉[/bold green]")
