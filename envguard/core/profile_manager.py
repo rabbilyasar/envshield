@@ -164,9 +164,7 @@ def onboard_profile(profile_name: str):
 
     profile_details = profiles[profile_name]
     links = profile_details.get("links", [])
-    master_template_file = profile_details.get("template")
     onboarding_prompts = profile_details.get("onboarding_prompts", [])
-
     pre_script = profile_details.get("pre_onboard_script")
     post_script = profile_details.get("post_onboard_script")
 
@@ -184,31 +182,22 @@ def onboard_profile(profile_name: str):
     created_files = False
     for link in links:
         source_file = link.get("source")
+        template_file = link.get("template")
         if source_file and not os.path.exists(source_file):
             console.print(f"  [yellow]![/yellow] Source file [magenta]{source_file}[/magenta] not found. Attempting to create it...")
 
-            source_ext = os.path.splitext(source_file)[1]
-            template_to_use = None
-
-            if master_template_file and master_template_file.endswith(source_ext):
-                template_to_use = master_template_file
-
-            if template_to_use and os.path.exists(template_to_use):
+            if template_file and os.path.exists(template_file):
                 try:
-                    shutil.copy(template_to_use, source_file)
-                    console.print(f"    [green]✓[/green] Created from template '{template_to_use}'.")
+                    shutil.copy(template_file, source_file)
+                    console.print(f"    [green]✓[/green] Created from template '{template_file}'.")
                     created_files = True
                 except IOError as e:
-                    console.print(f"    [red]Error:[/red] Could not create '{source_file}' from template: {e}")
+                    console.print(f"    [red]Error:[/red] Could not create '{source_file}': {e}")
                     raise typer.Exit(code=1)
             else:
-                try:
-                    open(source_file, 'a').close()
-                    console.print(f"    [green]✓[/green] Created a blank file (no suitable template found).")
-                    created_files = True
-                except IOError as e:
-                    console.print(f"    [red]Error:[/red] Could not create blank file '{source_file}': {e}")
-                    raise typer.Exit(code=1)
+                open(source_file, 'a').close()
+                console.print(f"    [green]✓[/green] Created a blank file (no template specified for this link).")
+                created_files = True
 
     if created_files:
         console.print("[green]✓ All necessary source files have been created.[/green]")
