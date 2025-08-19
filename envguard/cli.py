@@ -165,6 +165,9 @@ def onboard(
     except (KeyboardInterrupt, TypeError):
         console.print("\n[yellow]Onboarding cancelled by user.[/yellow]")
         raise typer.Exit()
+    except Exception as e:
+
+        raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":
