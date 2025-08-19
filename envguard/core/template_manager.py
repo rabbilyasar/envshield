@@ -1,5 +1,5 @@
 # envguard/core/template_manager.py
-# Core logic for template checking and syncing.
+# Core logic for template checking and syncing, with per-link support.
 
 import os
 import questionary
@@ -13,8 +13,33 @@ from envguard.parsers.factory import get_parser
 
 console = Console()
 
-def _get_sync_diff(profile_name: str):
-    """Helper function to calculate differences for checking and syncing."""
+def _get_link_diff(link: dict):
+    """Helper to get the variable difference for a single link."""
+    source_file = link.get("source")
+    template_file = link.get("template")
+
+    if not source_file or not template_file:
+        return None, None
+
+    source_parser = get_parser(source_file)
+    template_parser = get_parser(template_file)
+
+    if not source_parser or not template_parser:
+        return None, None
+
+    try:
+        source_vars = source_parser.get_vars(source_file)
+        template_vars = template_parser.get_vars(template_file)
+    except FileNotFoundError:
+        return None, None # Handled by the calling function
+
+    extra_in_source = source_vars - template_vars
+    return extra_in_source, template_file
+
+def check_template(profile_name: str):
+    """
+    Compares each link in a profile with its own specific template.
+    """
     config = config_manager.load_config()
     profiles = config.get("profiles", {})
 
@@ -22,72 +47,51 @@ def _get_sync_diff(profile_name: str):
         raise ProfileNotFoundError(profile_name)
 
     profile_details = profiles[profile_name]
-    template_file = profile_details.get("template")
     links = profile_details.get("links", [])
 
-    if not template_file:
-        return None, None, None, None
+    console.print(f"\n[bold]Template Check for Profile: [cyan]{profile_name}[/cyan][/bold]")
 
-    template_parser = get_parser(template_file)
-    if not template_parser:
-        console.print(f"[red]Error:[/red] No suitable parser for template '{template_file}'.")
-        return None, None, None, None
-
-    try:
-        template_vars = template_parser.get_vars(template_file)
-    except FileNotFoundError:
-        raise FileNotFoundError(f"Template file '{template_file}' not found.")
-
-    source_vars = set()
+    found_issues = False
     for link in links:
         source_file = link.get("source")
-        if not source_file:
-            continue
+        template_file = link.get("template")
 
-        source_parser = get_parser(source_file)
-        if source_parser:
-            try:
-                source_vars.update(source_parser.get_vars(source_file))
-            except FileNotFoundError:
-                 console.print(f"[yellow]Warning:[/yellow] Source file '{source_file}' not found. Skipping.")
+        if not template_file:
+            continue # Skip links without a template
 
-    missing_in_source = template_vars - source_vars
-    extra_in_source = source_vars - template_vars
+        console.print(f"\n[bold]Checking Link:[/bold] [magenta]{source_file}[/magenta] vs [magenta]{template_file}[/magenta]")
 
-    return template_file, missing_in_source, extra_in_source, config
+        try:
+            extra_vars, _ = _get_link_diff(link)
+            # We also need to get missing vars for the report
+            template_vars = get_parser(template_file).get_vars(template_file)
+            source_vars = get_parser(source_file).get_vars(source_file)
+            missing_vars = template_vars - source_vars
 
-def check_template(profile_name: str):
-    """Compares a profile's source file(s) against its template file."""
-    try:
-        template_file, missing, extra, _ = _get_sync_diff(profile_name)
-    except FileNotFoundError as e:
-        console.print(f"[red]Error:[/red] {e}")
-        return
+            if not extra_vars and not missing_vars:
+                console.print("[green]  ✓ In sync.[/green]")
+                continue
 
-    if template_file is None:
-        console.print(f"[yellow]Profile '{profile_name}' has no template file defined. Nothing to check.[/yellow]")
-        return
+            found_issues = True
+            table = Table(show_header=True, header_style="bold blue")
+            table.add_column("Status", style="cyan")
+            table.add_column("Variable Name", style="white")
 
-    console.print(f"\n[bold]Template Check for Profile: [cyan]{profile_name}[/cyan][/bold]")
-    console.print(f"  [bold]Template File:[/bold] [magenta]{template_file}[/magenta]")
+            for var in sorted(list(missing_vars)):
+                table.add_row("[red]Missing in Source[/red]", var)
+            for var in sorted(list(extra_vars)):
+                table.add_row("[yellow]Extra in Source[/yellow]", var)
 
-    if not missing and not extra:
-        console.print("[bold green]✓ Your environment files are perfectly in sync with the template![/bold green]")
-        return
+            console.print(table)
 
-    table = Table(title="Sync Status", border_style="blue")
-    table.add_column("Status", style="cyan")
-    table.add_column("Variable Name", style="white")
-    table.add_column("Details", style="yellow")
+        except FileNotFoundError:
+            console.print(f"[red]  Error: One of the files was not found. Please run 'envguard onboard'.[/red]")
+            found_issues = True
 
-    for var in sorted(list(missing)):
-        table.add_row("[red]Missing[/red]", var, "In template, but not in source files.")
-
-    for var in sorted(list(extra)):
-        table.add_row("[yellow]Extra[/yellow]", var, "In source files, but not in template.")
-
-    console.print(table)
-    console.print("\n[bold]Suggestion:[/bold] Run `envguard template sync` to interactively update your template.")
+    if found_issues:
+        console.print("\n[bold]Suggestion:[/bold] Run `envguard template sync` to interactively update your templates.")
+    else:
+        console.print("\n[bold green]✓ All configured templates are perfectly in sync![/bold green]")
 
 
 def _append_to_template(template_file: str, variables_to_add: list):
@@ -116,35 +120,43 @@ def _append_to_template(template_file: str, variables_to_add: list):
 
 
 def sync_template(profile_name: str):
-    """Interactively syncs the template file with extra variables from source files."""
-    try:
-        template_file, _, extra_in_source, _ = _get_sync_diff(profile_name)
-    except FileNotFoundError as e:
-        console.print(f"[red]Error:[/red] {e}")
-        return
+    """
+    Interactively syncs templates for each link in a profile.
+    """
+    config = config_manager.load_config()
+    profiles = config.get("profiles", {})
+    if profile_name not in profiles:
+        raise ProfileNotFoundError(profile_name)
 
-    if template_file is None:
-        console.print(f"[yellow]Profile '{profile_name}' has no template file defined. Nothing to sync.[/yellow]")
-        return
+    links = profiles[profile_name].get("links", [])
 
-    if not extra_in_source:
-        console.print("[bold green]✓ Template is already up-to-date. No extra variables found.[/bold green]")
-        return
+    console.print(f"\n[bold]Interactive Template Sync for Profile: [cyan]{profile_name}[/cyan][/bold]")
 
-    console.print("\n[bold]Interactive Template Sync[/bold]")
-    console.print("The following variables exist in your source files but not in your template.")
+    synced_something = False
+    for link in links:
+        try:
+            extra_vars, template_file = _get_link_diff(link)
+        except FileNotFoundError:
+            continue # Skip if files don't exist
 
-    try:
-        variables_to_add = questionary.checkbox(
-            'Which variables would you like to add to the template?',
-            choices=[questionary.Choice(title=var, checked=True) for var in sorted(list(extra_in_source))]
-        ).ask()
-    except (KeyboardInterrupt, TypeError):
-        console.print("\n[yellow]Sync cancelled by user.[/yellow]")
-        return
+        if not extra_vars or not template_file:
+            continue
 
-    if not variables_to_add:
-        console.print("No variables selected. Template remains unchanged.")
-        return
+        synced_something = True
+        console.print(f"\nFound extra variables for template [magenta]{template_file}[/magenta]:")
 
-    _append_to_template(template_file, variables_to_add)
+        try:
+            variables_to_add = questionary.checkbox(
+                f'Which variables to add to {template_file}?',
+                choices=[questionary.Choice(title=var, checked=True) for var in sorted(list(extra_vars))]
+            ).ask()
+        except (KeyboardInterrupt, TypeError):
+            console.print("\n[yellow]Sync cancelled by user.[/yellow]")
+            return
+
+        if variables_to_add:
+            _append_to_template(template_file, variables_to_add)
+
+    if not synced_something:
+        console.print("\n[bold green]✓ All templates are already up-to-date![/bold green]")
+
