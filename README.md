@@ -6,7 +6,7 @@ Tired of the chaos of local development? Manually copying `.env` files, hunting 
 
 **EnvGuard brings order and security to your local environment.** It's a command-line tool that automates the entire setup process, making it simple, repeatable, and safe.
 
-![onboarding.gif](onboarding.gif)
+![onboarding.gif](.gif/onboarding.gif)
 
 ---
 
@@ -30,7 +30,7 @@ EnvGuard is more than just a workflow tool; it's your first line of defense agai
 
 ### **Never Commit a Secret Again: `envguard scan` & `install-hook`**
 
-![commit-blocked.gif](commit-blocked.gif)
+![commit-blocked.gif](.gif/commit-blocked.gif)
 
 **Demo**:
 
@@ -78,7 +78,7 @@ Here’s a detailed look at every command and how it improves your development w
 
 This is the very first command a project maintainer will run. It's an interactive wizard that creates the initial envguard.yml file.
 
-![envguard-init.gif](envguard-init.gif)
+![envguard-init.gif](.gif/envguard-init.gif)
 
 **How it improves development**: It provides a simple, guided entry point for adding EnvGuard to new or existing projects, creating a basic configuration that you can then expand upon.
 
@@ -86,7 +86,7 @@ This is the very first command a project maintainer will run. It's an interactiv
 
 This is the killer feature for team productivity. It's a single command that takes a new developer from a fresh git clone to a fully configured, running application.
 
-![onboarding.gif](onboarding.gif)
+![onboarding.gif](.gif/onboarding.gif)
 
 **How it improves development**: It dramatically reduces onboarding time, eliminates setup errors, and ensures every developer starts with a consistent, correct configuration.
 
@@ -94,7 +94,7 @@ This is the killer feature for team productivity. It's a single command that tak
 
 These are your day-to-day commands for managing your environment. list shows you your options, and use activates one.
 
-![workflow.gif](workflow.gif)
+![workflow.gif](.gif/workflow.gif)
 
 **How it improves development**: It turns the complex, manual process of changing configurations for different tasks (e.g., local coding vs. running tests) into a single, instant, and error-free command.
 
@@ -102,7 +102,7 @@ These are your day-to-day commands for managing your environment. list shows you
 
 These commands are your tools for keeping your project's "master blueprint" up-to-date.
 
-![drift-fix.gif](drift-fix.gif)
+![drift-fix.gif](.gif/drift-fix.gif)
 
 **How it improves development**: It makes maintaining your configuration templates effortless. This prevents bugs caused by developers having outdated environments and ensures your documentation is never out of sync with reality.
 
@@ -154,20 +154,16 @@ profiles:
 
 Phase 1 provides a complete solution for local environment management. The future of EnvGuard is focused on enhancing security and team collaboration.
 
-    Phase 2: The Secure Team Enabler
+Phase 2: The Secure Team Enabler
 
-        Encrypted Files (sops-like): Safely commit encrypted secret files to your repository.
+-   Encrypted Files: Safely commit encrypted secret files to your repository.
+-   Secure P2P Secret Sharing: Securely share secrets with teammates directly from the command line.
+-   Environment Health Check (envguard doctor): A comprehensive diagnostic command.
 
-        Secure P2P Secret Sharing (age-like): Securely share secrets with teammates directly from the command line.
+Phase 3: The Intelligent Ecosystem
 
-        Environment Health Check (envguard doctor): A comprehensive diagnostic command.
-
-    Phase 3: The Intelligent Ecosystem
-
-        Shell Integration (direnv-like): Automatically load/unload environments as you cd.
-
-        Deployment Bridge (envguard export): Export configurations for Docker, Kubernetes, etc.
-
-        Deep IDE Integration: Get real-time feedback directly in your code editor.
+-   Shell Integration: Automatically load/unload environments as you cd.
+-   Deployment Bridge (envguard export): Export configurations for Docker, Kubernetes, etc.
+-   Deep IDE Integration: Get real-time feedback directly in your code editor.
 
 We welcome feedback and contributions to make EnvGuard the best tool it can be!
