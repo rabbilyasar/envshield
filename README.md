@@ -18,7 +18,7 @@ Managing secrets and environment variables is more than just an inconvenience; i
 
 -   **A Constant Barrage**: Security researchers find that over 1,000 unique, hardcoded secrets are leaked to public GitHub repositories every single day.
 
--   **The Cost of a Mistake**: According to IBM's 2024 "Cost of a Data Breach" report, the average cost of a data breach is $4.45 million. A single leaked credential can be the starting point for a catastrophic attack.
+-   **The Cost of a Mistake**: According to IBM's 2024 "Cost of a Data Breach" report, the average cost of a data breach is **$4.45 million**. A single leaked credential can be the starting point for a catastrophic attack.
 
 -   **The Developer Toil**: A single leaked key doesn't just cost money; it costs developer time. The immediate aftermath involves a frantic scramble of revoking keys, auditing for unauthorized access, and deploying hotfixes, often derailing an entire team's sprint.
 
