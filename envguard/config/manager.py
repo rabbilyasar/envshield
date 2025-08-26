@@ -36,7 +36,7 @@ def load_config() -> Dict[str, Any]:
         console.print(f"[bold red]Error:[/bold red] Failed to parse {CONFIG_FILE_NAME}: {e}")
         raise
 
-def generate_default_config(project_name: str, env_file: str, template_file: str|None = None) -> str:
+def generate_default_config_content(project_name: str, env_file: str, template_file: str|None = None) -> str:
     """
     Generates the YAML content for a default envguard.yml configuration file.
 
@@ -50,7 +50,7 @@ def generate_default_config(project_name: str, env_file: str, template_file: str
     """
     config_data = {
         "project_name": project_name,
-        "version": 1,
+        "version": "1.2.0",
         "profiles": {
             "dev": {
                 "description": "Default profile for local development",
