@@ -1,7 +1,8 @@
-import yaml
 import os
+from typing import Any, Dict
+
+import yaml
 from rich.console import Console
-from typing import Dict, Any
 
 # Import our custom exceptions
 from envguard.core.exceptions import ConfigNotFoundError
