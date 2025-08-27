@@ -1,39 +1,35 @@
 # setup.py
-# Read the contents of your README file
 from pathlib import Path
 
 from setuptools import find_packages, setup
 
-exec(open(Path(__file__).parent / "envshield" / "__init__.py").read())
-VERSION = __version__  # type: ignore # Mypy ignore: __version__ is defined via exec
+# Load the version from the package without importing it
+# (to avoid dependency issues during setup).
+try:
+    with open(Path(__file__).parent / "envshield" / "__init__.py") as f:
+        exec(f.read())
+    VERSION = __version__
+except (NameError, FileNotFoundError):
+    VERSION = "1.2.0"  # Fallback version
 
-
+# Read the contents of your README file for the long description
 this_directory = Path(__file__).parent
 long_description = (this_directory / "README.md").read_text(encoding="utf-8")
 
-
 setup(
+    # This is the name of your package on PyPI
     name="envshield",
     version=VERSION,
-    packages=find_packages(),  # Automatically finds all Python packages (directories with __init__.py)
-    include_package_data=True,  # Include non-Python files (e.g., templates, JSON patterns) from MANIFEST.in or package_data
-    # --- Project Dependencies ---
+    packages=find_packages(),
+    include_package_data=True,
     # List all external libraries your project relies on.
-    # Pinning exact versions (e.g., Click==8.2.1) is good practice for reproducibility,
-    # but for active development, often a range (e.g., Click>=8.0,<9.0) is used.
     install_requires=[
-        "PyYAML==6.0.2",  # For reading/writing YAML configuration files
-        "rich==14.0.0",  # For beautiful terminal output (tables, colors)
-        "questionary==2.1.0",  # For interactive prompts (e.g., for user input)
-        "typer==0.16.0",  # For building the CLI
-        "setuptools==80.9.0",  # For packaging and distribution
-        #'Click==8.2.1',       # For building the command-line interface
-        #'cryptography==45.0.4', # For secure encryption (used in snippet sharing)
-        #'python-dotenv==1.1.0', # For robust .env file parsing and manipulation
+        "PyYAML>=6.0,<7.0",
+        "rich>=13.0,<15.0",
+        "questionary>=2.0,<3.0",
+        "typer[all]>=0.9,<1.0",
     ],
-    # --- Console Scripts Entry Point ---
-    # This creates an executable script (e.g., `envshield`) in your PATH
-    # that points to the `cli` function within `envshield.cli` module.
+    # This creates the `envshield` command and points it to your CLI application.
     entry_points={
         "console_scripts": [
             "envshield=envshield.cli:app",
@@ -42,17 +38,17 @@ setup(
     # --- Package Metadata ---
     author="Rabbil Yasar Sajal",
     author_email="rabbilyasar@gmail.com",
-    description="EnvShield: Secure Environment Variable Management and Secret Prevention CLI.",
+    description="EnvShield: A CLI for secure local environment management and secret prevention.",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/rabbilyasar/envshield",
+    url="https://github.com/rabbilyasar/envshield",  # Update with your new repository URL
     # --- Classifiers for PyPI ---
     # Provide metadata to help users find the package on PyPI.
     classifiers=[
-        "Development Status :: 3 - Alpha",  # Or 4 - Beta, 5 - Production/Stable
-        "Environment :: Console",  # Indicates it's a command-line tool
+        "Development Status :: 4 - Beta",
+        "Environment :: Console",
         "Intended Audience :: Developers",
-        "License :: OSI Approved :: MIT License",  # Choose your license
+        "License :: OSI Approved :: MIT License",
         "Natural Language :: English",
         "Operating System :: OS Independent",
         "Programming Language :: Python :: 3",
