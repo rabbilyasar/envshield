@@ -1,4 +1,4 @@
-# envguard/parsers/factory.py
+# envshield/parsers/factory.py
 # A factory to select the appropriate parser based on file extension.
 
 import os
@@ -6,6 +6,7 @@ from typing import Optional
 from ._base import BaseParser
 from ._dotenv import DotenvParser
 from ._python import PythonParser
+
 
 def get_parser(file_path: str) -> Optional[BaseParser]:
     """
@@ -20,10 +21,10 @@ def get_parser(file_path: str) -> Optional[BaseParser]:
     """
     _, extension = os.path.splitext(file_path)
 
-    if extension == '.py':
+    if extension == ".py":
         return PythonParser()
     # Assume files with no extension (like '.env') or '.env' extension are dotenv files
-    elif extension == '' or '.env' in file_path:
+    elif extension == "" or ".env" in file_path:
         return DotenvParser()
 
     # In the future, we can add more parsers here (e.g., for .json, .toml)

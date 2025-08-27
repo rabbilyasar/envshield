@@ -4,15 +4,17 @@ import os
 from typing import Optional
 import json
 
-# Define a hidden directory to store EnvGuard's state and other internal files
-STATE_DIR = ".envguard"
+# Define a hidden directory to store EnvShield's state and other internal files
+STATE_DIR = ".envshield"
 STATE_FILE = os.path.join(STATE_DIR, "state.json")
 
+
 def _ensure_state_dir_exists():
-    """Ensures the .envguard directory exists."""
+    """Ensures the .envshield directory exists."""
     os.makedirs(STATE_DIR, exist_ok=True)
 
-def get_active_profile() -> Optional[str|None]:
+
+def get_active_profile() -> Optional[str | None]:
     """
     Retrieves the name of the currently active profile.
 
@@ -30,6 +32,7 @@ def get_active_profile() -> Optional[str|None]:
         print(f"Error reading {STATE_FILE}. The file may be corrupted.")
         return None
 
+
 def set_active_profile(profile_name: str):
     """
     Sets the active profile for the current project.
@@ -39,9 +42,7 @@ def set_active_profile(profile_name: str):
     """
     _ensure_state_dir_exists()
 
-    state_data = {
-        "active_profile": profile_name
-    }
+    state_data = {"active_profile": profile_name}
 
     try:
         with open(STATE_FILE, "w") as f:

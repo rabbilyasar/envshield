@@ -1,7 +1,8 @@
-# envguard/core/file_updater.py
+# envshield/core/file_updater.py
 # Contains logic for safely updating variables within configuration files.
 import re
 from typing import List, Dict
+
 
 def update_variables_in_file(file_path: str, updates: List[dict]):
     """
@@ -13,12 +14,12 @@ def update_variables_in_file(file_path: str, updates: List[dict]):
                  e.g., [{'key': 'SECRET_KEY', 'value': 'new_secret'}]
     """
     try:
-        with open(file_path, 'r') as f:
+        with open(file_path, "r") as f:
             lines = f.readlines()
     except IOError:
         return
 
-    update_map = {u['key']: u['value'] for u in updates}
+    update_map = {u["key"]: u["value"] for u in updates}
     updated_keys_handled = set()
 
     new_lines = []
@@ -33,7 +34,7 @@ def update_variables_in_file(file_path: str, updates: List[dict]):
             # ignoring whitespace, followed by an equals sign.
             pattern = re.compile(rf"^\s*{re.escape(key)}\s*=")
             if pattern.match(line):
-                if file_path.endswith('.py'):
+                if file_path.endswith(".py"):
                     # For Python files, format as: KEY = "VALUE"
                     new_lines.append(f'{key} = "{value}"\n')
                 else:
@@ -48,7 +49,7 @@ def update_variables_in_file(file_path: str, updates: List[dict]):
             new_lines.append(line)
 
     try:
-        with open(file_path, 'w') as f:
+        with open(file_path, "w") as f:
             f.writelines(new_lines)
     except IOError:
         pass

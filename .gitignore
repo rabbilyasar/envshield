@@ -29,8 +29,8 @@ Thumbs.db
 *.env.development
 *.env.production
 
-# Backup files created by EnvGuard during symlink/file operations
-*.envguard_bak
+# Backup files created by EnvShield during symlink/file operations
+*.envshield_bak
 
 # Log files
 *.log

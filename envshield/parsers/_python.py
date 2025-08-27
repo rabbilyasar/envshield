@@ -1,10 +1,11 @@
-# envguard/parsers/_python.py
+# envshield/parsers/_python.py
 # A parser for Python configuration files using the Abstract Syntax Tree (ast) module.
 
 import ast
 import os
 from typing import Set
 from ._base import BaseParser
+
 
 class PythonParser(BaseParser):
     """
@@ -20,7 +21,7 @@ class PythonParser(BaseParser):
             raise FileNotFoundError(f"File not found: {file_path}")
 
         variables = set()
-        with open(file_path, 'r') as f:
+        with open(file_path, "r") as f:
             try:
                 # Parse the file content into an AST
                 tree = ast.parse(f.read(), filename=file_path)

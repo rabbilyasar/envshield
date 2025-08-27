@@ -1,9 +1,10 @@
-# envguard/utils/git_utils.py
+# envshield/utils/git_utils.py
 # Helper functions for interacting with the local Git repository.
 
-import subprocess
 import os
+import subprocess
 from typing import List, Optional
+
 
 def get_git_root() -> Optional[str]:
     """
@@ -16,12 +17,15 @@ def get_git_root() -> Optional[str]:
         # This git command returns the top-level directory path.
         result = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True, text=True, check=True
+            capture_output=True,
+            text=True,
+            check=True,
         )
         return result.stdout.strip()
     except (subprocess.CalledProcessError, FileNotFoundError):
         # Fails if not in a git repo or if git is not installed.
         return None
+
 
 def get_staged_files() -> List[str]:
     """
@@ -38,11 +42,15 @@ def get_staged_files() -> List[str]:
         # This git command lists files that are added, copied, modified, or renamed.
         result = subprocess.run(
             ["git", "diff", "--cached", "--name-only", "--diff-filter=ACMR"],
-            capture_output=True, text=True, check=True
+            capture_output=True,
+            text=True,
+            check=True,
         )
         # The output is relative to the git root, so we make it absolute.
-        relative_paths = result.stdout.strip().split('\n')
-        absolute_paths = [os.path.join(git_root, path) for path in relative_paths if path]
+        relative_paths = result.stdout.strip().split("\n")
+        absolute_paths = [
+            os.path.join(git_root, path) for path in relative_paths if path
+        ]
         return absolute_paths
     except (subprocess.CalledProcessError, FileNotFoundError):
         return []

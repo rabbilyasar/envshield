@@ -1,8 +1,9 @@
-# envguard/parsers/_dotenv.py
+# envshield/parsers/_dotenv.py
 # A simple parser for key-value .env files.
 import os
 from typing import Set
 from ._base import BaseParser
+
 
 class DotenvParser(BaseParser):
     """
@@ -20,15 +21,15 @@ class DotenvParser(BaseParser):
             raise FileNotFoundError(f"File not found: {file_path}")
 
         variables = set()
-        with open(file_path, 'r') as f:
+        with open(file_path, "r") as f:
             for line in f:
                 line = line.strip()
-                if not line or line.startswith('#'):
+                if not line or line.startswith("#"):
                     continue
 
-                if '=' in line:
-                    key = line.split('=', 1)[0].strip()
-                    if key: # Ensure key is not empty
+                if "=" in line:
+                    key = line.split("=", 1)[0].strip()
+                    if key:  # Ensure key is not empty
                         variables.add(key)
 
         return variables
