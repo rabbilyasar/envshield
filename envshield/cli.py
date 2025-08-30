@@ -2,7 +2,7 @@
 import fnmatch
 import os
 import stat
-from typing import List
+from typing import List, Optional
 
 import questionary
 import typer
@@ -193,17 +193,30 @@ def scan(
     staged: bool = typer.Option(
         False, "--staged", help="Only scan files staged for the next Git commit."
     ),
+    exclude: Optional[List[str]] = typer.Option(
+        None,
+        "--exclude",
+        "-e",
+        help="A glob pattern of files/directories to exclude from the scan. Can be used multiple times.",
+    ),
 ):
     """Scans files for hardcoded secrets."""
     console.print("\n[bold cyan]🛡️  Running EnvShield Secret Scanner...[/bold cyan]")
 
+    # exclusions = config_manager.DEFAULT_SCANNER_EXCLUSIONS.copy()
+
     exclude_patterns = DEFAULT_EXCLUDE_PATTERNS.copy()
     try:
         config = config_manager.load_config()
-        scan_config = config.get("secret_scanning", {})
-        exclude_patterns.extend(scan_config.get("exclude_files", []))
+        config_exclusions = (
+            config.get("secret_scanning", {}).get("exclude_files") or []
+        )
+        exclude_patterns.extend(config_exclusions)
     except EnvShieldException:
         pass
+
+    if exclude:
+        exclude_patterns.extend(exclude)
 
     files_to_scan = []
     if staged:
