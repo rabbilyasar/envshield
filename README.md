@@ -121,16 +121,17 @@ profiles:
         target: .env
         template: .env.template
 
-# A wonderfully complex project:  
-project_name: complex-project  
-profiles:  
-  local-dev:  
-    links:  
-      - { source: config/env_config.dev.py, target: config/env_config.py, template: config/env_config.local.py }  
-      - { source: .env.local-dev, target: .env, template: .env.template }  
-    onboarding_prompts: [SECRET_KEY]  
-    post_onboard_script: "./tools/ctl.sh pre-deploy"  
-secret_scanning:  
+# A wonderfully complex project:
+project_name: complex-project
+profiles:
+  local-dev:
+    description: "Standard local development with Docker."
+    links:
+      - { source: config/env_config.dev.py, target: config/env_config.py, template: config/env_config.local.py }
+      - { source: .env.local-dev, target: .env, template: .env.template }
+    onboarding_prompts: [SECRET_KEY]
+    post_onboard_script: "./tools/ctl.sh pre-deploy"
+secret_scanning:
   exclude_files: ["node_modules/*", "dist/*"]
 ```
 
