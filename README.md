@@ -121,8 +121,8 @@ profiles:
         target: .env
         template: .env.template
 
-# A wonderfully complex project like "Issuebear":  
-project_name: issuebear  
+# A wonderfully complex project:  
+project_name: complex-project  
 profiles:  
   local-dev:  
     links:  
