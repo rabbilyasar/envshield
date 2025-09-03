@@ -1,6 +1,5 @@
-# envshield/config/manager.py
 import os
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import yaml
 from rich.console import Console
@@ -11,31 +10,45 @@ CONFIG_FILE_NAME = "envshield.yml"
 console = Console()
 
 
-def load_config() -> Dict[str, Any]:
+def load_config(path: Optional[str] = None) -> Dict[str, Any]:
     """
-    Loads and parses the envshield.yml file from the current directory.
+    Loads and parses the envshield.yml file.
+
+    It will load from the specified path if provided, otherwise it looks
+    for envshield.yml in the current directory.
+
+    Args:
+        path: An optional path to a specific config file.
 
     Raises:
-        ConfigNotFoundError: If the envshield.yml file does not exist.
+        ConfigNotFoundError: If the configuration file does not exist.
 
     Returns:
-        A dictionary representing the parsed YAML configuration
+        A dictionary representing the parsed YAML configuration.
     """
-    if not config_file_exists():
-        raise ConfigNotFoundError()
+    config_path = path or CONFIG_FILE_NAME
+
+    if not os.path.exists(config_path):
+        # Only raise an error if a specific path was given.
+        # It's okay for the default file to not exist for some commands.
+        if path:
+            raise ConfigNotFoundError(f"Configuration file not found at '{config_path}'")
+        # If no path was given and the default doesn't exist, return empty config
+        return {}
+
     try:
-        with open(CONFIG_FILE_NAME, "r") as f:
+        with open(config_path, "r") as f:
             config_data = yaml.safe_load(f)
             return config_data if config_data else {}
     except yaml.YAMLError as e:
-        console.print(
-            f"[bold red]Error:[/bold red] Failed to parse {CONFIG_FILE_NAME}: {e}"
-        )
+        console.print(f"[bold red]Error:[/bold red] Failed to parse {config_path}: {e}")
         raise
+    except IOError as e:
+        raise ConfigNotFoundError(f"Could not read config file at '{config_path}': {e}")
 
 
 def generate_default_config_content(
-    project_name: str, env_file: str, template_file: str | None = None
+    project_name: str, env_file: str, template_file: Optional[str] = None
 ) -> str:
     """
     Generates the YAML content for a default envshield.yml configuration file.
@@ -54,9 +67,7 @@ def generate_default_config_content(
         "profiles": {
             "dev": {
                 "description": "Default profile for local development.",
-                "links": [
-                    {"source": env_file, "target": ".env", "template": template_file}
-                ],
+                "links": [{"source": env_file, "target": ".env", "template": template_file}],
             }
         },
         "secret_scanning": {
@@ -73,9 +84,10 @@ def generate_default_config_content(
     return header + yaml.dump(config_data, sort_keys=False, indent=2)
 
 
-def config_file_exists() -> bool:
-    """Checks if the envshield.yml configuration file already exists in the CWD."""
-    return os.path.exists(CONFIG_FILE_NAME)
+def config_file_exists(path: Optional[str] = None) -> bool:
+    """Checks if the configuration file exists in the CWD or at a specific path."""
+    config_path = path or CONFIG_FILE_NAME
+    return os.path.exists(config_path)
 
 
 def write_config_file(content: str):
