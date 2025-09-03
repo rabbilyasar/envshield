@@ -48,4 +48,4 @@ jobs:
     - name: Scan codebase with EnvShield
       run: |
         # The tool is already installed via 'pip install -e', so just run it
-        envshield scan . --exclude myvenv/* --exclude venv/* --exclude envshield/tests/*
+        envshield scan . --config .github/envshield.ci.yml
