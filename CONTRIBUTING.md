@@ -35,6 +35,26 @@ If you have an idea for a new feature or an improvement to an existing one, plea
 4. Make sure your code lints (`ruff check .` and `ruff format .`).  
 5. Issue that pull request.
 
+## **Development Setup**
+To get started with the codebase, follow these steps:
+1. **Clone the repository**
+```
+git clone [https://github.com/rabbilyasar/envshield.git](https://github.com/rabbilyasar/envshield.git)
+cd envshield
+```
+2. **Create a virtual environment:**
+It's highly recommended to use a virtual environment to manage dependencies.
+```
+python -m venv venv
+source venv/bin/activate  # On Windows, use `venv\Scripts\activate`
+```
+3. **Install dependencies:**
+The project uses `pyproject.toml` to manage dependencies. Install the package in editable mode with all development dependencies:
+```
+pip install -e ".[dev]"
+```
+
+
 ## **Versioning & Releases**
 
 This section is primarily for project maintainers. EnvShield uses **Semantic Versioning** (`MAJOR.MINOR.PATCH`) and automates the versioning process using the `bump2version` tool.  
@@ -59,13 +79,24 @@ This command will automatically:
 After running the command, simply push the changes and the new tag to the repository:  
 ```git push && git push --tags```
 
-## **Styleguides**
+## **Running Tests and Linting**
 
-This project uses `ruff` for linting and code formatting. Before committing, please run:  
+Before submitting a pull request, please ensure that your changes meet our quality standards by running our test and linting suites.
+- **Run all tests with `pytest`:**
 ```
-# Check for linting errors  
+pytest
+```
+- **Check formatting and linting with `ruff`:**
+```
+# Check for linting errors
 ruff check .
 
-# Automatically format your code  
+# Check for formatting issues
+ruff format --check .
+```
+- **To automatically fix formatting issues:**
+```
 ruff format .
-```  
+```
+
+We look forward to your contributions!
