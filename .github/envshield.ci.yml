@@ -1,0 +1,8 @@
+# This is a special configuration file for our CI pipeline.
+# It tells the EnvShield scanner to ignore its own test files,
+# which are expected to contain example secrets.
+secret_scanning:
+    exclude_files:
+    - "envshield/tests/*"
+    - "myvenv/*"
+    - "exclude venv/*"
