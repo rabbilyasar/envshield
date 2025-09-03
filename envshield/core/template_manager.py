@@ -1,7 +1,5 @@
 # envshield/core/template_manager.py
 # Core logic for template checking and syncing, with per-link support.
-
-import os
 import questionary
 from rich.console import Console
 from rich.table import Table

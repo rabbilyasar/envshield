@@ -1,4 +1,3 @@
-import pytest
 from envshield.parsers._python import PythonParser
 
 def test_python_parser_happy_path(mocker):
