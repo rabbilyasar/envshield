@@ -1,7 +1,7 @@
 # envshield/core/file_updater.py
 # Contains logic for safely updating variables within configuration files.
 import re
-from typing import List, Dict
+from typing import List
 
 
 def update_variables_in_file(file_path: str, updates: List[dict]):

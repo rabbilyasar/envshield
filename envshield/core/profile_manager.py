@@ -6,7 +6,6 @@ import shutil
 import subprocess
 from typing import List, Union
 
-import questionary
 import typer
 from rich.console import Console
 from rich.panel import Panel
@@ -17,7 +16,6 @@ from envshield import state
 from envshield.config import manager as config_manager
 from envshield.core import file_updater
 from envshield.core.exceptions import ProfileNotFoundError, SourceFileNotFoundError
-from envshield.parsers.factory import get_parser
 
 console = Console()
 
@@ -131,7 +129,7 @@ def _run_script(script_command: Union[str, List[str]]):
             process.wait()
             if process.returncode != 0:
                 raise subprocess.CalledProcessError(process.returncode, command)
-            console.print(f"[green]✓ Script finished successfully.[/green]")
+            console.print("[green]✓ Script finished successfully.[/green]")
         except Exception as e:
             console.print(f"[bold red]Error running script: {e}[/bold red]")
             raise
@@ -203,7 +201,7 @@ def onboard_profile(profile_name: str):
             else:
                 open(source_file, "a").close()
                 console.print(
-                    f"    [green]✓[/green] Created a blank file (no template specified for this link)."
+                    "[green]✓[/green] Created a blank file (no template specified for this link)."
                 )
                 created_files = True
 
