@@ -32,9 +32,19 @@ DEFAULT_EXCLUDE_PATTERNS = [
     "package-lock.json",
     "yarn.lock",
     "poetry.lock",
-    "*.png", "*.jpg", "*.jpeg", "*.gif", "*.svg",
-    "*.woff", "*.woff2", "*.bin", "*.egg-info/*",
-    "**/*__pycache__/*", ".pytest_cache/*", ".venv/*", "venv/*",
+    "*.png",
+    "*.jpg",
+    "*.jpeg",
+    "*.gif",
+    "*.svg",
+    "*.woff",
+    "*.woff2",
+    "*.bin",
+    "*.egg-info/*",
+    "**/*__pycache__/*",
+    ".pytest_cache/*",
+    ".venv/*",
+    "venv/*",
 ]
 
 # A comprehensive, curated list of high-confidence regex patterns for common secrets,
@@ -123,16 +133,19 @@ def _scan_single_file(file_path: str) -> List[Dict]:
             for line_num, line in enumerate(f, 1):
                 for secret in SECRET_PATTERNS:
                     if re.search(secret["pattern"], line):
-                        findings.append({
-                            "file_path": file_path,
-                            "line_num": line_num,
-                            "secret_type": secret["name"],
-                            "line_content": line.strip(),
-                        })
-                        break # Move to next line after first find
+                        findings.append(
+                            {
+                                "file_path": file_path,
+                                "line_num": line_num,
+                                "secret_type": secret["name"],
+                                "line_content": line.strip(),
+                            }
+                        )
+                        break  # Move to next line after first find
     except (IOError, OSError):
         return []
     return findings
+
 
 def _collect_files_to_scan(paths: Optional[List[str]], staged_only: bool) -> List[str]:
     """Collects a list of files to be scanned based on user input."""
@@ -140,8 +153,8 @@ def _collect_files_to_scan(paths: Optional[List[str]], staged_only: bool) -> Lis
         console.print("Scanning [yellow]staged files[/yellow]...")
         files = git_utils.get_staged_files()
         if not files:
-             console.print("[green]No staged files to scan.[/green]")
-             raise typer.Exit()
+            console.print("[green]No staged files to scan.[/green]")
+            raise typer.Exit()
         return files
 
     files_to_scan = []
@@ -159,6 +172,7 @@ def _collect_files_to_scan(paths: Optional[List[str]], staged_only: bool) -> Lis
                     files_to_scan.append(os.path.join(root, file))
     return files_to_scan
 
+
 def _filter_files(files: List[str], exclude_patterns: List[str]) -> List[str]:
     """Filters a list of files against a list of glob patterns."""
     final_files = []
@@ -173,6 +187,7 @@ def _filter_files(files: List[str], exclude_patterns: List[str]) -> List[str]:
         if not is_excluded:
             final_files.append(file_path)
     return final_files
+
 
 def run_scan(
     paths: Optional[List[str]],
@@ -205,17 +220,23 @@ def run_scan(
     ) as progress:
         scan_task = progress.add_task("files...", total=len(final_files_to_scan))
         for file_path in final_files_to_scan:
-            progress.update(scan_task, description=os.path.basename(file_path), advance=1)
+            progress.update(
+                scan_task, description=os.path.basename(file_path), advance=1
+            )
             if os.path.exists(file_path) and os.path.getsize(file_path) > 1_000_000:
                 continue
             findings = _scan_single_file(file_path)
             all_findings.extend(findings)
 
     if not all_findings:
-        console.print("\n[bold green]✓ No secrets found. You're good to go![/bold green]")
+        console.print(
+            "\n[bold green]✓ No secrets found. You're good to go![/bold green]"
+        )
         return
 
-    console.print(f"\n[bold red]🚨 DANGER: Found {len(all_findings)} potential secret(s)![/bold red]")
+    console.print(
+        f"\n[bold red]🚨 DANGER: Found {len(all_findings)} potential secret(s)![/bold red]"
+    )
     table = Table(title="Secret Scan Results", border_style="red")
     table.add_column("File", style="cyan", no_wrap=True)
     table.add_column("Line", style="yellow")
@@ -232,11 +253,16 @@ def run_scan(
     console.print(table)
 
     if staged_only:
-        console.print("\n[bold red]Commit aborted. Please remove these secrets from your files before committing.[/bold red]")
+        console.print(
+            "\n[bold red]Commit aborted. Please remove these secrets from your files before committing.[/bold red]"
+        )
     else:
-        console.print("\n[bold red]Review the findings above and remove any active secrets from your project's files.[/bold red]")
+        console.print(
+            "\n[bold red]Review the findings above and remove any active secrets from your project's files.[/bold red]"
+        )
 
     raise typer.Exit(code=1)
+
 
 def install_pre_commit_hook():
     """Installs the Git pre-commit hook."""
@@ -247,7 +273,9 @@ def install_pre_commit_hook():
     hooks_dir = os.path.join(git_root, ".git", "hooks")
     pre_commit_path = os.path.join(hooks_dir, "pre-commit")
 
-    hook_script_content = "#!/bin/sh\n\n# Hook installed by EnvShield\nenvshield scan --staged\n"
+    hook_script_content = (
+        "#!/bin/sh\n\n# Hook installed by EnvShield\nenvshield scan --staged\n"
+    )
 
     try:
         if os.path.exists(pre_commit_path):
@@ -269,12 +297,17 @@ def install_pre_commit_hook():
             current_permissions | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH,
         )
 
-        console.print("[bold green]✓ Git pre-commit hook installed successfully![/bold green]")
-        console.print("EnvShield will now automatically scan for secrets before every commit.")
+        console.print(
+            "[bold green]✓ Git pre-commit hook installed successfully![/bold green]"
+        )
+        console.print(
+            "EnvShield will now automatically scan for secrets before every commit."
+        )
 
     except (IOError, OSError) as e:
-        raise EnvShieldException(f"Failed to write or set permissions for the hook file: {e}")
-    except TypeError: # This happens if questionary prompt is cancelled with Ctrl+C
+        raise EnvShieldException(
+            f"Failed to write or set permissions for the hook file: {e}"
+        )
+    except TypeError:  # This happens if questionary prompt is cancelled with Ctrl+C
         console.print("[yellow]Hook installation cancelled by user.[/yellow]")
         raise typer.Exit()
-

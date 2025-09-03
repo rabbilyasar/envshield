@@ -32,7 +32,9 @@ def load_config(path: Optional[str] = None) -> Dict[str, Any]:
         # Only raise an error if a specific path was given.
         # It's okay for the default file to not exist for some commands.
         if path:
-            raise ConfigNotFoundError(f"Configuration file not found at '{config_path}'")
+            raise ConfigNotFoundError(
+                f"Configuration file not found at '{config_path}'"
+            )
         # If no path was given and the default doesn't exist, return empty config
         return {}
 
@@ -67,7 +69,9 @@ def generate_default_config_content(
         "profiles": {
             "dev": {
                 "description": "Default profile for local development.",
-                "links": [{"source": env_file, "target": ".env", "template": template_file}],
+                "links": [
+                    {"source": env_file, "target": ".env", "template": template_file}
+                ],
             }
         },
         "secret_scanning": {

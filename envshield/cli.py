@@ -1,5 +1,6 @@
 # import fnmatch
 import os
+
 # import stat
 from typing import List, Optional
 
@@ -39,7 +40,9 @@ def _get_profile_or_active(profile: Optional[str]) -> str:
 
     active_profile = state.get_active_profile()
     if not active_profile:
-        console.print("[red]Error:[/red] No profile specified and no profile is active.")
+        console.print(
+            "[red]Error:[/red] No profile specified and no profile is active."
+        )
         raise typer.Exit(code=1)
 
     console.print(f"Operating on active profile: [cyan]{active_profile}[/cyan]")
@@ -97,7 +100,9 @@ def init():
 
 @app.command()
 def onboard(
-    profile: str = typer.Argument(..., help="The profile to set up, e.g., 'local-dev'."),
+    profile: str = typer.Argument(
+        ..., help="The profile to set up, e.g., 'local-dev'."
+    ),
 ):
     """A guided walkthrough to set up a new environment profile."""
     try:
@@ -133,7 +138,9 @@ def use(
 
 @template_app.command("check")
 def template_check(
-    profile: Optional[str] = typer.Option(None, "--profile", "-p", help="The profile to check. Defaults to active."),
+    profile: Optional[str] = typer.Option(
+        None, "--profile", "-p", help="The profile to check. Defaults to active."
+    ),
 ):
     """Checks if your environment files are in sync with the template."""
     try:
@@ -146,7 +153,9 @@ def template_check(
 
 @template_app.command("sync")
 def template_sync(
-    profile: Optional[str] = typer.Option(None, "--profile", "-p", help="The profile to sync. Defaults to active."),
+    profile: Optional[str] = typer.Option(
+        None, "--profile", "-p", help="The profile to sync. Defaults to active."
+    ),
 ):
     """Interactively add variables from your source files to your template."""
     try:
@@ -159,10 +168,25 @@ def template_sync(
 
 @app.command()
 def scan(
-    paths: List[str] = typer.Argument(None, help="Paths to files or directories to scan. Defaults to current directory."),
-    staged: bool = typer.Option(False, "--staged", help="Only scan files staged for the next Git commit."),
-    exclude: Optional[List[str]] = typer.Option(None, "--exclude", "-e", help="Glob patterns to exclude. Can be used multiple times."),
-    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to a custom envshield.yml configuration file.")
+    paths: List[str] = typer.Argument(
+        None,
+        help="Paths to files or directories to scan. Defaults to current directory.",
+    ),
+    staged: bool = typer.Option(
+        False, "--staged", help="Only scan files staged for the next Git commit."
+    ),
+    exclude: Optional[List[str]] = typer.Option(
+        None,
+        "--exclude",
+        "-e",
+        help="Glob patterns to exclude. Can be used multiple times.",
+    ),
+    config: Optional[str] = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="Path to a custom envshield.yml configuration file.",
+    ),
 ):
     """Scans files for hardcoded secrets."""
     console.print("\n[bold cyan]🛡️  Running EnvShield Secret Scanner...[/bold cyan]")
@@ -171,7 +195,7 @@ def scan(
             paths=paths,
             staged_only=staged,
             exclude_patterns=exclude,
-            config_path=config
+            config_path=config,
         )
     except EnvShieldException as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
@@ -187,6 +211,6 @@ def install_hook():
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(code=1)
 
+
 if __name__ == "__main__":
     app()
-
