@@ -58,3 +58,10 @@ replace = '__version__ = "{new_version}"'
 filename = "pyproject.toml"
 search = 'version = "{current_version}"'
 replace = 'version = "{new_version}"'
+
+[project.optional-dependencies]
+dev = [
+    "ruff",
+    "pytest",
+    "bump2version",
+]

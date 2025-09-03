@@ -10,7 +10,6 @@ jobs:
   test-and-lint:
     runs-on: ubuntu-latest
     strategy:
-      # Run tests on multiple Python versions
       matrix:
         python-version: ["3.8", "3.9", "3.10", "3.11", "3.12"]
 
@@ -27,17 +26,15 @@ jobs:
       uses: actions/cache@v4
       with:
         path: ~/.cache/pip
-        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements*.txt') }}
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/pyproject.toml') }} # <-- Better to hash pyproject.toml
         restore-keys: |
           ${{ runner.os }}-pip-
 
-    - name: Install dependencies
+    - name: Install all dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        # Install development/testing dependencies
-        if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
-        pip install ruff pytest
+        # Install package in editable mode with the 'dev' dependencies
+        pip install -e ".[dev]"
 
     - name: Lint and format with Ruff
       run: |
@@ -50,7 +47,5 @@ jobs:
 
     - name: Scan codebase with EnvShield
       run: |
-        # Install the tool itself to run the command
-        pip install .
-        # Run the scanner on its own code, excluding the virtual env
+        # The tool is already installed via 'pip install -e', so just run it
         envshield scan . --exclude myvenv/* --exclude venv/*
