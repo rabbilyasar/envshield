@@ -90,7 +90,7 @@ def check_template(profile_name: str):
 
         except FileNotFoundError:
             console.print(
-                f"[red]  Error: One of the files was not found. Please run 'envshield onboard'.[/red]"
+                "[red]  Error: One of the files was not found. Please run 'envshield onboard'.[/red]"
             )
             found_issues = True
 
