@@ -3,6 +3,6 @@
 # which are expected to contain example secrets.
 secret_scanning:
     exclude_files:
-    - "envshield/tests/*"
+    - "./envshield/tests/*"
     - "myvenv/*"
     - "exclude venv/*"
