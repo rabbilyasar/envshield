@@ -156,7 +156,6 @@ Phase 1 is ready and already awesome. But we're just getting started. Here's a s
 
 Got questions? Have a brilliant idea? Come hang out with us!
 
-* 
 * 🤔 **Ask a question on GitHub Discussions:**[Discussions](https://github.com/rabbilyasar/envshield/discussions/)
 
 Or, Follow us on our socials:
