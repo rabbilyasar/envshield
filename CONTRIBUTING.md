@@ -1,34 +1,71 @@
-# **Contributing to EnvShield**
+# **Contributing to EnvShield 🛡️**
 
-First off, thank you for considering contributing\! EnvShield is a community-driven project, and every contribution, from a bug report to a new feature, is valuable.
+First off, thank you for considering contributing to EnvShield. It's people like you that make open-source such an amazing community. We welcome any and all contributions, from bug reports to feature requests and pull requests.
+
+### **Table of Contents**
+
+1. [Code of Conduct](#code-of-conduct)  
+2. [How Can I Contribute?](#how-can-i-contribute)  
+   * [Reporting Bugs](#reporting-bugs)  
+   * [Suggesting Enhancements](#suggesting-enhancements)  
+   * [Submitting a Pull Request](#submitting-a-pull-request)  
+3. [Versioning & Releases](#versioning--releases)  
+4. [Styleguides](#styleguides)
+
+## **Code of Conduct**
+
+This project and everyone participating in it is governed by the [EnvShield Code of Conduct](CODE_OF_CONDUCT.md). By participating, you are expected to uphold this code. Please report unacceptable behavior.
 
 ## **How Can I Contribute?**
 
 ### **Reporting Bugs**
 
-If you find a bug, please open an issue on our GitHub repository. A great bug report includes:
-
-* A clear and descriptive title.  
-* A step-by-step description of how to reproduce the issue.  
-* The expected behavior and what actually happened.  
-* Your operating system and Python version.
+If you find a bug, please ensure the bug was not already reported by searching on GitHub under [Issues](https://github.com/rabbilyasar/envshield/issues).  
+If you're unable to find an open issue addressing the problem, [open a new one](https://github.com/rabbilyasar/envshield/issues/new). Be sure to include a **title and clear description**, as much relevant information as possible, and a **code sample** or an **executable test case** demonstrating the expected behavior that is not occurring.
 
 ### **Suggesting Enhancements**
 
-If you have an idea for a new feature or an improvement to an existing one, please open an issue. We'd love to hear your thoughts\!
+If you have an idea for a new feature or an improvement to an existing one, please open an issue with the "enhancement" label. Clearly describe the problem you're trying to solve and your proposed solution. This allows for a discussion with the maintainers before you spend time on implementation.
 
-### **Pull Requests**
+### **Submitting a Pull Request**
 
-We welcome pull requests\! To ensure a smooth process, please follow these steps:
+1. Fork the repo and create your branch from `main`.  
+2. If you've added code that should be tested, add unit tests.  
+3. Ensure the test suite passes (`pytest`).  
+4. Make sure your code lints (`ruff check .` and `ruff format .`).  
+5. Issue that pull request.
 
-1. **Fork the repository** and create your branch from main.  
-2. **Set up your development environment.** We recommend using a Python virtual environment.  
-3. **Make your changes.** Please ensure your code follows our style guidelines (we use ruff for linting and formatting).  
-4. **Add tests.** If you're adding a new feature, please include unit tests. If you're fixing a bug, add a test that would have failed before your fix.  
-5. **Ensure all tests pass** by running pytest from the project root.  
-6. **Update the documentation.** If you've changed how the tool works, please update the README.md and any relevant documentation.  
-7. **Submit your pull request.** Provide a clear description of the problem and your solution.
+## **Versioning & Releases**
 
-## **Code of Conduct**
+This section is primarily for project maintainers. EnvShield uses **Semantic Versioning** (`MAJOR.MINOR.PATCH`) and automates the versioning process using the `bump2version` tool.  
+When preparing a new release, do not manually edit the version number in pyproject.toml. Instead, use the following commands from the main branch.
 
-By participating in this project, you agree to abide by our CODE\_OF\_CONDUCT.md. We are committed to fostering an open and welcoming environment.
+#### **Making a PATCH Release (Bug Fixes)**
+
+For backward-compatible bug fixes (e.g., `0.1.0` -> `0.1.1`):  
+```bump2version patch```
+
+#### **Making a MINOR Release (New Features)**
+
+For new, backward-compatible features (e.g., `0.1.1` -> `0.2.0`):  
+```bump2version minor```
+
+This command will automatically:
+
+1. Increment the version in `pyproject.toml` and `.bumpversion.cfg`.  
+2. Create a Git commit with a standardized message (e.g., "chore(release): Bump version: 0.1.0 → 0.1.1").  
+3. Create a Git tag for the new version (e.g., `v0.1.1`).
+
+After running the command, simply push the changes and the new tag to the repository:  
+```git push && git push --tags```
+
+## **Styleguides**
+
+This project uses `ruff` for linting and code formatting. Before committing, please run:  
+```
+# Check for linting errors  
+ruff check .
+
+# Automatically format your code  
+ruff format .
+```  
