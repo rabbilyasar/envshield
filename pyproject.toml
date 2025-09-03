@@ -1,0 +1,53 @@
+# pyproject.toml
+
+# This section tells tools like 'pip' and 'build' how to build your project.
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+# This is the main section, replacing most of setup.py
+[project]
+name = "envshield"
+version = "1.3.0" # This will be managed by bump2version
+authors = [
+  { name="Rabbil Yasar Sajal", email="rabbilyasar@gmail.com" },
+]
+description = "EnvShield: A CLI for secure local environment management and secret prevention."
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT License" }
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: Utilities",
+]
+
+# This is where your dependencies from `install_requires` go.
+dependencies = [
+    "PyYAML>=6.0,<7.0",
+    "rich>=13.0,<14.0",
+    "questionary>=2.0,<3.0",
+    "typer[all]>=0.9,<1.0",
+]
+
+# This is where your project URLs go.
+[project.urls]
+Homepage = "https://github.com/rabbilyasar/envshield"
+"Bug Tracker" = "https://github.com/rabbilyasar/envshield/issues"
+"Documentation" = "https://doc.envshield.dev/"
+"Website" = "https://envshield.dev/"
+
+# This replaces the `entry_points` section.
+[project.scripts]
+envshield = "envshield.cli:app"
