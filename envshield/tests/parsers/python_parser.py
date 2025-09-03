@@ -1,5 +1,6 @@
 from envshield.parsers._python import PythonParser
 
+
 def test_python_parser_happy_path(mocker):
     """Tests that the parser correctly extracts top-level variable assignments."""
     mock_file_content = (
@@ -19,9 +20,10 @@ def test_python_parser_happy_path(mocker):
 
     assert variables == {"SECRET_KEY", "DATABASE_URL"}
 
+
 def test_python_parser_sad_path_syntax_error(mocker):
     """Tests that the parser handles a file with a Python syntax error gracefully."""
-    mock_file_content = "SECRET_KEY =" # Invalid syntax
+    mock_file_content = "SECRET_KEY ="  # Invalid syntax
     mocker.patch("builtins.open", mocker.mock_open(read_data=mock_file_content))
     mocker.patch("os.path.exists", return_value=True)
 

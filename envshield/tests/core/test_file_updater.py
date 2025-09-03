@@ -1,5 +1,6 @@
 from envshield.core import file_updater
 
+
 def test_update_variables_in_py_file(tmp_path):
     """Tests updating variables in a Python file."""
     # tmp_path is a pytest fixture that creates a temporary directory
@@ -12,6 +13,7 @@ def test_update_variables_in_py_file(tmp_path):
     content = p.read_text()
     assert 'API_KEY = "new_secret_value"' in content
     assert "DEBUG = True" in content
+
 
 def test_update_variables_in_dotenv_file(tmp_path):
     """Tests updating variables in a .env file."""

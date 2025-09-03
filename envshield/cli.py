@@ -94,7 +94,9 @@ def init():
 
 @app.command()
 def onboard(
-    profile: str = typer.Argument(..., help="The profile to set up, e.g., 'local-dev'.")
+    profile: str = typer.Argument(
+        ..., help="The profile to set up, e.g., 'local-dev'."
+    ),
 ):
     """A guided walkthrough to set up a new environment profile."""
     try:
@@ -118,7 +120,7 @@ def list_profiles_command():
 
 @app.command()
 def use(
-    profile: str = typer.Argument(..., help="The name of the profile to activate.")
+    profile: str = typer.Argument(..., help="The name of the profile to activate."),
 ):
     """Switches the active environment to the specified profile."""
     try:
@@ -138,7 +140,7 @@ app.add_typer(template_app, name="template")
 def template_check(
     profile: str = typer.Option(
         None, "--profile", "-p", help="The profile to check. Defaults to active."
-    )
+    ),
 ):
     """Checks if your environment files are in sync with the template."""
     from envshield import state
@@ -162,7 +164,7 @@ def template_check(
 def template_sync(
     profile: str = typer.Option(
         None, "--profile", "-p", help="The profile to sync. Defaults to active."
-    )
+    ),
 ):
     """Interactively add variables from your source files to your template."""
     from envshield import state
@@ -208,9 +210,7 @@ def scan(
     exclude_patterns = DEFAULT_EXCLUDE_PATTERNS.copy()
     try:
         config = config_manager.load_config()
-        config_exclusions = (
-            config.get("secret_scanning", {}).get("exclude_files") or []
-        )
+        config_exclusions = config.get("secret_scanning", {}).get("exclude_files") or []
         exclude_patterns.extend(config_exclusions)
     except EnvShieldException:
         pass
