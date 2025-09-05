@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "envshield"
-version = "1.4.0"  # must be a string for PEP 621 compliance
+version = "2.0.0"  # must be a string for PEP 621 compliance
 description = "EnvShield: A CLI for secure local environment management and secret prevention."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -35,7 +35,8 @@ dependencies = [
     "PyYAML>=6.0,<7.0",
     "rich>=13.0,<15.0",
     "questionary>=2.0,<3.0",
-    "typer[all]>=0.9,<1.0"
+    "typer[all]>=0.9,<1.0",
+    "toml>=0.10,<1.0"
 ]
 
 [project.scripts]
