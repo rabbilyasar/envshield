@@ -264,13 +264,14 @@ def run_scan(
     raise typer.Exit(code=1)
 
 
-def install_pre_commit_hook():
+def install_pre_commit_hook(force: bool = False, non_interactive: bool = False):
     """Installs the Git pre-commit hook."""
     git_root = git_utils.get_git_root()
     if not git_root:
         raise EnvShieldException("Not inside a Git repository. Cannot install hook.")
 
     hooks_dir = os.path.join(git_root, ".git", "hooks")
+    os.makedirs(hooks_dir, exist_ok=True)  # Ensure hooks directory exists
     pre_commit_path = os.path.join(hooks_dir, "pre-commit")
 
     hook_script_content = (
@@ -279,13 +280,23 @@ def install_pre_commit_hook():
 
     try:
         if os.path.exists(pre_commit_path):
-            overwrite = questionary.confirm(
-                "A pre-commit hook already exists. Do you want to overwrite it?",
-                default=False,
-            ).ask()
-            if not overwrite:
-                console.print("[yellow]Hook installation cancelled.[/yellow]")
-                raise typer.Exit()
+            if non_interactive:
+                console.print(
+                    f"[bold yellow]⚠️  Warning:[/] A pre-commit hook already exists. EnvShield was not installed automatically."
+                )
+                console.print(
+                    "    Please add 'envshield scan --staged' to your existing hook script."
+                )
+                return
+
+            if not force:
+                overwrite = questionary.confirm(
+                    "A pre-commit hook already exists. Do you want to overwrite it?",
+                    default=False,
+                ).ask()
+                if not overwrite:
+                    console.print("[yellow]Hook installation cancelled.[/yellow]")
+                    raise typer.Exit()
 
         with open(pre_commit_path, "w") as f:
             f.write(hook_script_content)
@@ -300,14 +311,11 @@ def install_pre_commit_hook():
         console.print(
             "[bold green]✓ Git pre-commit hook installed successfully![/bold green]"
         )
-        console.print(
-            "EnvShield will now automatically scan for secrets before every commit."
-        )
 
     except (IOError, OSError) as e:
         raise EnvShieldException(
             f"Failed to write or set permissions for the hook file: {e}"
         )
-    except TypeError:  # This happens if questionary prompt is cancelled with Ctrl+C
+    except (TypeError, KeyboardInterrupt):
         console.print("[yellow]Hook installation cancelled by user.[/yellow]")
         raise typer.Exit()

@@ -2,10 +2,11 @@
 import os
 from typing import List, Optional
 
-import questionary
 import typer
 from rich.console import Console
 from rich.panel import Panel
+
+from envshield.core import inspector
 
 from .config import manager as config_manager
 from .core import scanner, schema_manager
@@ -25,61 +26,46 @@ schema_app = typer.Typer(
 app.add_typer(schema_app, name="schema")
 
 
-# # --- Helper Functions ---
-# def _get_profile_or_active(profile: Optional[str]) -> str:
-#     """Gets the specified profile or falls back to the active one."""
-#     from envshield import state
-
-#     if profile:
-#         return profile
-
-#     active_profile = state.get_active_profile()
-#     if not active_profile:
-#         console.print(
-#             "[red]Error:[/red] No profile specified and no profile is active."
-#         )
-#         raise typer.Exit(code=1)
-
-#     console.print(f"Operating on active profile: [cyan]{active_profile}[/cyan]")
-#     return active_profile
-
-
 # --- Commands ---
 @app.command()
 def init():
-    """Initializes EnvShield in the current project for best practices."""
+    """Initializes EnvShield with intelligent, framework-aware defaults."""
     console.print(
         Panel(
-            "[bold cyan]Welcome to EnvShield Initialization![/bold cyan]\n\nThis wizard will set up a secure, documented foundation for your project's configuration.",
+            "[bold cyan]Welcome to EnvShield! Setting up your secure foundation...[/bold cyan]",
             title="🛡️ EnvShield",
             border_style="green",
         )
     )
-    if os.path.exists(config_manager.CONFIG_FILE_NAME) or os.path.exists(
-        config_manager.SCHEMA_FILE_NAME
-    ):
-        overwrite = questionary.confirm(
-            "An EnvShield setup already exists. Do you want to overwrite it?",
-            default=False,
-        ).ask()
-        if not overwrite:
-            console.print("[yellow]Initialization cancelled.[/yellow]")
-            raise typer.Exit()
+    if os.path.exists(config_manager.CONFIG_FILE_NAME):
+        console.print(
+            "[yellow]An EnvShield setup already exists. Skipping initialization.[/yellow]"
+        )
+        raise typer.Exit()
 
     try:
-        project_name = questionary.text(
-            "What is the name of your project?", default=os.path.basename(os.getcwd())
-        ).ask()
+        # 1. Detect project type
+        project_type = inspector.detect_project_type()
+        if project_type:
+            console.print(
+                f"Detected a [bold yellow]{project_type}[/bold yellow] project."
+            )
+        else:
+            console.print(
+                "Could not detect a specific framework, using general defaults."
+            )
 
-        # Step 1: Create Schema
-        schema_content = config_manager.generate_default_schema_content()
+        project_name = os.path.basename(os.getcwd())
+
+        # 2. Create framework-specific schema
+        schema_content = config_manager.generate_default_schema_content(project_type)
         config_manager.write_file(
             config_manager.SCHEMA_FILE_NAME,
             schema_content,
             f"Created schema: [bold cyan]{config_manager.SCHEMA_FILE_NAME}[/bold cyan]",
         )
 
-        # Step 2: Create Config
+        # 3. Create config file
         config_content = config_manager.generate_default_config_content(project_name)
         config_manager.write_file(
             config_manager.CONFIG_FILE_NAME,
@@ -87,17 +73,14 @@ def init():
             f"Created config: [bold cyan]{config_manager.CONFIG_FILE_NAME}[/bold cyan]",
         )
 
-        # Step 3: Run First Sync
-        console.print("\n[bold]Running initial schema sync...[/bold]")
+        # 4. Update .gitignore
+        config_manager.update_gitignore()
+
+        # 5. Run first sync to create .env.example
         schema_manager.sync_schema()
 
-        # Step 4: Install Hook
-        install = questionary.confirm(
-            "Install Git pre-commit hook to automatically prevent secret leaks?",
-            default=True,
-        ).ask()
-        if install:
-            scanner.install_pre_commit_hook()
+        # 6. Install hook automatically
+        scanner.install_pre_commit_hook(non_interactive=True)
 
     except (KeyboardInterrupt, TypeError):
         console.print("\n[yellow]Initialization cancelled by user.[/yellow]")
@@ -105,7 +88,7 @@ def init():
 
     console.print("\n[bold green]✨ Setup Complete! ✨[/bold green]")
     console.print(
-        "Your configuration is now managed by the schema in 'env.schema.toml'."
+        "Your project is now protected. Define your variables in 'env.schema.toml'."
     )
 
 
