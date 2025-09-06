@@ -1,6 +1,5 @@
 # envshield/core/schema_manager.py
 import datetime
-
 from rich.console import Console
 from rich.table import Table
 
@@ -12,15 +11,15 @@ console = Console()
 
 def check_schema(file_path: str):
     """
-    Validates a local .env file against the env.schema.toml.
+    Validates a local environment file against the env.schema.toml,
+    intelligently handling variables with default values.
     """
-    console.print(
-        f"\n[bold]Validating [magenta]{file_path}[/magenta] against schema...[/bold]"
-    )
-    schema = config_manager.load_schema()
-    schema_vars = set(schema.keys())
+    console.print(f"\n[bold]Validating [magenta]{file_path}[/magenta] against schema...[/bold]")
 
+    # Load the schema and the local .env file
+    schema = config_manager.load_schema()
     parser = get_parser(file_path)
+
     if not parser:
         console.print(f"[red]Error:[/red] No parser found for file type '{file_path}'.")
         return
@@ -31,30 +30,37 @@ def check_schema(file_path: str):
         console.print(f"[red]Error:[/red] File not found: '{file_path}'.")
         return
 
-    missing_in_local = schema_vars - local_vars
-    extra_in_local = local_vars - schema_vars
+    # Get all variables defined in the schema
+    schema_vars_all = set(schema.keys())
+
+    # A variable is only considered "required" in the local file if it's in the schema
+    # AND it does NOT have a defaultValue.
+    schema_vars_required = {
+        key for key, details in schema.items() if "defaultValue" not in details
+    }
+
+    # Determine what's actually missing and what's extra
+    missing_in_local = schema_vars_required - local_vars
+    extra_in_local = local_vars - schema_vars_all
 
     if not missing_in_local and not extra_in_local:
-        console.print(
-            "[bold green]✓ Your configuration is perfectly in sync with the schema![/bold green]"
-        )
+        console.print("[bold green]✓ Your configuration is perfectly in sync with the schema![/bold green]")
         return
 
+    # If there are issues, build and display a report table
     table = Table(show_header=True, header_style="bold blue")
     table.add_column("Status", style="cyan")
     table.add_column("Variable Name", style="white")
     table.add_column("Source", style="white")
 
     for var in sorted(list(missing_in_local)):
-        table.add_row("[red]Missing in Local[/red]", var, "env.schema.toml")
+        table.add_row("[red]Missing in Local[/red]", var, "env.schema.toml (Required)")
+
     for var in sorted(list(extra_in_local)):
         table.add_row("[yellow]Extra in Local[/yellow]", var, file_path)
 
     console.print(table)
-    console.print(
-        "\n[bold]Suggestion:[/bold] Please update your local file to match the schema contract."
-    )
-
+    console.print("\n[bold]Suggestion:[/bold] Please update your local file to match the schema contract.")
 
 def sync_schema():
     """
@@ -82,192 +88,6 @@ def sync_schema():
     try:
         with open(output_file, "w") as f:
             f.write(content)
-        console.print(
-            f"[bold green]✓[/bold green] Successfully created/updated [bold cyan]{output_file}[/bold cyan]!"
-        )
+        console.print(f"[bold green]✓[/bold green] Successfully created/updated [bold cyan]{output_file}[/bold cyan]!")
     except IOError as e:
         console.print(f"[red]Error:[/red] Could not write to {output_file}: {e}")
-
-
-# # envshield/core/template_manager.py
-# # Core logic for template checking and syncing, with per-link support.
-# import questionary
-# from rich.console import Console
-# from rich.table import Table
-# import datetime
-
-# from envshield.config import manager as config_manager
-# from envshield.core.exceptions import ProfileNotFoundError
-# from envshield.parsers.factory import get_parser
-
-# console = Console()
-
-
-# def _get_link_diff(link: dict):
-#     """Helper to get the variable difference for a single link."""
-#     source_file = link.get("source")
-#     template_file = link.get("template")
-
-#     if not source_file or not template_file:
-#         return None, None
-
-#     source_parser = get_parser(source_file)
-#     template_parser = get_parser(template_file)
-
-#     if not source_parser or not template_parser:
-#         return None, None
-
-#     try:
-#         source_vars = source_parser.get_vars(source_file)
-#         template_vars = template_parser.get_vars(template_file)
-#     except FileNotFoundError:
-#         return None, None  # Handled by the calling function
-
-#     extra_in_source = source_vars - template_vars
-#     return extra_in_source, template_file
-
-
-# def check_template(profile_name: str):
-#     """
-#     Compares each link in a profile with its own specific template.
-#     """
-#     config = config_manager.load_config()
-#     profiles = config.get("profiles", {})
-
-#     if profile_name not in profiles:
-#         raise ProfileNotFoundError(profile_name)
-
-#     profile_details = profiles[profile_name]
-#     links = profile_details.get("links", [])
-
-#     console.print(
-#         f"\n[bold]Template Check for Profile: [cyan]{profile_name}[/cyan][/bold]"
-#     )
-
-#     found_issues = False
-#     for link in links:
-#         source_file = link.get("source")
-#         template_file = link.get("template")
-
-#         if not template_file:
-#             continue  # Skip links without a template
-
-#         console.print(
-#             f"\n[bold]Checking Link:[/bold] [magenta]{source_file}[/magenta] vs [magenta]{template_file}[/magenta]"
-#         )
-
-#         try:
-#             extra_vars, _ = _get_link_diff(link)
-#             # We also need to get missing vars for the report
-#             template_vars = get_parser(template_file).get_vars(template_file)
-#             source_vars = get_parser(source_file).get_vars(source_file)
-#             missing_vars = template_vars - source_vars
-
-#             if not extra_vars and not missing_vars:
-#                 console.print("[green]  ✓ In sync.[/green]")
-#                 continue
-
-#             found_issues = True
-#             table = Table(show_header=True, header_style="bold blue")
-#             table.add_column("Status", style="cyan")
-#             table.add_column("Variable Name", style="white")
-
-#             for var in sorted(list(missing_vars)):
-#                 table.add_row("[red]Missing in Source[/red]", var)
-#             for var in sorted(list(extra_vars)):
-#                 table.add_row("[yellow]Extra in Source[/yellow]", var)
-
-#             console.print(table)
-
-#         except FileNotFoundError:
-#             console.print(
-#                 "[red]  Error: One of the files was not found. Please run 'envshield onboard'.[/red]"
-#             )
-#             found_issues = True
-
-#     if found_issues:
-#         console.print(
-#             "\n[bold]Suggestion:[/bold] Run `envshield template sync` to interactively update your templates."
-#         )
-#     else:
-#         console.print(
-#             "\n[bold green]✓ All configured templates are perfectly in sync![/bold green]"
-#         )
-
-
-# def _append_to_template(template_file: str, variables_to_add: list):
-#     """Appends new variables to the specified template file."""
-#     if not variables_to_add:
-#         return
-
-#     console.print(f"\nUpdating template file: [magenta]{template_file}[/magenta]")
-
-#     is_python_file = template_file.endswith(".py")
-
-#     try:
-#         with open(template_file, "a") as f:
-#             f.write(
-#                 "\n\n# === Variables added by EnvShield on {} ===\n".format(
-#                     datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-#                 )
-#             )
-#             for var in sorted(variables_to_add):
-#                 if is_python_file:
-#                     line = f'{var} = ""  # TODO: Add default value\n'
-#                 else:  # .env style
-#                     line = f"{var}=\n"
-#                 f.write(line)
-#         console.print("[green]✓ Template file updated successfully.[/green]")
-#     except IOError as e:
-#         console.print(f"[red]Error:[/red] Could not write to template file: {e}")
-
-
-# def sync_template(profile_name: str):
-#     """
-#     Interactively syncs templates for each link in a profile.
-#     """
-#     config = config_manager.load_config()
-#     profiles = config.get("profiles", {})
-#     if profile_name not in profiles:
-#         raise ProfileNotFoundError(profile_name)
-
-#     links = profiles[profile_name].get("links", [])
-
-#     console.print(
-#         f"\n[bold]Interactive Template Sync for Profile: [cyan]{profile_name}[/cyan][/bold]"
-#     )
-
-#     synced_something = False
-#     for link in links:
-#         try:
-#             extra_vars, template_file = _get_link_diff(link)
-#         except FileNotFoundError:
-#             continue  # Skip if files don't exist
-
-#         if not extra_vars or not template_file:
-#             continue
-
-#         synced_something = True
-#         console.print(
-#             f"\nFound extra variables for template [magenta]{template_file}[/magenta]:"
-#         )
-
-#         try:
-#             variables_to_add = questionary.checkbox(
-#                 f"Which variables to add to {template_file}?",
-#                 choices=[
-#                     questionary.Choice(title=var, checked=True)
-#                     for var in sorted(list(extra_vars))
-#                 ],
-#             ).ask()
-#         except (KeyboardInterrupt, TypeError):
-#             console.print("\n[yellow]Sync cancelled by user.[/yellow]")
-#             return
-
-#         if variables_to_add:
-#             _append_to_template(template_file, variables_to_add)
-
-#     if not synced_something:
-#         console.print(
-#             "\n[bold green]✓ All templates are already up-to-date![/bold green]"
-#         )
