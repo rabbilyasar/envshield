@@ -72,55 +72,40 @@ def get_framework_schema(project_type: Optional[str]) -> dict:
     """Returns a dictionary of common variables for a given framework."""
     if project_type == "nextjs":
         return {
-            "DATABASE_URL": {
-                "description": "Database connection string.",
-                "secret": True,
-            },
-            "NEXTAUTH_SECRET": {
-                "description": "A secret for NextAuth session signing.",
-                "secret": True,
-            },
-            "NEXT_PUBLIC_API_URL": {
-                "description": "Public URL for the frontend to call the API.",
-                "secret": False,
-            },
+            "DATABASE_URL": {"description": "Database connection string.", "secret": True},
+            "NEXTAUTH_SECRET": {"description": "A secret for NextAuth session signing.", "secret": True},
+            "NEXT_PUBLIC_API_URL": {"description": "Public URL for the frontend to call the API.", "secret": False}
         }
-    if project_type == "python":
+
+    if project_type == "python-django":
         return {
-            "SECRET_KEY": {
-                "description": "A secret key for signing sessions.",
-                "secret": True,
-            },
-            "DATABASE_URL": {
-                "description": "Database connection string.",
-                "secret": True,
-            },
-            "DEBUG": {
-                "description": "Enable debug mode.",
-                "secret": False,
-                "defaultValue": "True",
-            },
+            "SECRET_KEY": {"description": "Django's secret key for cryptographic signing.", "secret": True},
+            "DEBUG": {"description": "Django's debug mode.", "secret": False, "defaultValue": "True"},
+            "DATABASE_URL": {"description": "Database connection string (e.g., dj-database-url).", "secret": True},
+            "ALLOWED_HOSTS": {"description": "A comma-separated list of allowed hostnames.", "secret": False, "defaultValue": "localhost,127.0.0.1"}
         }
-    # Default
+
+    if project_type == "python-flask" or project_type == "python":
+        return {
+            "SECRET_KEY": {"description": "Flask's secret key for signing sessions.", "secret": True},
+            "FLASK_ENV": {"description": "The environment for Flask (e.g., development, production).", "secret": False, "defaultValue": "development"},
+            "DATABASE_URL": {"description": "Database connection string.", "secret": True},
+        }
+
+    # Default for all other project types
     return {
-        "DATABASE_URL": {
-            "description": "The full connection string for the database.",
-            "secret": True,
-        },
-        "LOG_LEVEL": {
-            "description": "Controls the log verbosity.",
-            "secret": False,
-            "defaultValue": "info",
-        },
+        "DATABASE_URL": {"description": "The full connection string for the database.", "secret": True},
+        "LOG_LEVEL": {"description": "Controls the log verbosity.", "secret": False, "defaultValue": "info"}
     }
 
 
 def generate_default_schema_content(project_type: Optional[str]) -> str:
     """Generates TOML content for a default env.schema.toml."""
-    header = (
-        "# Welcome to your EnvShield Schema!\n"
-        "# This is the single source of truth for your project's environment variables.\n\n"
-    )
+    header = ("# Welcome to your EnvShield Schema!\n"
+              "# This is the single source of truth for your project's environment variables.\n\n"
+              "# The 'secret' flag marks a variable as sensitive.\n"
+              "# In future versions, commands like 'onboard' will use this flag to know\n"
+              "# which variables to securely prompt for.\n\n")
 
     schema_dict = get_framework_schema(project_type)
     return header + toml.dumps(schema_dict)
@@ -174,27 +159,3 @@ def write_file(file_name: str, content: str, success_message: str):
     except IOError as e:
         console.print(f"[bold red]Error:[/bold red] Failed to write {file_name}: {e}")
         raise
-
-
-# def config_file_exists(path: Optional[str] = None) -> bool:
-#     """Checks if the configuration file exists in the CWD or at a specific path."""
-#     config_path = path or CONFIG_FILE_NAME
-#     return os.path.exists(config_path)
-
-
-# def write_config_file(content: str):
-#     """
-#     Writes the given content to the envshield.yml file.
-
-#     Args:
-#         content: The string content to be written to the file.
-#     """
-#     try:
-#         with open(CONFIG_FILE_NAME, "w") as f:
-#             f.write(content)
-#         console.print(
-#             f"[bold green]✓[/bold green] Successfully created [bold cyan]{CONFIG_FILE_NAME}[/bold cyan]!"
-#         )
-#     except IOError as e:
-#         console.print(f"[bold red]Error:[/bold red] Failed to write config file: {e}")
-#         raise
