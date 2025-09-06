@@ -3,13 +3,14 @@ import os
 from typing import List, Optional
 
 import typer
+import questionary
 from rich.console import Console
 from rich.panel import Panel
 
 from envshield.core import inspector
 
 from .config import manager as config_manager
-from .core import scanner, schema_manager
+from .core import scanner, schema_manager, setup_manager, doctor
 from .core.exceptions import EnvShieldException
 
 # --- Main App Setup ---
@@ -28,7 +29,14 @@ app.add_typer(schema_app, name="schema")
 
 # --- Commands ---
 @app.command()
-def init():
+def init(
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="Overwrite existing EnvShield configuration files.",
+    )
+):
     """Initializes EnvShield with intelligent, framework-aware defaults."""
     console.print(
         Panel(
@@ -37,23 +45,26 @@ def init():
             border_style="green",
         )
     )
-    if os.path.exists(config_manager.CONFIG_FILE_NAME):
-        console.print(
-            "[yellow]An EnvShield setup already exists. Skipping initialization.[/yellow]"
-        )
+    if os.path.exists(config_manager.CONFIG_FILE_NAME) and not force:
+        console.print("[yellow]An EnvShield setup already exists. Skipping initialization.[/yellow]")
         raise typer.Exit()
+
+    if force and os.path.exists(config_manager.CONFIG_FILE_NAME):
+        overwrite = questionary.confirm(
+            "Are you sure you want to overwrite your existing EnvShield configuration? This cannot be undone.",
+            default=False,
+        ).ask()
+        if not overwrite:
+            console.print("[yellow]Initialization cancelled.[/yellow]")
+            raise typer.Exit()
 
     try:
         # 1. Detect project type
         project_type = inspector.detect_project_type()
         if project_type:
-            console.print(
-                f"Detected a [bold yellow]{project_type}[/bold yellow] project."
-            )
+            console.print(f"Detected a [bold yellow]{project_type}[/bold yellow] project.")
         else:
-            console.print(
-                "Could not detect a specific framework, using general defaults."
-            )
+            console.print("Could not detect a specific framework, using general defaults.")
 
         project_name = os.path.basename(os.getcwd())
 
@@ -79,18 +90,39 @@ def init():
         # 5. Run first sync to create .env.example
         schema_manager.sync_schema()
 
-        # 6. Install hook automatically
-        scanner.install_pre_commit_hook(non_interactive=True)
+        # 6. Install hook automatically, but handle failure gracefully
+        try:
+            scanner.install_pre_commit_hook(non_interactive=True)
+        except EnvShieldException as e:
+            # This is now a warning, not a fatal error for the init command.
+            console.print(f"\n[bold yellow]⚠️  Warning:[/] Could not install Git hook: {e}")
+            console.print("    You can install it later by running 'envshield install-hook' after initializing your Git repository.")
 
+    except EnvShieldException as e:
+        # Catch any other EnvShield errors and print them cleanly.
+        console.print(f"[bold red]Error:[/bold red] {e}")
+        raise typer.Exit(code=1)
     except (KeyboardInterrupt, TypeError):
         console.print("\n[yellow]Initialization cancelled by user.[/yellow]")
         raise typer.Exit()
 
     console.print("\n[bold green]✨ Setup Complete! ✨[/bold green]")
-    console.print(
-        "Your project is now protected. Define your variables in 'env.schema.toml'."
-    )
+    console.print("Your project is now protected. Define your variables in 'env.schema.toml'.")
 
+@app.command(name="doctor")
+def doctor_command(
+    fix: bool = typer.Option(
+        False,
+        "--fix",
+        help="Interactively attempt to fix any issues that are found.",
+    )
+):
+    """Runs a full health check on your project's EnvShield setup."""
+    try:
+        doctor.run_health_check(fix=fix)
+    except EnvShieldException as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
+        raise typer.Exit(code=1)
 
 @app.command()
 def check(
@@ -102,6 +134,19 @@ def check(
     except EnvShieldException as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(code=1)
+
+
+@app.command()
+def setup():
+    """Interactively creates a local .env file from .env.example."""
+    try:
+        setup_manager.run_setup()
+    except EnvShieldException as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
+        raise typer.Exit(code=1)
+    except (KeyboardInterrupt, TypeError):
+        console.print("\n[yellow]Setup cancelled by user.[/yellow]")
+        raise typer.Exit()
 
 
 @schema_app.command("sync")
@@ -162,121 +207,3 @@ def install_hook():
 
 if __name__ == "__main__":
     app()
-
-
-# @app.command()
-# def onboard(
-#     profile: str = typer.Argument(
-#         ..., help="The profile to set up, e.g., 'local-dev'."
-#     ),
-# ):
-#     """A guided walkthrough to set up a new environment profile."""
-#     try:
-#         profile_manager.onboard_profile(profile)
-#     except EnvShieldException as e:
-#         console.print(f"[bold red]Error:[/bold red] {e}")
-#         raise typer.Exit(code=1)
-#     except Exception:
-#         raise typer.Exit(code=1)
-
-
-# @app.command(name="list")
-# def list_profiles_command():
-#     """Lists all available profiles from your envshield.yml file."""
-#     try:
-#         profile_manager.list_profiles()
-#     except EnvShieldException as e:
-#         console.print(f"[bold red]Error:[/bold red] {e}")
-#         raise typer.Exit(code=1)
-
-
-# @app.command()
-# def use(
-#     profile: str = typer.Argument(..., help="The name of the profile to activate."),
-# ):
-#     """Switches the active environment to the specified profile."""
-#     try:
-#         profile_manager.use_profile(profile)
-#     except EnvShieldException as e:
-#         console.print(f"[bold red]Error:[/bold red] {e}")
-#         raise typer.Exit(code=1)
-
-
-# @template_app.command("check")
-# def template_check(
-#     profile: Optional[str] = typer.Option(
-#         None, "--profile", "-p", help="The profile to check. Defaults to active."
-#     ),
-# ):
-#     """Checks if your environment files are in sync with the template."""
-#     try:
-#         profile_to_check = _get_profile_or_active(profile)
-#         template_manager.check_template(profile_to_check)
-#     except EnvShieldException as e:
-#         console.print(f"[bold red]Error:[/bold red] {e}")
-#         raise typer.Exit(code=1)
-
-
-# @template_app.command("sync")
-# def template_sync(
-#     profile: Optional[str] = typer.Option(
-#         None, "--profile", "-p", help="The profile to sync. Defaults to active."
-#     ),
-# ):
-#     """Interactively add variables from your source files to your template."""
-#     try:
-#         profile_to_sync = _get_profile_or_active(profile)
-#         template_manager.sync_template(profile_to_sync)
-#     except EnvShieldException as e:
-#         console.print(f"[bold red]Error:[/bold red] {e}")
-#         raise typer.Exit(code=1)
-
-
-# @app.command()
-# def scan(
-#     paths: List[str] = typer.Argument(
-#         None,
-#         help="Paths to files or directories to scan. Defaults to current directory.",
-#     ),
-#     staged: bool = typer.Option(
-#         False, "--staged", help="Only scan files staged for the next Git commit."
-#     ),
-#     exclude: Optional[List[str]] = typer.Option(
-#         None,
-#         "--exclude",
-#         "-e",
-#         help="Glob patterns to exclude. Can be used multiple times.",
-#     ),
-#     config: Optional[str] = typer.Option(
-#         None,
-#         "--config",
-#         "-c",
-#         help="Path to a custom envshield.yml configuration file.",
-#     ),
-# ):
-#     """Scans files for hardcoded secrets."""
-#     console.print("\n[bold cyan]🛡️  Running EnvShield Secret Scanner...[/bold cyan]")
-#     try:
-#         scanner.run_scan(
-#             paths=paths,
-#             staged_only=staged,
-#             exclude_patterns=exclude,
-#             config_path=config,
-#         )
-#     except EnvShieldException as e:
-#         console.print(f"[bold red]Error:[/bold red] {e}")
-#         raise typer.Exit(code=1)
-
-
-# @app.command("install-hook")
-# def install_hook():
-#     """Installs the Git pre-commit hook to scan for secrets automatically."""
-#     try:
-#         scanner.install_pre_commit_hook()
-#     except EnvShieldException as e:
-#         console.print(f"[bold red]Error:[/bold red] {e}")
-#         raise typer.Exit(code=1)
-
-
-# if __name__ == "__main__":
-#     app()
