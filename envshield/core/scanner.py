@@ -183,6 +183,7 @@ def run_scan(
     paths: Optional[List[str]],
     staged_only: bool,
     config_path: Optional[str],
+    exclude_patterns: Optional[str],
 ):
     """The main function to orchestrate the scanning process."""
     all_exclusions = []
@@ -192,6 +193,9 @@ def run_scan(
         all_exclusions.extend(config_exclusions)
     except EnvShieldException:
         pass
+
+    if exclude_patterns:
+        all_exclusions.extend(exclude_patterns)
 
     try:
         schema = config_manager.load_schema()
