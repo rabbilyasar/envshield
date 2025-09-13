@@ -7,9 +7,10 @@ from envshield.core import setup_manager
 
 runner = CliRunner()
 
+
 def test_setup_command_happy_path(mocker, tmp_path):
     """Tests the setup command with a mix of default and empty variables."""
-    with runner.isolated_filesystem(temp_dir=tmp_path) as td:
+    with runner.isolated_filesystem(temp_dir=tmp_path):
         # Setup .env.example
         example_content = "LOG_LEVEL=info\nDATABASE_URL=\nSECRET_KEY=\n"
         with open(setup_manager.EXAMPLE_FILE, "w") as f:
@@ -31,17 +32,19 @@ def test_setup_command_happy_path(mocker, tmp_path):
             assert "DATABASE_URL=postgres://user:pass@db/test" in content
             assert "SECRET_KEY=my-super-secret" in content
 
+
 def test_setup_command_no_example_file(tmp_path):
     """Tests that the command fails gracefully if .env.example is missing."""
-    with runner.isolated_filesystem(temp_dir=tmp_path) as td:
+    with runner.isolated_filesystem(temp_dir=tmp_path):
         result = runner.invoke(app, ["setup"])
 
         assert result.exit_code == 1
         assert "'.env.example' not found" in result.stdout
 
+
 def test_setup_command_overwrite_declined(mocker, tmp_path):
     """Tests that the command exits if the user declines to overwrite an existing .env file."""
-    with runner.isolated_filesystem(temp_dir=tmp_path) as td:
+    with runner.isolated_filesystem(temp_dir=tmp_path):
         # Setup existing files
         with open(setup_manager.EXAMPLE_FILE, "w") as f:
             f.write("KEY=VALUE\n")

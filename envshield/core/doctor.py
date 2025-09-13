@@ -14,9 +14,13 @@ from ..parsers.factory import get_parser
 
 console = Console()
 
+
 class HealthCheck:
     """A single health check with a description, check function, and fix function."""
-    def __init__(self, description: str, check_func, fix_func=None, fix_description: str = ""):
+
+    def __init__(
+        self, description: str, check_func, fix_func=None, fix_description: str = ""
+    ):
         self.description = description
         self.check_func = check_func
         self.fix_func = fix_func
@@ -33,7 +37,9 @@ class HealthCheck:
                 if questionary.confirm(f"{self.fix_description}").ask():
                     try:
                         self.fix_func()
-                        self.passed, self.message = self.check_func() # Re-check after fixing
+                        self.passed, self.message = (
+                            self.check_func()
+                        )  # Re-check after fixing
                         if self.passed:
                             console.print(f"[bold green]✓ Fixed![/bold green]")
                     except EnvShieldException as e:
@@ -42,18 +48,27 @@ class HealthCheck:
         else:
             console.print(f"[bold green]✓ {self.description}[/bold green]")
 
+
 # --- Check Functions ---
+
 
 def _check_config_files():
     config_exists = os.path.exists(config_manager.CONFIG_FILE_NAME)
     schema_exists = os.path.exists(config_manager.SCHEMA_FILE_NAME)
     if not config_exists and not schema_exists:
-        return False, f"Neither '{config_manager.CONFIG_FILE_NAME}' nor '{config_manager.SCHEMA_FILE_NAME}' found."
+        return (
+            False,
+            f"Neither '{config_manager.CONFIG_FILE_NAME}' nor '{config_manager.SCHEMA_FILE_NAME}' found.",
+        )
     if not config_exists:
-        return False, f"Configuration file '{config_manager.CONFIG_FILE_NAME}' not found."
+        return (
+            False,
+            f"Configuration file '{config_manager.CONFIG_FILE_NAME}' not found.",
+        )
     if not schema_exists:
         return False, f"Schema file '{config_manager.SCHEMA_FILE_NAME}' not found."
     return True, "Found and accessible."
+
 
 def _check_local_env_sync():
     try:
@@ -65,7 +80,8 @@ def _check_local_env_sync():
             return False, f"Local env file '{local_file}' not found."
 
         parser = get_parser(local_file)
-        if not parser: return False, "Cannot parse local env file."
+        if not parser:
+            return False, "Cannot parse local env file."
         local_vars = parser.get_vars(local_file)
 
         missing = schema_vars - local_vars
@@ -74,12 +90,15 @@ def _check_local_env_sync():
             return True, "Local '.env' is in sync with schema."
 
         messages = []
-        if missing: messages.append(f"Missing variables: {', '.join(missing)}")
-        if extra: messages.append(f"Extra variables: {', '.join(extra)}")
+        if missing:
+            messages.append(f"Missing variables: {', '.join(missing)}")
+        if extra:
+            messages.append(f"Extra variables: {', '.join(extra)}")
         return False, "; ".join(messages)
 
     except EnvShieldException:
         return False, "Could not load schema to perform check."
+
 
 def _check_example_file_sync():
     try:
@@ -91,11 +110,14 @@ def _check_example_file_sync():
     except EnvShieldException:
         return False, "Could not load schema to perform sync check."
 
+
 def _check_git_hook():
     if not scanner.git_utils.get_git_root():
         return False, "Not a Git repository."
 
-    hook_path = os.path.join(scanner.git_utils.get_git_root(), ".git", "hooks", "pre-commit")
+    hook_path = os.path.join(
+        scanner.git_utils.get_git_root(), ".git", "hooks", "pre-commit"
+    )
     if not os.path.exists(hook_path):
         return False, "Pre-commit hook is not installed."
 
@@ -106,7 +128,9 @@ def _check_git_hook():
 
     return True, "Pre-commit hook is installed and active."
 
+
 # --- Main Runner ---
+
 
 def run_health_check(fix: bool):
     """
@@ -118,26 +142,26 @@ def run_health_check(fix: bool):
         HealthCheck(
             "Configuration Files",
             _check_config_files,
-            fix_func=lambda: os.system("envshield init"), # A simple fix for now
-            fix_description="No config found. Run 'envshield init' to create them?"
+            fix_func=lambda: os.system("envshield init"),  # A simple fix for now
+            fix_description="No config found. Run 'envshield init' to create them?",
         ),
         HealthCheck(
             "Local Environment Sync",
             _check_local_env_sync,
-            fix_func=None # No easy auto-fix for this one
+            fix_func=None,  # No easy auto-fix for this one
         ),
         HealthCheck(
             "Example File Sync",
             _check_example_file_sync,
             fix_func=schema_manager.sync_schema,
-            fix_description="'.env.example' is missing or out of sync. Generate it from the schema?"
+            fix_description="'.env.example' is missing or out of sync. Generate it from the schema?",
         ),
         HealthCheck(
             "Git Pre-commit Hook",
             _check_git_hook,
             fix_func=lambda: scanner.install_pre_commit_hook(force=True),
-            fix_description="The security hook is not installed. Install it now?"
-        )
+            fix_description="The security hook is not installed. Install it now?",
+        ),
     ]
 
     all_passed = True
@@ -148,6 +172,10 @@ def run_health_check(fix: bool):
 
     console.print("\n[bold]--------------------[/bold]")
     if all_passed:
-        console.print("[bold green]✨ Health check complete. Everything looks great! ✨[/bold green]")
+        console.print(
+            "[bold green]✨ Health check complete. Everything looks great! ✨[/bold green]"
+        )
     else:
-        console.print("[bold yellow]Health check complete. Some issues were found.[/bold yellow]")
+        console.print(
+            "[bold yellow]Health check complete. Some issues were found.[/bold yellow]"
+        )

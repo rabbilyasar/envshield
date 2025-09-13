@@ -2,12 +2,11 @@
 from envshield.core import schema_manager
 
 
-
 def test_sync_schema_generates_perfect_file(mocker, tmp_path):
     """Tests that schema sync correctly generates a .env.example file with exact content."""
     schema_data = {
-        "DATABASE_URL": { "description": "DB URL", "secret": True },
-        "LOG_LEVEL": { "description": "Log verbosity", "defaultValue": "info" }
+        "DATABASE_URL": {"description": "DB URL", "secret": True},
+        "LOG_LEVEL": {"description": "Log verbosity", "defaultValue": "info"},
     }
     mocker.patch("envshield.config.manager.load_schema", return_value=schema_data)
 

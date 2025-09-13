@@ -14,7 +14,9 @@ def check_schema(file_path: str):
     Validates a local environment file against the env.schema.toml,
     intelligently handling variables with default values.
     """
-    console.print(f"\n[bold]Validating [magenta]{file_path}[/magenta] against schema...[/bold]")
+    console.print(
+        f"\n[bold]Validating [magenta]{file_path}[/magenta] against schema...[/bold]"
+    )
 
     # Load the schema and the local .env file
     schema = config_manager.load_schema()
@@ -44,7 +46,9 @@ def check_schema(file_path: str):
     extra_in_local = local_vars - schema_vars_all
 
     if not missing_in_local and not extra_in_local:
-        console.print("[bold green]✓ Your configuration is perfectly in sync with the schema![/bold green]")
+        console.print(
+            "[bold green]✓ Your configuration is perfectly in sync with the schema![/bold green]"
+        )
         return
 
     # If there are issues, build and display a report table
@@ -60,7 +64,10 @@ def check_schema(file_path: str):
         table.add_row("[yellow]Extra in Local[/yellow]", var, file_path)
 
     console.print(table)
-    console.print("\n[bold]Suggestion:[/bold] Please update your local file to match the schema contract.")
+    console.print(
+        "\n[bold]Suggestion:[/bold] Please update your local file to match the schema contract."
+    )
+
 
 def sync_schema():
     """
@@ -88,6 +95,8 @@ def sync_schema():
     try:
         with open(output_file, "w") as f:
             f.write(content)
-        console.print(f"[bold green]✓[/bold green] Successfully created/updated [bold cyan]{output_file}[/bold cyan]!")
+        console.print(
+            f"[bold green]✓[/bold green] Successfully created/updated [bold cyan]{output_file}[/bold cyan]!"
+        )
     except IOError as e:
         console.print(f"[red]Error:[/red] Could not write to {output_file}: {e}")

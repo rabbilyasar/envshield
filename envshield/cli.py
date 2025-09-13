@@ -35,7 +35,7 @@ def init(
         "--force",
         "-f",
         help="Overwrite existing EnvShield configuration files.",
-    )
+    ),
 ):
     """Initializes EnvShield with intelligent, framework-aware defaults."""
     console.print(
@@ -46,7 +46,9 @@ def init(
         )
     )
     if os.path.exists(config_manager.CONFIG_FILE_NAME) and not force:
-        console.print("[yellow]An EnvShield setup already exists. Skipping initialization.[/yellow]")
+        console.print(
+            "[yellow]An EnvShield setup already exists. Skipping initialization.[/yellow]"
+        )
         raise typer.Exit()
 
     if force and os.path.exists(config_manager.CONFIG_FILE_NAME):
@@ -62,9 +64,13 @@ def init(
         # 1. Detect project type
         project_type = inspector.detect_project_type()
         if project_type:
-            console.print(f"Detected a [bold yellow]{project_type}[/bold yellow] project.")
+            console.print(
+                f"Detected a [bold yellow]{project_type}[/bold yellow] project."
+            )
         else:
-            console.print("Could not detect a specific framework, using general defaults.")
+            console.print(
+                "Could not detect a specific framework, using general defaults."
+            )
 
         project_name = os.path.basename(os.getcwd())
 
@@ -95,8 +101,12 @@ def init(
             scanner.install_pre_commit_hook(non_interactive=True)
         except EnvShieldException as e:
             # This is now a warning, not a fatal error for the init command.
-            console.print(f"\n[bold yellow]⚠️  Warning:[/] Could not install Git hook: {e}")
-            console.print("    You can install it later by running 'envshield install-hook' after initializing your Git repository.")
+            console.print(
+                f"\n[bold yellow]⚠️  Warning:[/] Could not install Git hook: {e}"
+            )
+            console.print(
+                "    You can install it later by running 'envshield install-hook' after initializing your Git repository."
+            )
 
     except EnvShieldException as e:
         # Catch any other EnvShield errors and print them cleanly.
@@ -107,7 +117,10 @@ def init(
         raise typer.Exit()
 
     console.print("\n[bold green]✨ Setup Complete! ✨[/bold green]")
-    console.print("Your project is now protected. Define your variables in 'env.schema.toml'.")
+    console.print(
+        "Your project is now protected. Define your variables in 'env.schema.toml'."
+    )
+
 
 @app.command(name="doctor")
 def doctor_command(
@@ -115,7 +128,7 @@ def doctor_command(
         False,
         "--fix",
         help="Interactively attempt to fix any issues that are found.",
-    )
+    ),
 ):
     """Runs a full health check on your project's EnvShield setup."""
     try:
@@ -124,9 +137,10 @@ def doctor_command(
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(code=1)
 
+
 @app.command()
 def check(
-    file: str = typer.Argument(".env", help="The local environment file to validate.")
+    file: str = typer.Argument(".env", help="The local environment file to validate."),
 ):
     """Validates a local environment file against the schema."""
     try:

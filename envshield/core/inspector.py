@@ -16,6 +16,7 @@ def _find_framework_in_list(dependencies: List[str]) -> Optional[str]:
             return "python-flask"
     return None
 
+
 def _check_pyproject_toml() -> Optional[str]:
     """Parses pyproject.toml to find a framework."""
     if not os.path.exists("pyproject.toml"):
@@ -41,6 +42,7 @@ def _check_pyproject_toml() -> Optional[str]:
 
     return "python"
 
+
 def _check_requirements_txt() -> Optional[str]:
     """Parses requirements.txt to find a framework."""
     if not os.path.exists("requirements.txt"):
@@ -57,6 +59,7 @@ def _check_requirements_txt() -> Optional[str]:
         pass
 
     return "python"
+
 
 def detect_project_type() -> Optional[str]:
     """
