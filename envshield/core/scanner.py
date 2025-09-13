@@ -183,7 +183,7 @@ def run_scan(
     paths: Optional[List[str]],
     staged_only: bool,
     config_path: Optional[str],
-    exclude_patterns: Optional[str],
+    exclude_patterns: Optional[List[str]],
 ):
     """The main function to orchestrate the scanning process."""
     all_exclusions = []
@@ -252,7 +252,7 @@ def run_scan(
         console.print(table)
 
     if all_undeclared_findings:
-        found_issues = True  # This was the bug
+        found_issues = True
         console.print(
             f"\n[bold yellow]⚠️  WARNING: Found {len(all_undeclared_findings)} undeclared variable(s)![/bold yellow]"
         )
