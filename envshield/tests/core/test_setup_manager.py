@@ -15,7 +15,16 @@ def test_setup_command_happy_path(mocker, tmp_path):
             f.write(example_content)
 
         mock_prompt = mocker.patch("envshield.core.setup_manager.Prompt.ask")
-        mock_prompt.side_effect = ["postgres://user:pass@db/test", "my-super-secret"]
+        mock_prompt.side_effect = [
+            "postgres://user:pass@db/test?sslmode=require",
+            "my-super-secret",
+        ]
+
+        # Mock datetime to have a predictable date
+        mocker.patch(
+            "envshield.core.setup_manager.datetime.datetime.now",
+            return_value=mocker.Mock(strftime=mocker.Mock(return_value="2025-01-01")),
+        )
 
         result = runner.invoke(app, ["setup"])
 
@@ -25,7 +34,9 @@ def test_setup_command_happy_path(mocker, tmp_path):
         with open(setup_manager.OUTPUT_FILE, "r") as f:
             content = f.read()
             assert "LOG_LEVEL=info" in content
-            assert 'DATABASE_URL="postgres://user:pass@db/test"' in content
+            assert (
+                'DATABASE_URL="postgres://user:pass@db/test?sslmode=require"' in content
+            )
             assert "SECRET_KEY=my-super-secret" in content
 
 
