@@ -54,7 +54,7 @@ def test_doctor_with_issues(mocker, tmp_path):
 
 def test_doctor_fix_flow(mocker, tmp_path):
     """Tests the interactive --fix flag for a single, isolated issue."""
-    with runner.isolated_filesystem(temp_dir=tmp_path) as td:
+    with runner.isolated_filesystem(temp_dir=tmp_path):
         # 1. Create a valid config so that only the hook check fails.
         with open(CONFIG_FILE_NAME, "w") as f:
             f.write("project_name: test\nschema: env.schema.toml")
