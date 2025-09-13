@@ -1,6 +1,5 @@
 # envshield/tests/core/test_schema_manager.py
 from envshield.core import schema_manager
-import os
 
 
 def test_check_schema_in_sync(mocker, tmp_path):
