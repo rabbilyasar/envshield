@@ -89,3 +89,22 @@ def test_schema_sync_command(tmp_path):
             content = f.read()
             assert "# My test key" in content
             assert "API_KEY=abc" in content
+
+
+def test_init_force_flag_with_confirmation(tmp_path):
+    """Tests that 'init --force' prompts for confirmation and overwrites existing files."""
+    with runner.isolated_filesystem(temp_dir=tmp_path) as td:
+        # First, create a dummy config file
+        with open(CONFIG_FILE_NAME, "w") as f:
+            f.write("project_name: old_project")
+
+        # Run the command with --force, providing "y" for the confirmation prompt
+        result = runner.invoke(app, ["init", "--force"], input="y\n")
+
+        assert result.exit_code == 0
+        assert "Setup Complete!" in result.stdout
+
+        # Check that the new file has been written
+        with open(CONFIG_FILE_NAME, "r") as f:
+            content = f.read()
+            assert "project_name: test_cli" in content

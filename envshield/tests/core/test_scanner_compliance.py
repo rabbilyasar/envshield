@@ -1,0 +1,110 @@
+# envshield/tests/core/test_scanner_compliance.py
+import pytest
+from typer.testing import CliRunner
+
+from envshield.cli import app
+from envshield.config.manager import SCHEMA_FILE_NAME
+
+runner = CliRunner()
+
+def test_scan_with_undeclared_variable(mocker, tmp_path):
+    """
+    Tests that the scan command correctly identifies a variable used in code
+    but not declared in the schema. This is the primary "happy path" for this feature.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path) as td:
+        # Setup: A schema that is missing a variable
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[DECLARED_KEY]\ndescription="This one is okay"\n')
+        mocker.patch(
+            "envshield.config.manager.load_schema",
+            return_value={"DECLARED_KEY": {}}
+        )
+
+        # Setup: A python file that uses an undeclared variable
+        python_code = "import os\n\nAPI_KEY = os.environ.get('UNDECLARED_KEY')\n"
+        with open("app.py", "w") as f:
+            f.write(python_code)
+
+        # Action: Run the scan
+        result = runner.invoke(app, ["scan"])
+
+        # Assertions
+        assert result.exit_code == 1, "Scan should fail if undeclared variables are found"
+        assert "Found 1 undeclared variable(s)!" in result.stdout
+        assert "UNDECLARED_KEY" in result.stdout
+        assert "Commit aborted" in result.stdout # Check for the final action message
+
+def test_scan_with_only_declared_variables(mocker, tmp_path):
+    """Tests that the scan command passes when all variables are declared in the schema."""
+    with runner.isolated_filesystem(temp_dir=tmp_path) as td:
+        # Setup: A schema that includes the variable
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[DECLARED_KEY]\ndescription="This one is okay"\n')
+        mocker.patch(
+            "envshield.config.manager.load_schema",
+            return_value={"DECLARED_KEY": {}}
+        )
+
+        # Setup: A python file that uses the declared variable
+        python_code = "import os\n\nAPI_KEY = os.environ.get('DECLARED_KEY')\n"
+        with open("app.py", "w") as f:
+            f.write(python_code)
+
+        # Action: Run the scan
+        result = runner.invoke(app, ["scan"])
+
+        # Assertions
+        assert result.exit_code == 0, "Scan should pass when code is compliant"
+        assert "No issues found" in result.stdout
+
+def test_scan_with_both_secret_and_undeclared_variable(mocker, tmp_path):
+    """
+    Edge Case: Tests that the scanner correctly reports both hardcoded secrets
+    and undeclared variables in a single run.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path) as td:
+        # Setup: Schema only declares one key
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[DECLARED_KEY]\ndescription="This one is okay"\n')
+        mocker.patch("envshield.config.manager.load_schema", return_value={"DECLARED_KEY": {}})
+
+        # Setup: Python file contains both a hardcoded secret AND an undeclared variable
+        python_code = (
+            "import os\n\n"
+            "SECRET = 'sk_live_123456789abcdefghijklmnopqrstuv'\n" # A secret
+            "UNDECLARED = os.environ.get('UNDECLARED_KEY')\n"      # An undeclared var
+        )
+        with open("app.py", "w") as f:
+            f.write(python_code)
+
+        # Action: Run the scan
+        result = runner.invoke(app, ["scan"])
+
+        # Assertions
+        assert result.exit_code == 1, "Scan should fail if any issue is found"
+        assert "DANGER: Found 1 potential secret(s)!" in result.stdout
+        assert "WARNING: Found 1 undeclared variable(s)!" in result.stdout
+        assert "Stripe API Key" in result.stdout
+        assert "UNDECLARED_KEY" in result.stdout
+
+def test_scan_gracefully_handles_missing_schema_file(mocker, tmp_path):
+    """
+    Edge Case: Tests that the scanner runs without crashing if the schema file
+    is missing, and prints a helpful warning.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path) as td:
+        # NOTE: No schema file is created for this test
+
+        # Setup: A python file that uses an environment variable
+        python_code = "import os\n\nAPI_KEY = os.environ.get('SOME_KEY')\n"
+        with open("app.py", "w") as f:
+            f.write(python_code)
+
+        # Action: Run the scan
+        result = runner.invoke(app, ["scan"])
+
+        # Assertions
+        assert result.exit_code == 0, "Scan should pass if no secrets are found, even without a schema"
+        assert "Warning: Schema not found. Skipping undeclared variable check." in result.stdout
+        assert "No issues found" in result.stdout
