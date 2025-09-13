@@ -1,6 +1,4 @@
 # envshield/core/doctor.py
-# The core diagnostic engine for the 'doctor' command.
-
 import os
 from typing import List
 
@@ -16,8 +14,6 @@ console = Console()
 
 
 class HealthCheck:
-    """A single health check with a description, check function, and fix function."""
-
     def __init__(
         self, description: str, check_func, fix_func=None, fix_description: str = ""
     ):
@@ -29,7 +25,6 @@ class HealthCheck:
         self.message = ""
 
     def run(self, fix: bool = False):
-        """Runs the check and optionally the fix."""
         self.passed, self.message = self.check_func()
         if not self.passed:
             console.print(f"[bold red]✗ {self.description}[/bold red]: {self.message}")
@@ -37,9 +32,7 @@ class HealthCheck:
                 if questionary.confirm(f"{self.fix_description}").ask():
                     try:
                         self.fix_func()
-                        self.passed, self.message = (
-                            self.check_func()
-                        )  # Re-check after fixing
+                        self.passed, self.message = self.check_func()
                         if self.passed:
                             console.print("[bold green]✓ Fixed![/bold green]")
                     except EnvShieldException as e:
@@ -47,9 +40,6 @@ class HealthCheck:
 
         else:
             console.print(f"[bold green]✓ {self.description}[/bold green]")
-
-
-# --- Check Functions ---
 
 
 def _check_config_files():
@@ -74,7 +64,6 @@ def _check_local_env_sync():
     try:
         schema = config_manager.load_schema()
         schema_vars = set(schema.keys())
-        # Assuming a default '.env' file for the doctor check for simplicity
         local_file = ".env"
         if not os.path.exists(local_file):
             return False, f"Local env file '{local_file}' not found."
@@ -86,6 +75,7 @@ def _check_local_env_sync():
 
         missing = schema_vars - local_vars
         extra = local_vars - schema_vars
+
         if not missing and not extra:
             return True, "Local '.env' is in sync with schema."
 
@@ -102,10 +92,8 @@ def _check_local_env_sync():
 
 def _check_example_file_sync():
     try:
-        # This is a simplified check. A real implementation would compare content.
         if not os.path.exists(".env.example"):
             return False, "'.env.example' file is missing."
-        # A more robust check would compare the generated content with the existing file.
         return True, "'.env.example' exists."
     except EnvShieldException:
         return False, "Could not load schema to perform sync check."
@@ -129,9 +117,6 @@ def _check_git_hook():
     return True, "Pre-commit hook is installed and active."
 
 
-# --- Main Runner ---
-
-
 def run_health_check(fix: bool):
     """
     Runs a suite of health checks on the project's EnvShield setup.
@@ -142,14 +127,10 @@ def run_health_check(fix: bool):
         HealthCheck(
             "Configuration Files",
             _check_config_files,
-            fix_func=lambda: os.system("envshield init"),  # A simple fix for now
+            fix_func=lambda: os.system("envshield init"),
             fix_description="No config found. Run 'envshield init' to create them?",
         ),
-        HealthCheck(
-            "Local Environment Sync",
-            _check_local_env_sync,
-            fix_func=None,  # No easy auto-fix for this one
-        ),
+        HealthCheck("Local Environment Sync", _check_local_env_sync, fix_func=None),
         HealthCheck(
             "Example File Sync",
             _check_example_file_sync,
