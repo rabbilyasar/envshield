@@ -1,156 +1,211 @@
-# **EnvShield 🛡️**
 
-[![CI](https://github.com/rabbilyasar/envshield/actions/workflows/ci.yml/badge.svg)](https://github.com/rabbilyasar/envshield/actions/workflows/ci.yml) 
+# EnvShield 🛡️
+
+[![CI](https://github.com/rabbilyasar/envshield/actions/workflows/ci.yml/badge.svg)](https://github.com/rabbilyasar/envshield/actions/workflows/ci.yml)
 [![PyPI version](https://badge.fury.io/py/envshield.svg)](https://pypi.org/project/envshield/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Downloads](https://static.pepy.tech/personalized-badge/envshield?period=month&units=international_system&left_color=grey&right_color=blue&left_text=Downloads)](https://pepy.tech/project/envshield)
 [![Website](https://img.shields.io/badge/Website-envshield.dev-blue?logo=google-chrome&logoColor=white)](https://www.envshield.dev)
-
 ![Stars](https://img.shields.io/github/stars/rabbilyasar/envshield?style=social)
 
-**Stop setting your project on fire. Let's talk about your .env files.**
+**Stop setting your project on fire 🔥. Let's talk about your environment.**
 
-Ever had that 3 AM, caffeine-fueled moment of panic 😱, wondering if you just pushed the entire company's AWS account to a public repo? We've all been there.
+![Scan GIF](.gif/scan.gif)
 
-EnvShield is the command-line companion that saves you from yourself. It automates the chaotic ritual of managing environment variables and acts as the slightly over-attached guardian angel for your secrets.
+Ever had that 3 AM, caffeine-fueled moment of panic 😱, wondering if you just pushed the entire company's AWS account to a public repo? I've definitely been there.
 
-![scan](.gif/scan.gif)
+EnvShield is the command-line co-pilot that saves you from yourself. It automates the chaotic ritual of managing environment variables, documents your configuration for you, and acts as the slightly over-attached guardian angel for your secrets.
 
-### **Table of Contents**
+### Table of Contents
 
-1. [Why Bother? (The Problem We All Ignore)](#why-bother-the-problem-we-all-ignore)  
-2. [How EnvShield is Different ](#how-envshield-is-different)  
-3. [The EnvShield Experience](#the-envshield-experience)  
-4. [Installation (The Easy Part)](#installation-the-easy-part)  
-5. [The Spellbook: A Guide to the Commands](#the-spellbook-a-guide-to-the-commands)  
-6. [The Brain of the Operation: envshield.yml](#the-brain-of-the-operation-envshieldyml)  
-7. [The Future: Now With More Lazers (and Encryption)](#the-future-now-with-more-lazers-and-encryption)  
-8. [Community & Support](#community--support)  
-9. [Contributing (Don't Be Shy)](#contributing)
+1. [Why Bother? (The Problem We All Ignore)](#why-bother-the-problem-we-all-ignore)
+    
+2. [The EnvShield Philosophy: Schema-First Configuration](#the-envshield-philosophy-schema-first-configuration)
+    
+3. [How EnvShield is Different (Competitor Smackdown)](#how-envshield-is-different-competitor-smackdown)
+    
+4. [Installation](#installation)
+    
+5. [The Spellbook: A Guide to the Commands](#the-spellbook-a-guide-to-the-commands)
+    
+6. [The Brains of the Operation: The Core Files](#the-brains-of-the-operation-the-core-files)
+    
+7. [The Future: Teams & Enterprise](#the-future-teams--enterprise)
+    
+8. [Community & Contributing](#community--contributing)
+    
 
-## **Why Bother? (The Problem We All Ignore)**
+## Why Bother? (The Problem We All Ignore)
 
-Let's be honest, managing secrets is a dumpster fire 🔥. It's a mess of manually copied files, outdated templates, and that one Slack DM with the production key that you *really* hope nobody finds.
+Let's be honest, managing environment configuration is often a dumpster fire 🔥. It's a mess of manually copied `.env` files, outdated `.env.example` templates, and that one Slack DM with the production key that you really hope nobody finds.
 
-This isn't just annoying; it's how disasters happen.
+This isn't just annoying; it's how disasters happen. A single leaked key can cost millions. EnvShield exists to make the secure and documented way the easiest and laziest way.
 
-* **The Daily Leak:** Over **1,000 unique secrets** are pushed to public GitHub repositories *every single day* ([Source: GitGuardian](https://www.google.com/search?q=https://www.gitguardian.com/state-of-secrets-sprawl-report)).  
-* **The "Oops" Button Costs Millions:** The average cost of a data breach is now **$4.45 million USD** ([Source: IBM's 2023 Report](https://www.ibm.com/reports/data-breach)). A single leaked key can be the starting point.
+## The EnvShield Philosophy: Schema-First Configuration
 
-EnvShield exists to make the secure way the *easiest* and *laziest* way.
+EnvShield's power comes from a simple idea: your configuration should be treated like code. It introduces a single source of truth, the `env.schema.toml` file.
 
-## **How EnvShield is Different**
+This file is a **contract** that explicitly defines every environment variable your project needs. By defining your variables here, you get:
 
-EnvShield is designed to be a complete solution for the *entire* local development lifecycle. Here’s a breakdown of how it compares to other popular tools when tackling common developer pain points.
+- **Automated Documentation**: Your `.env.example` is always perfectly in sync.
+    
+- **Ironclad Validation**: Catch typos and missing variables before you run your app.
+    
+- **Proactive Security**: A built-in scanner and Git hook prevent secrets from ever being committed.
+    
 
-| Developer Pain Point / Workflow | EnvShield 🛡️ | TruffleHog / Gitleaks | Doppler / Infisical | direnv |
-| :---- | :---- | :---- | :---- | :---- |
-| **New Developer Onboarding** | ✅ **Automated.** onboard command creates files from templates and interactively populates secrets. | ❌ **Not addressed.** Focuses only on scanning, not setup. | ✅ **Strong.** Provides a central place for new devs to get secrets, but doesn't manage local files. | ❌ **Not addressed.** Assumes .envrc file already exists. |
-| **Switching Local Contexts** (e.g., dev vs. test) | ✅ **Automated.** use command instantly switches the state of multiple config files. | ❌ **Not addressed.** Not a workflow management tool. | ✅ **Strong.** doppler run injects the correct secrets for a specific command. | ✅ **Automated.** Seamlessly loads/unloads shell variables on cd. Does not manage files. |
-| **Preventing Secret Commits** | ✅ **Built-in.** Provides a pre-commit hook that scans staged files before every commit. | ✅ **Core feature.** Also provides pre-commit hooks and CI scanning. | ❌ **Indirectly.** Encourages not having local secret files, but doesn't actively scan commits. | ❌ **Not addressed.** Can load secret files, increasing the risk if not gitignored. |
-| **Handling Configuration Drift** | ✅ **Built-in.** template check and sync commands find and fix inconsistencies. | ❌ **Not addressed.** No concept of templates. | ✅ **Solved.** The cloud is the single source of truth, so there is no drift. | ❌ **Not addressed.** |
-| **Primary Focus** | **Complete Local Workflow.** Manages files, populates secrets, and scans for leaks. | **Secret Detection Engine.** A specialized tool for finding secrets. | **Cloud-Based Secret Management.** A centralized vault for teams. | **Shell Environment Automation.** A lightweight tool for managing shell variables. |
+## How EnvShield is Different (Competitor Smackdown)
 
-**Conclusion:** A scanner is a smoke detector. A cloud vault is an off-site storage unit. **EnvShield is the fireproof, self-organizing house you should have been living in all along.** It provides the complete workflow that developers need to manage their environment securely from day one.
+A scanner is a smoke detector. A cloud vault is an off-site bank. **EnvShield is the fireproof, self-organizing house you should have been living in all along.** It provides the complete local workflow that developers need.
 
-## **The EnvShield Experience**
+|                               |                                                                                                       |                                                            |                                                                                          |                                   |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------------------------------------- | --------------------------------- |
+| **Developer Pain Point**      | **EnvShield** 🛡️                                                                                     | **TruffleHog / Gitleaks**                                  | **Doppler / Infisical**                                                                  | **direnv**                        |
+| **Preventing Secret Commits** | ✅ **Built-in**. The **init** command sets up an automated pre-commit hook.                            | ✅ **Core feature**. Specialized tools for finding secrets. | ❌ **Indirectly**. Encourages not having secret files, but doesn't actively scan commits. | ❌ **Not addressed.**              |
+| **New Developer Setup**       | ✅ Automated. The `setup` command interactively creates a local `.env` file from the example.          | ❌ **Not addressed.**                                       | ✅ **Strong**. Provides a central place to get secrets, but doesn't manage local files.   | ❌ **Not addressed.**              |
+| **Handling Config Drift**     | ✅ **Solved**. The schema is the source of truth. `schema sync` and `check` enforce consistency.       | ❌ **Not addressed.**                                       | ✅ **Solved**. The cloud is the single source of truth.                                   | ❌ **Not addressed.**              |
+| **Primary Focus**             | **Complete Local Workflow**. Manages files, documents schemas, validates setups, and scans for leaks. | **Secret Detection Engine.**                               | **Cloud-Based Secret** Vault.                                                            | **Shell Environment Automation.** |
 
-#### **1. The "It Actually Works On My Machine" Onboarding 🪄**
+## Installation
 
-A new developer joins. Instead of a 4-hour scavenger hunt for secrets, they run one command.
+You'll need Python 3.10+.
 
-`envshield onboard local-dev`
+```
+pip install envshield
+```
+  
 
-![onboarding](.gif/onboard.gif)
+Check if the magic worked: `envshield --help`
 
-Boom. They're done. Files created, secrets prompted for, database seeded. Time for coffee ☕.
+## The Spellbook: A Guide to the Commands
 
-#### **2. The "Nope, Not Today" Safety Net**
+These are the core commands for the free, local-only Phase 1.
 
-You're tired. You paste a token where it doesn't belong. You try to commit.
+### `envshield init`
 
-`git commit -m "Quick fix, definitely nothing wrong here"`
+The "zero-to-hero" command. Run this first in a new or existing project.
 
-[!scan](.gif/scan.gif)
+- **What it does:** Intelligently inspects your project to detect the framework (e.g., Next.js, Python/Django) and scaffolds a complete, best-practice configuration foundation. It creates your `env.schema.toml` with smart defaults, updates your `.gitignore`, and automatically installs the security hook.
 
-EnvShield's pre-commit hook steps in and saves you from having to update your resume.
+- **Flags**:
 
-## **Installation (The Easy Part)**
+- `--force` / `-f`: Overwrites existing EnvShield files. It will ask for confirmation before nuking your setup.
 
-EnvShield is on PyPI. You'll need Python 3.10+.
+- **Real-Life Example**: You're starting a new Django project. You run `envshield init`. The tool detects Django, creates a schema with `SECRET_KEY` and `DATABASE_URL`, and installs the security hook. Your project is set up for success in one command.
 
-`pip install envshield`
+### `envshield scan`
 
-Check if the magic worked:
+Your project's personal bodyguard. It scans files for hardcoded secrets.
 
-`envshield --help`
+- **What it does**: Uses a comprehensive list of patterns to find things that look like API keys, private keys, and other credentials.
 
-## **The Spellbook: A Guide to the Commands**
+- **Arguments & Flags**:
 
-### **`envshield init` - The Architect**
+- `[PATHS]...`: The specific files or directories to scan. Defaults to the current directory.
 
-Run this first. It asks you a few simple questions and builds the envshield.yml blueprint for your project.
+	- **Use Case**: You've been working on a new module and want to be extra careful: `envshield scan src/billing/`
 
-### **`envshield onboard` - The Butler**
+- `--staged`: Scans only the files you've staged for your next Git commit. This is the heart of the pre-commit hook.
+    
+	- **Use Case**: This is run automatically by the hook every time you `git commit`. If you accidentally staged a file with a secret, the commit is blocked, saving you from a very bad day.
 
-The white-glove service for setting up an environment. It creates files, politely asks for secrets, and runs your setup scripts so you don't have to.
+- `--config <file>`: Use a different `envshield.yml` for this specific scan.
 
-### **`envshield list` & `use` - The Time-Turner**
+	- **Use Case:** Your CI/CD pipeline needs to run a scan but should ignore test files. You run `envshield scan . --config .github/ci.envshield.yml` to use a special configuration just for that run.
 
-list shows you your configured realities. use instantly transports your project's configuration to one of them. No more manual file-swapping shenanigans.
+### `envshield install-hook`
 
-### **`envshield template` - The Librarian**
+Manually installs the Git pre-commit hook if you skipped it during `init` or if your project had an existing hook.
 
-Includes check and sync. It reads your config files, compares them to the template, and shushes you until they're in sync. Prevents the "but it works on *my* machine" category of bugs.
+- **What it does**: Creates a `pre-commit` script in your `.git/hooks/` directory that runs `envshield scan --staged`.
+    
+- **Real-Life Example**: You've added `envshield` to a project that already uses a code formatting hook. You can manually merge the two scripts and then run `envshield install-hook --force` to create the combined hook.
 
-### **`envshield scan` & `install-hook` - The Bodyguard 💪**
+### `envshield check <file>`
 
-scan actively looks for trouble. install-hook puts a bodyguard in front of your git commit command to make sure no secrets get past.
+The "is it plugged in?" command for your local setup.
 
-## **The Brain of the Operation: envshield.yml**
+- **What it does**: Validates a local environment file (e.g., `.env`) against the official contract in `env.schema.toml`. It reports missing or extra variables, intelligently ignoring variables that have a `defaultValue` in the schema.
+    
+- **Real-Life Example**: Your app fails to start after a teammate's PR. You run `envshield check`. The tool reports `Missing in Local: NEW_SERVICE_API_KEY`, instantly telling you what's wrong.
+    
 
-This is where you tell the robot what to do. It's simple for simple projects, and powerful for complex ones.
+### `envshield schema sync`
 
-```yaml
-# A simple project:  
-project_name: my-cool-api
-profiles:
-  dev:
-    links:
-      - source: .env.dev
-        target: .env
-        template: .env.template
+The project librarian. It ensures your public-facing documentation is never out of date.
 
-# A wonderfully complex project:
-project_name: complex-project
-profiles:
-  local-dev:
-    description: "Standard local development with Docker."
-    links:
-      - { source: config/env_config.dev.py, target: config/env_config.py, template: config/env_config.local.py }
-      - { source: .env.local-dev, target: .env, template: .env.template }
-    onboarding_prompts: [SECRET_KEY]
-    post_onboard_script: "./tools/ctl.sh pre-deploy"
-secret_scanning:
-  exclude_files: ["node_modules/*", "dist/*"]
+- **What it does:** Reads your `env.schema.toml` and generates a perfect `.env.example` file, complete with comments from your variable descriptions.
+    
+- **Real-Life Example**: You add a new `REDIS_URL` variable to your schema. Instead of manually updating the example file, you just run `envshield schema sync`. The `.env.example` is instantly and correctly updated, ready to be committed.
+    
+
+### `envshield setup`
+
+A taste of the automated onboarding magic.
+
+![Setuf GIF](.gif/setup.gif)
+
+- **What it does**: The perfect command for getting started. It reads your `.env.example` file, finds any variables without a value, and interactively prompts you for them. It then generates your first `.env` file.
+    
+- **Real-Life Example**: You just cloned a new project. You run `envshield setup`. The tool asks you for the `DATABASE_URL` and `STRIPE_API_KEY`, then generates your fully-populated `.env` file. You are ready to run the project in minutes.
+
+### `envshield doctor`
+
+The "turn it off and on again" command for your entire configuration.
+
+![Doctor GIF](.gif/doctor.gif)
+
+- **What it does**: Runs a comprehensive suite of health checks on your project's `envshield` setup. It checks for missing config files, validates your local environment against the schema, ensures your `.env.example` is in sync, and verifies that the security hook is installed correctly.
+    
+- **Flags**:
+    
+    - `--fix`: The magic wand. If the doctor finds a problem (like a missing hook or an out-of-date example file), it will interactively ask you if you want to fix it automatically.
+        
+- **Real-Life Example**: Something just feels wrong with your setup. You run `envshield doctor`. It reports that your `.env.example` is out of date and the Git hook is missing. You run `envshield doctor --fix`, answer "Yes" to both prompts, and the tool fixes everything for you.
+
+## The Brains of the Operation: The Core Files
+
+`envshield` is managed by two simple files you commit to your repository.
+
+- `env.schema.toml`: The source of truth. This is where you define every variable your project needs.
+
+```
+    # env.schema.toml  
+      
+    [DATABASE_URL]  
+    description = "The full connection string for the PostgreSQL database."  
+    secret = true # Marks this as sensitive  
+      
+    [LOG_LEVEL]  
+    description = "Controls the application's log verbosity."  
+    secret = false  
+    defaultValue = "info" # Provides a fallback     
 ```
 
-## **The Future: Now With More Lazers (and Encryption) ✨**
+- `envshield.yml`: The workflow config. In Phase 1, it's very simple and mainly points to your schema and defines scanner exclusions.
+    
 
-Phase 1 is ready and already awesome. But we're just getting started. Here's a sneak peek at what's coming.
+## The Future: Teams & Enterprise ✨
 
-### **Phase 2: The "We're a Real Team Now" Upgrade**
+Phase 1 is the free, powerful "Local Guardian." But the journey doesn't end there. Upcoming paid tiers will turn `envshield` into a complete collaboration and automation platform.
 
-* **Encrypted Files:** Safely commit secret files to Git. Because you know you want to.  
-* **P2P Secret Sharing:** envshield share SECRET --to @teammate. The secure Slack DM you've always needed.  
-* **The Global Vault:** Store your personal GITHUB_TOKEN once and never type it again.  
-* **envshield doctor:** The "is it plugged in?" command for your environment.
+### Phase 2: The Team Collaborator (Paid Tier)
 
-### **Phase 3: The "Okay, This is Serious Business" Expansion**
+- `envshield use <profile>`: Instantly switch your entire project's configuration between different environments (e.g., `local`, `staging`).
+    
+- `envshield onboard <profile>`: A supercharged `setup` that can also run scripts like` docker compose up` and database migrations for a true one-command setup.
+    
+- `envshield share`: Securely share a secret with a teammate via an encrypted, one-time-use link.
+    
+- `envshield docs`: Generate beautiful Markdown or HTML documentation from your schema.
+    
+### Phase 3: The Enterprise-Grade System (Paid Tier)
 
-* **Live Secret Verification:** We'll actually check if that AWS key you found is still active.  
-* **Automated Remediation:** EnvShield finds a secret, gets nervous, and opens a PR to fix it for you.  
-* **Centralized Enforcement:** A non-bypassable webhook shield for the whole organization.
+- `envshield login`, `pull`, `push`: Full integration with a centralized, cloud-based secret vault.
+    
+- `envshield export`: Securely inject secrets into your CI/CD pipelines for automated deployments.
+    
+- **Audit Logs & RBAC**: A complete, compliant, and auditable history of all secret access and team permissions, managed through a web dashboard.
 
 ## **Community & Support**
 
@@ -159,16 +214,13 @@ Got questions? Have a brilliant idea? Come hang out with us!
 * 🤔 **Ask a question on GitHub Discussions:**[Discussions](https://github.com/rabbilyasar/envshield/discussions/)
 
 Or, Follow us on our socials:
-
 ## 🌍 Community & Links
 
-- 🌐 Website: [envshield.dev](https://www.envshield.dev)  
-- 🐙 GitHub: [rabbilyasar/envshield](https://github.com/rabbilyasar/envshield)  
-- 🐍 PyPI: [EnvShield on PyPI](https://pypi.org/project/envshield/)  
-- 🤔 GitHub Discussions: [GitHub Discussions](https://github.com/rabbilyasar/envshield/discussions)  
-- 💬 Join our Discord:[@discord](https://discord.gg/dSEbvPW57N)  I 
-
-
+- 🌐 Website: [envshield.dev](https://www.envshield.dev)  
+- 🐙 GitHub: [rabbilyasar/envshield](https://github.com/rabbilyasar/envshield)  
+- 🐍 PyPI: [EnvShield on PyPI](https://pypi.org/project/envshield/)  
+- 🤔 GitHub Discussions: [GitHub Discussions](https://github.com/rabbilyasar/envshield/discussions)  
+- 💬 Join our Discord:[@discord](https://discord.gg/dSEbvPW57N)  
 ## **Contributing (Don't Be Shy)**
 
-Spotted a bug? Think our jokes are terrible? We want to hear it all. Check out CONTRIBUTING.md to get started.
+Spotted a bug? Think our jokes are terrible? We want to hear it all. Check out `CONTRIBUTING.md` to get started.
