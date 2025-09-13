@@ -140,6 +140,7 @@ def _scan_single_file(file_path: str, schema_vars: set) -> (List[Dict], List[Dic
 
 def _collect_files_to_scan(paths: Optional[List[str]], staged_only: bool) -> List[str]:
     """Collects a list of files to be scanned based on user input."""
+
     if staged_only:
         console.print("Scanning [yellow]staged files[/yellow]...")
         files = git_utils.get_staged_files()
