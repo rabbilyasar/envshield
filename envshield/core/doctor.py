@@ -41,7 +41,7 @@ class HealthCheck:
                             self.check_func()
                         )  # Re-check after fixing
                         if self.passed:
-                            console.print(f"[bold green]✓ Fixed![/bold green]")
+                            console.print("[bold green]✓ Fixed![/bold green]")
                     except EnvShieldException as e:
                         console.print(f"[bold red]Error during fix:[/bold red] {e}")
 

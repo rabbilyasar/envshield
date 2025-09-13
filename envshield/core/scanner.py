@@ -282,7 +282,7 @@ def install_pre_commit_hook(force: bool = False, non_interactive: bool = False):
         if os.path.exists(pre_commit_path):
             if non_interactive:
                 console.print(
-                    f"[bold yellow]⚠️  Warning:[/] A pre-commit hook already exists. EnvShield was not installed automatically."
+                    "[bold yellow]⚠️  Warning:[/] A pre-commit hook already exists. EnvShield was not installed automatically."
                 )
                 console.print(
                     "    Please add 'envshield scan --staged' to your existing hook script."

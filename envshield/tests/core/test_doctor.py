@@ -1,5 +1,4 @@
 # envshield/tests/core/test_doctor.py
-import pytest
 from typer.testing import CliRunner
 
 from envshield.cli import app

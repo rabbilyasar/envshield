@@ -1,5 +1,4 @@
 # envshield/tests/core/test_setup_manager.py
-import pytest
 from typer.testing import CliRunner
 
 from envshield.cli import app

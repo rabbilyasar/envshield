@@ -34,11 +34,6 @@ def test_sync_schema_generates_perfect_file(mocker, tmp_path):
 
 def test_check_schema_in_sync(mocker, tmp_path):
     """Tests the check command when the local file is in sync with the schema."""
-    schema_content = """
-    [DATABASE_URL]
-    description = "DB URL"
-    secret = true
-    """
     local_env_content = "DATABASE_URL=postgres://user:pass@localhost/db\n"
 
     mocker.patch(
@@ -62,12 +57,6 @@ def test_check_schema_in_sync(mocker, tmp_path):
 
 def test_check_schema_out_of_sync(mocker, tmp_path):
     """Tests the check command when the local file is out of sync."""
-    schema_content = """
-    [DATABASE_URL]
-    description = "DB URL"
-    [NEW_VARIABLE]
-    description = "A new one"
-    """
     local_env_content = "DATABASE_URL=some_value\nOLD_VARIABLE=true"
 
     mocker.patch(

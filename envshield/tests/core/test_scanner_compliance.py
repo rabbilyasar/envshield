@@ -1,5 +1,4 @@
 # envshield/tests/core/test_scanner_compliance.py
-import pytest
 from typer.testing import CliRunner
 
 from envshield.cli import app

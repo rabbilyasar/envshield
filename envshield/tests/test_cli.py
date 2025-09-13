@@ -1,7 +1,6 @@
 # envshield/tests/test_cli.py
 import os
 
-# import pytest
 from typer.testing import CliRunner
 
 from envshield.cli import app
