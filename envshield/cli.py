@@ -3,14 +3,11 @@ import os
 from typing import List, Optional
 
 import typer
-import questionary
 from rich.console import Console
 from rich.panel import Panel
 
-from envshield.core import inspector
-
 from .config import manager as config_manager
-from .core import scanner, schema_manager, setup_manager, doctor
+from .core import schema_manager, scanner, doctor, inspector, setup_manager
 from .core.exceptions import EnvShieldException
 
 # --- Main App Setup ---
@@ -45,13 +42,16 @@ def init(
             border_style="green",
         )
     )
+
     if os.path.exists(config_manager.CONFIG_FILE_NAME) and not force:
         console.print(
-            "[yellow]An EnvShield setup already exists. Skipping initialization.[/yellow]"
+            "[yellow]An EnvShield setup already exists. Use '--force' to overwrite.[/yellow]"
         )
         raise typer.Exit()
 
     if force and os.path.exists(config_manager.CONFIG_FILE_NAME):
+        import questionary
+
         overwrite = questionary.confirm(
             "Are you sure you want to overwrite your existing EnvShield configuration? This cannot be undone.",
             default=False,
@@ -61,7 +61,6 @@ def init(
             raise typer.Exit()
 
     try:
-        # 1. Detect project type
         project_type = inspector.detect_project_type()
         if project_type:
             console.print(
@@ -73,34 +72,26 @@ def init(
             )
 
         project_name = os.path.basename(os.getcwd())
-
-        # 2. Create framework-specific schema
         schema_content = config_manager.generate_default_schema_content(project_type)
         config_manager.write_file(
             config_manager.SCHEMA_FILE_NAME,
             schema_content,
-            f"Created schema: [bold cyan]{config_manager.SCHEMA_FILE_NAME}[/bold cyan]",
+            f"Created/updated schema: [bold cyan]{config_manager.SCHEMA_FILE_NAME}[/bold cyan]",
         )
 
-        # 3. Create config file
         config_content = config_manager.generate_default_config_content(project_name)
         config_manager.write_file(
             config_manager.CONFIG_FILE_NAME,
             config_content,
-            f"Created config: [bold cyan]{config_manager.CONFIG_FILE_NAME}[/bold cyan]",
+            f"Created/updated config: [bold cyan]{config_manager.CONFIG_FILE_NAME}[/bold cyan]",
         )
 
-        # 4. Update .gitignore
         config_manager.update_gitignore()
-
-        # 5. Run first sync to create .env.example
         schema_manager.sync_schema()
 
-        # 6. Install hook automatically, but handle failure gracefully
         try:
             scanner.install_pre_commit_hook(non_interactive=True)
         except EnvShieldException as e:
-            # This is now a warning, not a fatal error for the init command.
             console.print(
                 f"\n[bold yellow]⚠️  Warning:[/] Could not install Git hook: {e}"
             )
@@ -109,7 +100,6 @@ def init(
             )
 
     except EnvShieldException as e:
-        # Catch any other EnvShield errors and print them cleanly.
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(code=1)
     except (KeyboardInterrupt, TypeError):
@@ -120,6 +110,18 @@ def init(
     console.print(
         "Your project is now protected. Define your variables in 'env.schema.toml'."
     )
+
+
+@app.command()
+def check(
+    file: str = typer.Argument(".env", help="The local environment file to validate."),
+):
+    """Validates a local environment file against the schema."""
+    try:
+        schema_manager.check_schema(file)
+    except EnvShieldException as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
+        raise typer.Exit(code=1)
 
 
 @app.command(name="doctor")
@@ -133,18 +135,6 @@ def doctor_command(
     """Runs a full health check on your project's EnvShield setup."""
     try:
         doctor.run_health_check(fix=fix)
-    except EnvShieldException as e:
-        console.print(f"[bold red]Error:[/bold red] {e}")
-        raise typer.Exit(code=1)
-
-
-@app.command()
-def check(
-    file: str = typer.Argument(".env", help="The local environment file to validate."),
-):
-    """Validates a local environment file against the schema."""
-    try:
-        schema_manager.check_schema(file)
     except EnvShieldException as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(code=1)
@@ -195,14 +185,13 @@ def scan(
         help="Glob patterns to exclude. Can be used multiple times.",
     ),
 ):
-    """Scans files for hardcoded secrets."""
-    console.print("\n[bold cyan]🛡️  Running EnvShield Secret Scanner...[/bold cyan]")
+    """Scans files for hardcoded secrets and undeclared variables."""
     try:
         scanner.run_scan(
             paths=paths,
             staged_only=staged,
-            exclude_patterns=exclude,
             config_path=config,
+            exclude_patterns=exclude,
         )
     except EnvShieldException as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
@@ -217,7 +206,3 @@ def install_hook():
     except EnvShieldException as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(code=1)
-
-
-if __name__ == "__main__":
-    app()

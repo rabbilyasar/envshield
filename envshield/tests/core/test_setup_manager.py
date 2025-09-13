@@ -20,11 +20,13 @@ def test_setup_command_happy_path(mocker, tmp_path):
             "my-super-secret",
         ]
 
-        # Mock datetime to have a predictable date
-        mocker.patch(
-            "envshield.core.setup_manager.datetime.datetime.now",
-            return_value=mocker.Mock(strftime=mocker.Mock(return_value="2025-01-01")),
-        )
+        # Prepare a fake datetime instance
+        fake_now = mocker.Mock()
+        fake_now.strftime.return_value = "2025-01-01"
+
+        # Patch the entire datetime class in setup_manager
+        mock_datetime = mocker.patch("envshield.core.setup_manager.datetime.datetime")
+        mock_datetime.now.return_value = fake_now
 
         result = runner.invoke(app, ["setup"])
 

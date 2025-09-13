@@ -58,7 +58,10 @@ def generate_default_config_content(project_name: str) -> str:
         "version": 2.0,
         "schema": SCHEMA_FILE_NAME,
         "secret_scanning": {
-            "exclude_files": [],
+            "exclude_files": [
+                "**/tests/*",
+                "**/test/*",
+            ],
         },
     }
     header = (
