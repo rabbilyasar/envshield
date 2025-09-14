@@ -7,7 +7,7 @@
 [![Website](https://img.shields.io/badge/Website-envshield.dev-blue?logo=google-chrome&logoColor=white)](https://www.envshield.dev)
 ![Stars](https://img.shields.io/github/stars/rabbilyasar/envshield?style=social)
 
-[Envshield Documentation](doc.envshield.dev)
+[Envshield Documentation](https://doc.envshield.dev/)
 
 **Stop setting your project on fire 🔥. EnvShield is a free, open-source CLI that brings professional governance and proactive secret scanning to your local development workflow.**
 
