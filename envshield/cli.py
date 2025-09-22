@@ -141,10 +141,14 @@ def doctor_command(
 
 
 @app.command()
-def setup():
-    """Interactively creates a local .env file from .env.example."""
+def setup(
+    output_file: str = typer.Argument(
+        ".env", help="The name of the local environment file to create."
+    )
+):
+    """Interactively creates a local environment file from .env.example."""
     try:
-        setup_manager.run_setup()
+        setup_manager.run_setup(output_file)
     except EnvShieldException as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(code=1)
