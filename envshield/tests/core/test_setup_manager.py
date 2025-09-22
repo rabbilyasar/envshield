@@ -33,7 +33,7 @@ def test_setup_command_happy_path(mocker, tmp_path):
         assert result.exit_code == 0
         assert "Successfully created" in result.stdout
 
-        with open(setup_manager.OUTPUT_FILE, "r") as f:
+        with open(".env", "r") as f:
             content = f.read()
             assert "LOG_LEVEL=info" in content
             assert (
@@ -56,7 +56,7 @@ def test_setup_command_overwrite_declined(mocker, tmp_path):
     with runner.isolated_filesystem(temp_dir=tmp_path):
         with open(setup_manager.EXAMPLE_FILE, "w") as f:
             f.write("KEY=VALUE\n")
-        with open(setup_manager.OUTPUT_FILE, "w") as f:
+        with open(".env", "w") as f:
             f.write("OLD_KEY=OLD_VALUE")
 
         mocker.patch(
@@ -69,6 +69,6 @@ def test_setup_command_overwrite_declined(mocker, tmp_path):
         assert result.exit_code == 0
         assert "Setup cancelled" in result.stdout
 
-        with open(setup_manager.OUTPUT_FILE, "r") as f:
+        with open(".env", "r") as f:
             content = f.read()
             assert content == "OLD_KEY=OLD_VALUE"
