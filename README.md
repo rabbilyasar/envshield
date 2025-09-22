@@ -34,8 +34,8 @@
 
 ## Why Secure Environment Management Matters
 
-Managing `.env` files by copy-pasting them around like a hot potato is fun… until a secret lands in a public repo.  
-EnvShield solves the “dotenv dumpster fire” by giving you **schema-first configuration**, automatic documentation, and built-in **secret scanning**—all wrapped in a workflow lazy enough for a 3 a.m. commit. 
+Managing `.env` files by copy-pasting them around like a hot potato is fun… until a secret lands in a public repo.
+EnvShield solves the “dotenv dumpster fire” by giving you **schema-first configuration**, automatic documentation, and built-in **secret scanning**—all wrapped in a workflow lazy enough for a 3 a.m. commit.
 
 
 ## Key Features of the EnvShield CLI
@@ -43,13 +43,13 @@ EnvShield solves the “dotenv dumpster fire” by giving you **schema-first con
 ![Demo of EnvShield scanning secrets](.gif/scan.gif)
 
 -   **Environment Variable Governance** – One `env.schema.toml` file becomes your single source of truth.
-    
+
 -   **Open-Source Secret Scanner** – Detects API keys, private keys, and other credentials _before_ you push.
-    
+
 -   **Local Development Workflow** – Automatic `.env.example` syncing and onboarding that even future-you will thank you for.
-    
+
 -   **Git Pre-commit Hook** – Blocks secret leaks faster than you can say `git push --force`.
-    
+
 -   **Configuration as Code** – Your environment config is version-controlled and documented like real code.
 
 _(Translation: EnvShield is that overprotective friend who checks the door lock five times so you can sleep.)_
@@ -81,7 +81,7 @@ This file is a **"configuration contract"** that explicitly defines every enviro
 | `envshield install-hook` | Manually install or update the Git pre-commit hook. | For when you skipped step one because YOLO. |
 | `envshield check <file>` | Validates a local .env file against the schema. | ![Demo of EnvShield check](.gif/check.gif) |
 | `envshield schema sync` | Regenerates .env.example from the schema. | ![Demo of EnvShield sync](.gif/sync.gif) |
-| `envshield setup` | Interactive onboarding to create a local .env. | ![Demo of EnvShield setup](.gif/setup.gif) |
+| `envshield setup` | Interactive onboarding to create a local env. | ![Demo of EnvShield setup](.gif/setup.gif) |
 | `envshield doctor` | Runs a full health check (and can auto-fix). | ![Demo of EnvShield check](.gif/check.gif) |
 
 
@@ -96,7 +96,7 @@ A scanner is a smoke detector. A cloud vault is an off-site bank. **EnvShield is
 | **Preventing Configuration Drift**    | ✅ **Solved**. The schema is the source of truth. `schema sync` and `check` enforce consistency.             | ❌ **Not addressed.**                                            | ✅ **Solved**. The cloud is the single source of truth.                                 | ❌ **Not addressed.**             |
 | **Primary Focus**                     | **Complete Local Workflow**. Manages files, documents schemas, validates setups, and scans for leaks.        | **Secret Detection Engine.**                                     | **Cloud-Based Secret** Vault.                                                           | **Shell Environment Automation.** |
 
-Think of scanners as smoke detectors and cloud vaults as off-site banks.  
+Think of scanners as smoke detectors and cloud vaults as off-site banks.
 **EnvShield is the fire-proof, self-organizing house you should have been living in all along.**
 
 ## The Brains of the Operation: The Core Files
@@ -164,5 +164,5 @@ Spotted a bug? Think our jokes are terrible? We want to hear it all. Check out `
 
 ### TL;DR
 
-**EnvShield = environment variable management + secret scanning + configuration as code + just enough sarcasm to keep you awake.**  
+**EnvShield = environment variable management + secret scanning + configuration as code + just enough sarcasm to keep you awake.**
 Stop leaking secrets. Start shipping securely.
