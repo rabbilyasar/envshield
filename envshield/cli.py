@@ -144,7 +144,7 @@ def doctor_command(
 def setup(
     output_file: str = typer.Argument(
         ".env", help="The name of the local environment file to create."
-    )
+    ),
 ):
     """Interactively creates a local environment file from .env.example."""
     try:
