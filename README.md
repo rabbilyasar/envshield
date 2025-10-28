@@ -83,6 +83,7 @@ This file is a **"configuration contract"** that explicitly defines every enviro
 | `envshield schema sync` | Regenerates .env.example from the schema. | ![Demo of EnvShield sync](.gif/sync.gif) |
 | `envshield setup` | Interactive onboarding to create a local env. | ![Demo of EnvShield setup](.gif/setup.gif) |
 | `envshield doctor` | Runs a full health check (and can auto-fix). | ![Demo of EnvShield check](.gif/check.gif) |
+| `envshield import <file>` | Imports from your existing .env file. | This will ease your barrier to adopt envshield |
 
 
 ## Competitor Comparison: Choosing the Right Tool
