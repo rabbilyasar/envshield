@@ -2,7 +2,7 @@
 # Defines the abstract base class for all file parsers.
 
 from abc import ABC, abstractmethod
-from typing import Set
+from typing import Set, Dict, Union
 
 
 class BaseParser(ABC):
@@ -12,7 +12,9 @@ class BaseParser(ABC):
     """
 
     @abstractmethod
-    def get_vars(self, file_path: str) -> Set[str]:
+    def get_vars(
+        self, file_path: str, get_values: bool = False
+    ) -> Union[Set[str], Dict[str, str]]:
         """
         Parses a file and extracts the set of defined variable names.
 
