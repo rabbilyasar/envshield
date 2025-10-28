@@ -2,9 +2,12 @@
 import os
 from typing import List, Optional
 
+import questionary
 import typer
 from rich.console import Console
 from rich.panel import Panel
+
+from envshield.core import importer
 
 from .config import manager as config_manager
 from .core import schema_manager, scanner, doctor, inspector, setup_manager
@@ -210,3 +213,59 @@ def install_hook():
     except EnvShieldException as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(code=1)
+
+
+@app.command(name="import")
+def import_command(
+    file: str = typer.Argument(
+        ..., help="The .env file to import and convert to a schema."
+    ),
+    output: str = typer.Option(
+        config_manager.SCHEMA_FILE_NAME,
+        "--output",
+        "-o",
+        help="Path to write the new schema file to.",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="Overwrite the schema file if it already exists.",
+    ),
+    interactive: bool = typer.Option(
+        False,
+        "--interactive",
+        help="Interactively guide you through classifying each variable.",
+    ),
+):
+    """Generates an env.schema.toml from an existing .env file."""
+    try:
+        if os.path.exists(output) and not force and not interactive:
+            console.print(
+                f"[bold yellow]Warning:[/] Output file '{output}' already exists. Use --force to overwrite."
+            )
+            raise typer.Exit()
+
+        if os.path.exists(output) and interactive:
+            overwrite = questionary.confirm(
+                f"Output file '{output}' already exists. Overwrite?"
+            ).ask()
+            if not overwrite:
+                console.print("[yellow]Import cancelled.[/yellow]")
+                raise typer.Exit()
+
+        schema_content = importer.generate_schema_from_file(file, interactive)
+
+        with open(output, "w") as f:
+            f.write(schema_content)
+
+        console.print(
+            f"\nSuccessfully generated schema at [bold cyan]{output}[/bold cyan]"
+        )
+
+    except EnvShieldException as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
+        raise typer.Exit(code=1)
+    except (KeyboardInterrupt, TypeError):
+        console.print("\n[yellow]Import cancelled by user.[/yellow]")
+        raise typer.Exit()
