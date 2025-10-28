@@ -83,7 +83,7 @@ This file is a **"configuration contract"** that explicitly defines every enviro
 | `envshield schema sync` | Regenerates .env.example from the schema. | ![Demo of EnvShield sync](.gif/sync.gif) |
 | `envshield setup` | Interactive onboarding to create a local env. | ![Demo of EnvShield setup](.gif/setup.gif) |
 | `envshield doctor` | Runs a full health check (and can auto-fix). | ![Demo of EnvShield check](.gif/check.gif) |
-| `envshield import <file>` | Imports from your existing .env file. | This will ease your barrier to adopt envshield |
+| `envshield import <file>` | Intelligently converts an existing .env file into a new env.schema.toml. | The fastest way to adopt EnvShield for an existing project. |
 
 
 ## Competitor Comparison: Choosing the Right Tool
@@ -93,9 +93,12 @@ A scanner is a smoke detector. A cloud vault is an off-site bank. **EnvShield is
 | **Developer Pain Point**              | **EnvShield** 🛡️                                                                                             | **TruffleHog / Gitleaks**                                        | **Doppler / Infisical**                                                                 | **`direnv`**                      |
 | :------------------------------------ | :----------------------------------------------------------------------------------------------------------- | :--------------------------------------------------------------- | :-------------------------------------------------------------------------------------- | :-------------------------------- |
 | **Preventing Secret Commits**         | ✅ **Built-in**. `init` sets up an automated pre-commit hook.                                                | ✅ **Core feature**. Specialized tools for just finding secrets. | ❌ **Indirectly**. Doesn't actively scan commits.                                       | ❌ **Not addressed.**             |
+| **Migrating Existing Projects**   |  ✅ One-command import. import command auto-generates a schema from an existing .env file. |  ❌ Not addressed. | ❌ Not addressed. (They manage, but don't import your old files) | ❌ Not addressed.
 | **Streamlining Developer Onboarding** | ✅ **Automated**. The `setup` command interactively creates a local `.env` file from the project's template. | ❌ **Not addressed.**                                            | ✅ **Strong**. Provides a central place to get secrets, but doesn't manage local files. | ❌ **Not addressed.**             |
 | **Preventing Configuration Drift**    | ✅ **Solved**. The schema is the source of truth. `schema sync` and `check` enforce consistency.             | ❌ **Not addressed.**                                            | ✅ **Solved**. The cloud is the single source of truth.                                 | ❌ **Not addressed.**             |
 | **Primary Focus**                     | **Complete Local Workflow**. Manages files, documents schemas, validates setups, and scans for leaks.        | **Secret Detection Engine.**                                     | **Cloud-Based Secret** Vault.                                                           | **Shell Environment Automation.** |
+
+
 
 Think of scanners as smoke detectors and cloud vaults as off-site banks.
 **EnvShield is the fire-proof, self-organizing house you should have been living in all along.**
