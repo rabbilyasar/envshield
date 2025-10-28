@@ -1,7 +1,7 @@
 # envshield/parsers/_dotenv.py
 # A simple parser for key-value .env files.
 import os
-from typing import Set
+from typing import Set, Dict, Union
 from ._base import BaseParser
 
 
@@ -10,7 +10,9 @@ class DotenvParser(BaseParser):
     Parses traditional .env files.
     """
 
-    def get_vars(self, file_path: str) -> Set[str]:
+    def get_vars(
+        self, file_path: str, get_values: bool = False
+    ) -> Union[Set[str], Dict[str, str]]:
         """
         Extracts variable names from a .env file.
         - Ignores lines starting with '#' (comments).
@@ -20,16 +22,16 @@ class DotenvParser(BaseParser):
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"File not found: {file_path}")
 
-        variables = set()
+        variables = {}
         with open(file_path, "r") as f:
             for line in f:
                 line = line.strip()
                 if not line or line.startswith("#"):
                     continue
-
                 if "=" in line:
-                    key = line.split("=", 1)[0].strip()
-                    if key:  # Ensure key is not empty
-                        variables.add(key)
+                    key, value = line.split("=", 1)
+                    key = key.strip()
+                    if key:
+                        variables[key] = value.strip()
 
-        return variables
+        return variables if get_values else set(variables.keys())
