@@ -172,10 +172,62 @@ def schema_sync():
         raise typer.Exit(code=1)
 
 
+_GENERATE_LANG_ALIASES = {
+    "py": "python",
+    "python": "python",
+    "ts": "typescript",
+    "js": "typescript",
+    "typescript": "typescript",
+    "javascript": "typescript",
+}
+# Frameworks/ecosystems detected by `inspector` that should default to a TypeScript
+# config module instead of Python's. Anything else (python-*, go, unknown) defaults
+# to Python, which remains the tool's original/primary target language.
+_FRAMEWORK_DEFAULT_LANG = {
+    "nextjs": "typescript",
+    "vite": "typescript",
+    "nodejs": "typescript",
+}
+
+_GENERATE_HELP_TEXT = {
+    "python": (
+        "[dim]Requires 'pydantic' and 'pydantic-settings' in your project. "
+        "Import with: from {module} import settings[/dim]"
+    ),
+    "typescript": (
+        "[dim]Requires 'zod' in your project. "
+        "Import with: import {{ env }} from './{module}'[/dim]"
+    ),
+}
+_GENERATE_DEFAULT_OUTPUT = {"python": "config.py", "typescript": "config.ts"}
+
+
+def _resolve_generate_lang(explicit_lang: Optional[str]) -> str:
+    if explicit_lang:
+        resolved = _GENERATE_LANG_ALIASES.get(explicit_lang.lower())
+        if not resolved:
+            raise EnvShieldException(
+                f"Unsupported --lang '{explicit_lang}'. Use 'python' or 'typescript'."
+            )
+        return resolved
+
+    project_type = inspector.detect_project_type()
+    resolved = _FRAMEWORK_DEFAULT_LANG.get(project_type, "python") if project_type else "python"
+    console.print(f"[dim]No --lang given; detected '{resolved}' for this project.[/dim]")
+    return resolved
+
+
 @app.command()
 def generate(
-    output_file: str = typer.Argument(
-        "config.py", help="The path to write the generated config module to."
+    output_file: Optional[str] = typer.Argument(
+        None,
+        help="Path to write the generated config module to. Defaults to 'config.py' or 'config.ts' based on --lang.",
+    ),
+    lang: Optional[str] = typer.Option(
+        None,
+        "--lang",
+        "-l",
+        help="Target language: 'python' or 'typescript'. Auto-detected from your project if omitted.",
     ),
     force: bool = typer.Option(
         False,
@@ -184,27 +236,28 @@ def generate(
         help="Overwrite the output file if it already exists.",
     ),
 ):
-    """Generates a typed, validated config module (pydantic-settings) from your schema."""
+    """Generates a typed, validated config module (pydantic-settings or zod) from your schema."""
     try:
-        if os.path.exists(output_file) and not force:
+        resolved_lang = _resolve_generate_lang(lang)
+        resolved_output = output_file or _GENERATE_DEFAULT_OUTPUT[resolved_lang]
+
+        if os.path.exists(resolved_output) and not force:
             console.print(
-                f"[bold yellow]Warning:[/] Output file '{output_file}' already exists. Use --force to overwrite."
+                f"[bold yellow]Warning:[/] Output file '{resolved_output}' already exists. Use --force to overwrite."
             )
             raise typer.Exit()
 
         schema = config_manager.load_schema()
-        content = generator.generate_config(schema)
+        content = generator.generate_config(schema, lang=resolved_lang)
 
-        with open(output_file, "w") as f:
+        with open(resolved_output, "w") as f:
             f.write(content)
 
         console.print(
-            f"\n[bold green]✓[/bold green] Generated typed config at [bold cyan]{output_file}[/bold cyan]"
+            f"\n[bold green]✓[/bold green] Generated typed config at [bold cyan]{resolved_output}[/bold cyan]"
         )
-        console.print(
-            "[dim]Requires 'pydantic' and 'pydantic-settings' in your project. "
-            f"Import with: from {os.path.splitext(os.path.basename(output_file))[0]} import settings[/dim]"
-        )
+        module_name = os.path.splitext(os.path.basename(resolved_output))[0]
+        console.print(_GENERATE_HELP_TEXT[resolved_lang].format(module=module_name))
 
     except EnvShieldException as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
