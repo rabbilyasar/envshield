@@ -10,7 +10,7 @@ from rich.panel import Panel
 from envshield.core import importer
 
 from .config import manager as config_manager
-from .core import schema_manager, scanner, doctor, inspector, setup_manager
+from .core import schema_manager, scanner, doctor, inspector, setup_manager, generator
 from .core.exceptions import EnvShieldException
 
 # --- Main App Setup ---
@@ -121,7 +121,9 @@ def check(
 ):
     """Validates a local environment file against the schema."""
     try:
-        schema_manager.check_schema(file)
+        is_in_sync = schema_manager.check_schema(file)
+        if not is_in_sync:
+            raise typer.Exit(code=1)
     except EnvShieldException as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(code=1)
@@ -165,6 +167,45 @@ def schema_sync():
     """Generates a .env.example file from your schema."""
     try:
         schema_manager.sync_schema()
+    except EnvShieldException as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def generate(
+    output_file: str = typer.Argument(
+        "config.py", help="The path to write the generated config module to."
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="Overwrite the output file if it already exists.",
+    ),
+):
+    """Generates a typed, validated config module (pydantic-settings) from your schema."""
+    try:
+        if os.path.exists(output_file) and not force:
+            console.print(
+                f"[bold yellow]Warning:[/] Output file '{output_file}' already exists. Use --force to overwrite."
+            )
+            raise typer.Exit()
+
+        schema = config_manager.load_schema()
+        content = generator.generate_config(schema)
+
+        with open(output_file, "w") as f:
+            f.write(content)
+
+        console.print(
+            f"\n[bold green]✓[/bold green] Generated typed config at [bold cyan]{output_file}[/bold cyan]"
+        )
+        console.print(
+            "[dim]Requires 'pydantic' and 'pydantic-settings' in your project. "
+            f"Import with: from {os.path.splitext(os.path.basename(output_file))[0]} import settings[/dim]"
+        )
+
     except EnvShieldException as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(code=1)
