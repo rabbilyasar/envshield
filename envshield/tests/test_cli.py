@@ -134,6 +134,57 @@ def test_generate_command_refuses_to_overwrite_without_force(tmp_path):
             assert "hand-written" in f.read()
 
 
+def test_generate_command_with_explicit_typescript_lang(tmp_path):
+    """Tests that `--lang typescript` produces a zod config module at config.ts."""
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write(
+                '[DATABASE_URL]\ndescription = "DB URL"\nsecret = true\n\n'
+                '[LOG_LEVEL]\ndescription = "Verbosity"\nsecret = false\ndefaultValue = "info"\n'
+            )
+
+        result = runner.invoke(app, ["generate", "--lang", "typescript"])
+
+        assert result.exit_code == 0
+        assert os.path.exists("config.ts")
+        assert not os.path.exists("config.py")
+        with open("config.ts", "r") as f:
+            content = f.read()
+            assert 'import { z } from "zod";' in content
+            assert '"DATABASE_URL": new Secret(_parsed["DATABASE_URL"]),' in content
+            assert "export const env = {" in content
+
+
+def test_generate_command_auto_detects_typescript_for_nextjs(tmp_path):
+    """Tests that `generate` defaults to TypeScript when the project is detected as Next.js."""
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        with open("package.json", "w") as f:
+            f.write('{"dependencies": {"next": "^14.0.0"}}')
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[API_KEY]\ndescription = "Test"\nsecret = true\n')
+
+        result = runner.invoke(app, ["generate"])
+
+        assert result.exit_code == 0
+        assert os.path.exists("config.ts")
+        assert not os.path.exists("config.py")
+        assert "detected 'typescript'" in result.stdout
+
+
+def test_generate_command_rejects_unsupported_lang(tmp_path):
+    """Tests that an unrecognized --lang value fails clearly instead of silently defaulting."""
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[API_KEY]\ndescription = "Test"\nsecret = true\n')
+
+        result = runner.invoke(app, ["generate", "--lang", "rust"])
+
+        assert result.exit_code == 1
+        assert "Unsupported --lang" in result.stdout
+        assert not os.path.exists("config.py")
+        assert not os.path.exists("config.rs")
+
+
 def test_init_force_flag_with_confirmation(mocker, tmp_path):
     """Tests that 'init --force' prompts for confirmation and overwrites existing files."""
     with runner.isolated_filesystem(temp_dir=tmp_path):
