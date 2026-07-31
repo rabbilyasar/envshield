@@ -40,7 +40,7 @@ EnvShield solves the “dotenv dumpster fire” by giving you a single **Environ
 
 ## Key Features of the EnvShield CLI
 
-![Demo of EnvShield scanning secrets](.gif/scan.gif)
+![Demo of EnvShield generate compiling a schema into typed TypeScript config](.gif/generate.gif)
 
 -   **One Environment Contract** – `env.schema.toml` becomes the single source of truth every other command reads from.
 
@@ -86,7 +86,7 @@ This file is a **"configuration contract"** that explicitly defines every enviro
 | `envshield setup` | Interactive onboarding to create a local env. | ![Demo of EnvShield setup](.gif/setup.gif) |
 | `envshield doctor` | Runs a full health check (and can auto-fix). | ![Demo of EnvShield check](.gif/check.gif) |
 | `envshield import <file>` | Intelligently converts an existing .env file into a new env.schema.toml. | The fastest way to adopt EnvShield for an existing project. |
-| `envshield generate` | Compiles your schema into a typed, validated config module — `pydantic-settings` (Python) or `zod` (TypeScript), auto-detected or set via `--lang`. | Turns the contract into the actual code your app imports. |
+| `envshield generate` | Compiles your schema into a typed, validated config module — `pydantic-settings` (Python) or `zod` (TypeScript), auto-detected or set via `--lang`. | ![Demo of EnvShield generate](.gif/generate.gif) |
 
 
 ## Competitor Comparison: Choosing the Right Tool
