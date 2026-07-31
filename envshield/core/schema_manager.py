@@ -9,10 +9,14 @@ from envshield.parsers.factory import get_parser
 console = Console()
 
 
-def check_schema(file_path: str):
+def check_schema(file_path: str) -> bool:
     """
     Validates a local environment file against the env.schema.toml,
     intelligently handling variables with default values.
+
+    Returns:
+        True if the local file is in sync with the schema, False otherwise
+        (including when the file or a usable parser can't be found).
     """
     console.print(
         f"\n[bold]Validating [magenta]{file_path}[/magenta] against schema...[/bold]"
@@ -24,13 +28,13 @@ def check_schema(file_path: str):
 
     if not parser:
         console.print(f"[red]Error:[/red] No parser found for file type '{file_path}'.")
-        return
+        return False
 
     try:
         local_vars = parser.get_vars(file_path)
     except FileNotFoundError:
         console.print(f"[red]Error:[/red] File not found: '{file_path}'.")
-        return
+        return False
 
     # Get all variables defined in the schema
     schema_vars_all = set(schema.keys())
@@ -49,7 +53,7 @@ def check_schema(file_path: str):
         console.print(
             "[bold green]✓ Your configuration is perfectly in sync with the schema![/bold green]"
         )
-        return
+        return True
 
     # If there are issues, build and display a report table
     table = Table(show_header=True, header_style="bold blue")
@@ -67,6 +71,7 @@ def check_schema(file_path: str):
     console.print(
         "\n[bold]Suggestion:[/bold] Please update your local file to match the schema contract."
     )
+    return False
 
 
 def sync_schema():
