@@ -2,6 +2,24 @@
 from envshield.core import importer
 
 
+def test_import_command_python_settings_file(tmp_path):
+    """Tests that a Django/Flask-style settings.py is correctly converted into a schema."""
+    settings_content = (
+        "SECRET_KEY = 'django-insecure-abc123'\n"
+        "DEBUG = True\n"
+        "DATABASE_URL = 'postgres://user:pass@localhost/db'\n"
+    )
+    settings_file = tmp_path / "settings.py"
+    settings_file.write_text(settings_content)
+
+    schema_content = importer.generate_schema_from_file(str(settings_file))
+
+    assert "SECRET_KEY" in schema_content
+    assert "DEBUG" in schema_content
+    assert "DATABASE_URL" in schema_content
+    assert "secret = true" in schema_content.split("[SECRET_KEY]")[1]
+
+
 def test_import_command_happy_path(tmp_path):
     """Tests that a standard .env file is correctly converted into a schema."""
     env_content = (

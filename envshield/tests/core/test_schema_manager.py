@@ -20,8 +20,9 @@ def test_check_schema_in_sync(mocker, tmp_path):
 
         mock_console = mocker.patch("envshield.core.schema_manager.console")
 
-        schema_manager.check_schema(".env.local")
+        is_in_sync = schema_manager.check_schema(".env.local")
 
+        assert is_in_sync is True
         mock_console.print.assert_any_call(
             "[bold green]✓ Your configuration is perfectly in sync with the schema![/bold green]"
         )
@@ -40,8 +41,9 @@ def test_check_schema_out_of_sync(mocker, tmp_path):
 
         mock_console = mocker.patch("envshield.core.schema_manager.console")
 
-        schema_manager.check_schema(".env.local")
+        is_in_sync = schema_manager.check_schema(".env.local")
 
+        assert is_in_sync is False
         assert mock_console.print.call_count > 2
 
 

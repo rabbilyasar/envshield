@@ -55,7 +55,7 @@ def test_check_command_with_missing_variable(tmp_path):
         with open(".env", "w") as f:
             f.write("API_KEY=12345")
         result = runner.invoke(app, ["check"])
-        assert result.exit_code == 0
+        assert result.exit_code == 1
         assert "Missing in Local" in result.stdout
         assert "SECRET" in result.stdout
 
@@ -73,6 +73,65 @@ def test_schema_sync_command(tmp_path):
             content = f.read()
             assert "# My test key" in content
             assert "API_KEY=abc" in content
+
+
+def test_import_command_on_python_settings_file(tmp_path):
+    """
+    Regression test: `envshield import settings.py` used to raise a TypeError
+    inside PythonParser.get_vars(get_values=True), which cli.py swallowed and
+    misreported as 'Import cancelled by user.' with exit code 0. It must now
+    succeed and actually write the schema file.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        with open("settings.py", "w") as f:
+            f.write("SECRET_KEY = 'django-insecure-abc123'\nDEBUG = True\n")
+
+        result = runner.invoke(app, ["import", "settings.py"])
+
+        assert result.exit_code == 0
+        assert "cancelled" not in result.stdout.lower()
+        assert os.path.exists(SCHEMA_FILE_NAME)
+        with open(SCHEMA_FILE_NAME, "r") as f:
+            content = f.read()
+            assert "SECRET_KEY" in content
+            assert "DEBUG" in content
+
+
+def test_generate_command_creates_typed_config_module(tmp_path):
+    """Tests that `envshield generate` writes a pydantic-settings module from the schema."""
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write(
+                '[DATABASE_URL]\ndescription = "DB URL"\nsecret = true\n\n'
+                '[LOG_LEVEL]\ndescription = "Verbosity"\nsecret = false\ndefaultValue = "info"\n'
+            )
+
+        result = runner.invoke(app, ["generate"])
+
+        assert result.exit_code == 0
+        assert os.path.exists("config.py")
+        with open("config.py", "r") as f:
+            content = f.read()
+            assert "class Settings(BaseSettings):" in content
+            assert "database_url: SecretStr" in content
+            assert "log_level: str" in content
+            assert "settings = Settings()" in content
+
+
+def test_generate_command_refuses_to_overwrite_without_force(tmp_path):
+    """Tests that `envshield generate` won't clobber an existing file without --force."""
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[API_KEY]\ndescription = "Test"\nsecret = true\n')
+        with open("config.py", "w") as f:
+            f.write("# hand-written, should not be clobbered\n")
+
+        result = runner.invoke(app, ["generate"])
+
+        assert result.exit_code == 0
+        assert "already exists" in result.stdout
+        with open("config.py", "r") as f:
+            assert "hand-written" in f.read()
 
 
 def test_init_force_flag_with_confirmation(mocker, tmp_path):

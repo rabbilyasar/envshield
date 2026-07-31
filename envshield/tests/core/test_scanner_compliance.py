@@ -1,4 +1,6 @@
 # envshield/tests/core/test_scanner_compliance.py
+import os
+
 from typer.testing import CliRunner
 
 from envshield.cli import app
@@ -79,6 +81,27 @@ def test_scan_with_both_secret_and_undeclared_variable(mocker, tmp_path):
         # Fix: Assert on the key content, not the full table rendering, which is brittle.
         assert "sk_live_123456789" in result.stdout
         assert "UNDECLARED_KEY" in result.stdout
+
+
+def test_scan_ignores_dependency_and_vcs_dirs_by_default(tmp_path):
+    """
+    Regression test: `scan` used to walk into node_modules/.venv/.git with no
+    default excludes, producing false-positive noise on any real project.
+    These dirs must now be pruned even with no envshield.yml exclusions configured.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.makedirs("node_modules/some-pkg")
+        with open("node_modules/some-pkg/config.js", "w") as f:
+            f.write("const key = 'sk_live_123456789abcdefghijklmnopqrstuv';\n")
+
+        os.makedirs(".venv/lib")
+        with open(".venv/lib/leftover.py", "w") as f:
+            f.write("TOKEN = 'ghp_123456789012345678901234567890123456'\n")
+
+        result = runner.invoke(app, ["scan"])
+
+        assert result.exit_code == 0
+        assert "No issues found" in result.stdout
 
 
 def test_scan_gracefully_handles_missing_schema_file(tmp_path):
