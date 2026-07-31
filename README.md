@@ -1,5 +1,5 @@
 
-# EnvShield 🛡️ – Environment Variable Management & Secret Scanner CLI
+# EnvShield 🛡️ – The Environment Contract CLI for Python & TypeScript
 
 
 [![CI](https://github.com/rabbilyasar/envshield/actions/workflows/ci.yml/badge.svg)](https://github.com/rabbilyasar/envshield/actions/workflows/ci.yml)
@@ -9,7 +9,7 @@
 [![Website](https://img.shields.io/badge/Website-envshield.dev-blue?logo=google-chrome&logoColor=white)](https://www.envshield.dev)
 ![Stars](https://img.shields.io/github/stars/rabbilyasar/envshield?style=social)
 
-**EnvShield is an open-source CLI for environment variable management, configuration as code, and proactive secret scanning—your caffeine-proof way to avoid the “oops, I just leaked prod keys” nightmare.**
+**EnvShield turns `env.schema.toml` into your project's Environment Contract — one schema that generates your docs, validates every local setup, and compiles into typed, secret-masked config code for Python or TypeScript. It's your caffeine-proof way to avoid the "oops, I just leaked prod keys" nightmare.**
 
 [📚 Full Documentation](https://docs.envshield.dev/)
 
@@ -34,15 +34,17 @@
 
 ## Why Secure Environment Management Matters
 
-Managing `.env` files by copy-pasting them around like a hot potato is fun… until a secret lands in a public repo.
-EnvShield solves the “dotenv dumpster fire” by giving you **schema-first configuration**, automatic documentation, and built-in **secret scanning**—all wrapped in a workflow lazy enough for a 3 a.m. commit.
+Managing `.env` files by copy-pasting them around like a hot potato is fun… until a secret lands in a public repo, or `os.getenv("MAX_RETIRES")` (typo and all) silently returns `None` in production.
+EnvShield solves the “dotenv dumpster fire” by giving you a single **Environment Contract** — `env.schema.toml` — that generates your documentation, validates every local setup, compiles into typed config code, and blocks secrets before they're ever committed. All wrapped in a workflow lazy enough for a 3 a.m. commit.
 
 
 ## Key Features of the EnvShield CLI
 
 ![Demo of EnvShield scanning secrets](.gif/scan.gif)
 
--   **Environment Variable Governance** – One `env.schema.toml` file becomes your single source of truth.
+-   **One Environment Contract** – `env.schema.toml` becomes the single source of truth every other command reads from.
+
+-   **Typed Config Generation** – `envshield generate` compiles your schema into real, importable `pydantic-settings` (Python) or `zod` (TypeScript) code — secrets are masked by default (`SecretStr` / `Secret<T>`), everything else is a validated, correctly-typed value instead of a raw string.
 
 -   **Open-Source Secret Scanner** – Detects API keys, private keys, and other credentials _before_ you push.
 
@@ -84,6 +86,7 @@ This file is a **"configuration contract"** that explicitly defines every enviro
 | `envshield setup` | Interactive onboarding to create a local env. | ![Demo of EnvShield setup](.gif/setup.gif) |
 | `envshield doctor` | Runs a full health check (and can auto-fix). | ![Demo of EnvShield check](.gif/check.gif) |
 | `envshield import <file>` | Intelligently converts an existing .env file into a new env.schema.toml. | The fastest way to adopt EnvShield for an existing project. |
+| `envshield generate` | Compiles your schema into a typed, validated config module — `pydantic-settings` (Python) or `zod` (TypeScript), auto-detected or set via `--lang`. | Turns the contract into the actual code your app imports. |
 
 
 ## Competitor Comparison: Choosing the Right Tool
@@ -96,7 +99,8 @@ A scanner is a smoke detector. A cloud vault is an off-site bank. **EnvShield is
 | **Migrating Existing Projects**   |  ✅ One-command `import`. `import` command auto-generates a schema from an existing .env file. |  ❌ Not addressed. | ❌ Not addressed. (They manage, but don't import your old files) | ❌ Not addressed.
 | **Streamlining Developer Onboarding** | ✅ **Automated**. The `setup` command interactively creates a local `.env` file from the project's template. | ❌ **Not addressed.**                                            | ✅ **Strong**. Provides a central place to get secrets, but doesn't manage local files. | ❌ **Not addressed.**             |
 | **Preventing Configuration Drift**    | ✅ **Solved**. The schema is the source of truth. `schema sync` and `check` enforce consistency.             | ❌ **Not addressed.**                                            | ✅ **Solved**. The cloud is the single source of truth.                                 | ❌ **Not addressed.**             |
-| **Primary Focus**                     | **Complete Local Workflow**. Manages files, documents schemas, validates setups, and scans for leaks.        | **Secret Detection Engine.**                                     | **Cloud-Based Secret** Vault.                                                           | **Shell Environment Automation.** |
+| **Typed, Validated Config Code**      | ✅ **`generate`**. Compiles your schema straight into `pydantic-settings` (Python) or `zod` (TypeScript), with secrets masked by default. | ❌ **Not addressed.**                                            | ❌ **Not addressed.** (SDKs fetch secrets; they don't generate a typed module from a governed schema.) | ❌ **Not addressed.**             |
+| **Primary Focus**                     | **Complete Local Workflow**. Manages files, documents schemas, validates setups, scans for leaks, and generates typed code.        | **Secret Detection Engine.**                                     | **Cloud-Based Secret** Vault.                                                           | **Shell Environment Automation.** |
 
 
 
@@ -168,5 +172,5 @@ Spotted a bug? Think our jokes are terrible? We want to hear it all. Check out `
 
 ### TL;DR
 
-**EnvShield = environment variable management + secret scanning + configuration as code + just enough sarcasm to keep you awake.**
+**EnvShield = one Environment Contract that gives you docs, validation, secret scanning, and typed Python/TypeScript config code — plus just enough sarcasm to keep you awake.**
 Stop leaking secrets. Start shipping securely.
