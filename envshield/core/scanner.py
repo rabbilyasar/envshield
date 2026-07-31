@@ -94,6 +94,32 @@ USAGE_PATTERNS: List[Dict[str, str]] = [
     {"name": "Node.js process.env", "pattern": r"process\.env\.(\w+)"},
 ]
 
+# Directories that are never useful to scan and are expensive/noisy to walk:
+# dependency trees, VCS internals, virtualenvs, and build artifacts. These are
+# always pruned in addition to whatever the user configures in envshield.yml.
+DEFAULT_EXCLUDED_DIRS = {
+    ".git",
+    "node_modules",
+    "venv",
+    ".venv",
+    "env",
+    "__pycache__",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".tox",
+    "dist",
+    "build",
+}
+
+
+def _is_default_excluded_dir(dirname: str) -> bool:
+    return (
+        dirname in DEFAULT_EXCLUDED_DIRS
+        or dirname.endswith(".egg-info")
+        or dirname.endswith(".dist-info")
+    )
+
 
 def _scan_single_file(file_path: str, schema_vars: set) -> (List[Dict], List[Dict]):
     """
@@ -159,7 +185,9 @@ def _collect_files_to_scan(paths: Optional[List[str]], staged_only: bool) -> Lis
         if os.path.isfile(path):
             files_to_scan.append(os.path.abspath(path))
         elif os.path.isdir(path):
-            for root, _, files in os.walk(path):
+            for root, dirs, files in os.walk(path):
+                # Prune in-place so os.walk doesn't descend into these dirs at all.
+                dirs[:] = [d for d in dirs if not _is_default_excluded_dir(d)]
                 for file in files:
                     files_to_scan.append(os.path.join(root, file))
     return files_to_scan
