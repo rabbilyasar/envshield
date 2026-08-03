@@ -1,7 +1,8 @@
 # envshield/tests/core/test_schema_manager.py
+import os
+
 from typer.testing import CliRunner
 
-import os
 from envshield.core import schema_manager
 
 runner = CliRunner()
@@ -187,8 +188,10 @@ def test_sync_schema_reports_when_python_file_already_declares_everything(
     with open("athena/env_config.local.py", "w") as f:
         f.write('DB_HOST = "db"\n')
 
-    before = open("athena/env_config.local.py").read()
+    with open("athena/env_config.local.py") as f:
+        before = f.read()
     schema_manager.sync_schema(service_name="athena")
-    after = open("athena/env_config.local.py").read()
+    with open("athena/env_config.local.py") as f:
+        after = f.read()
 
     assert before == after

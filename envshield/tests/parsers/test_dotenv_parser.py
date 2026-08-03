@@ -1,4 +1,5 @@
 import pytest
+
 from envshield.parsers._dotenv import DotenvParser
 
 

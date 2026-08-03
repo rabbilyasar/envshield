@@ -3,10 +3,9 @@
 
 import os
 import subprocess
-from typing import List, Optional
 
 
-def get_git_root() -> Optional[str]:
+def get_git_root() -> str | None:
     """
     Finds the root directory of the current Git repository.
 
@@ -27,7 +26,7 @@ def get_git_root() -> Optional[str]:
         return None
 
 
-def get_staged_files() -> List[str]:
+def get_staged_files() -> list[str]:
     """
     Gets a list of all files that are currently staged for the next commit.
 
@@ -56,7 +55,7 @@ def get_staged_files() -> List[str]:
         return []
 
 
-def get_staged_file_content(file_path: str) -> Optional[str]:
+def get_staged_file_content(file_path: str) -> str | None:
     """
     Reads a file's content as it exists in the Git index (staged), not on disk.
 

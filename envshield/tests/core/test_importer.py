@@ -183,8 +183,9 @@ def test_stripe_publishable_key_is_not_flagged_by_the_secret_scanner():
     'pk_' prefixes, so a publishable key (meant to be public, e.g. sitting
     right in committed frontend source) triggered a false "secret found" DANGER.
     """
-    from envshield.core.scanner import SECRET_PATTERNS
     import re
+
+    from envshield.core.scanner import SECRET_PATTERNS
 
     publishable = "pk_test_fakekeyforfakekeyforfakekey"
     secret = "sk_test_fakekeyforfakekeyforfakekey"
