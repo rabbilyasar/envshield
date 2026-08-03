@@ -153,10 +153,14 @@ envshield setup                           # "Which service? (api / web / all)"
 ### ✅ One Schema, All Services
 Declare what config each service needs in one place. Multi-service projects finally have a single source of truth.
 
+![Multi-service configuration](.gif/multi-service.gif)
+
 **Real-life:** Your API added `STRIPE_API_KEY` last month. Did the worker service get it? Web service? With EnvShield, you know instantly.
 
 ### ✅ Migrate Existing Projects in Seconds
 `envshield import` reads your actual `.env` or `settings.py` and generates 90% of the schema for you. No manual TOML writing.
+
+![Importing existing config](.gif/import.gif)
 
 ```bash
 envshield import .env                 # Reads your current .env
@@ -196,6 +200,8 @@ const port: number = env.API_PORT;  // Type error if not number
 ### ✅ Interactive Onboarding
 New developer? `envshield setup` walks them through creating `.env`, knows which vars are secrets, shows descriptions:
 
+![Interactive setup wizard](.gif/setup.gif)
+
 ```
 🛡️  EnvShield Setup
 Which service? api
@@ -216,6 +222,8 @@ Enter value: 5000
 ### ✅ Prevents Configuration Drift
 Validate at every step:
 
+![Health check catching drift](.gif/doctor.gif)
+
 ```bash
 envshield check services/api/.env --service api
 # ✗ Missing in Local: STRIPE_API_KEY (required, no default)
@@ -228,6 +236,8 @@ envshield doctor --service api
 
 ### ✅ Secret Scanning (Pre-commit Hook)
 Blocks secrets before they're committed:
+
+![Secret and undeclared variable detection](.gif/scan.gif)
 
 ```bash
 git add config.py  # Accidentally left DB_PASSWORD in it
