@@ -54,3 +54,34 @@ def get_staged_files() -> List[str]:
         return absolute_paths
     except (subprocess.CalledProcessError, FileNotFoundError):
         return []
+
+
+def get_staged_file_content(file_path: str) -> Optional[str]:
+    """
+    Reads a file's content as it exists in the Git index (staged), not on disk.
+
+    This matters because the working-tree copy can differ from what's staged:
+    a file can be `git add`-ed with a secret, then edited on disk to remove it
+    without re-staging. A hook that scans the filesystem would see the clean
+    version and let the commit through, even though the secret is still what
+    gets committed.
+
+    Returns:
+        The staged content, or None if it can't be read (not in a repo, the
+        path isn't staged, or the blob is binary/undecodable).
+    """
+    git_root = get_git_root()
+    if not git_root:
+        return None
+
+    relative_path = os.path.relpath(file_path, git_root)
+    try:
+        result = subprocess.run(
+            ["git", "show", f":{relative_path}"],
+            cwd=git_root,
+            capture_output=True,
+            check=True,
+        )
+        return result.stdout.decode("utf-8", errors="ignore")
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
