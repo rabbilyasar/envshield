@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## [4.0.1] - 2026-08-03
+
+### Fixed
+- `envshield check` and `envshield doctor` reported a required variable (no schema `defaultValue`) as in sync even when it was declared only as a blank placeholder — e.g. `SECRETS_ENCRYPTION_KEY = ""` checked into a Python config module ahead of a real per-developer secret. Both checks only looked at whether the key was *present*, never at its actual value, so a developer only found out it was unset when the app raised at runtime. Both now flag a required-but-blank variable distinctly (`Blank in Local`), the same way `setup` already treats it.
+
 ## [4.0.0] - 2026-08-03
 
 ### Fixed

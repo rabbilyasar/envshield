@@ -1,0 +1,56 @@
+name: Publish to PyPI
+
+# Triggered by `git push --tags` after a `bump2version` release (see
+# CONTRIBUTING.md). The version-bump commit itself already went through
+# ci.yml's full test matrix on push to main; this runs one more sanity check
+# on the exact tagged commit before it ever reaches PyPI, then builds and
+# publishes via PyPI's trusted-publisher (OIDC) flow -- no API token stored
+# in CI secrets at all.
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run unit tests with pytest
+        run: pytest
+
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write # required for PyPI trusted publishing (OIDC) -- no token needed
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tooling
+        run: python -m pip install --upgrade build
+
+      - name: Build distributions
+        run: python -m build
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
