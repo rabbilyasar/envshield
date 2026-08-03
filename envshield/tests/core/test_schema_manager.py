@@ -73,3 +73,122 @@ def test_sync_schema_generates_perfect_file(mocker, tmp_path):
             "LOG_LEVEL=info\n\n"
         )
         assert expected_content in content
+
+
+def test_sync_schema_scopes_env_example_to_service_directory(tmp_path, monkeypatch):
+    """
+    Regression: multiple services syncing from the repo root used to all
+    overwrite the same root-level '.env.example', clobbering each other.
+    """
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "services" / "api").mkdir(parents=True)
+    with open("envshield.yml", "w") as f:
+        f.write("services:\n  api:\n    path: services/api/env.schema.toml\n")
+    with open("services/api/env.schema.toml", "w") as f:
+        f.write('[API_KEY]\ndescription="Third-party key"\nsecret=true\n')
+
+    schema_manager.sync_schema(service_name="api")
+
+    assert not os.path.exists(".env.example")
+    assert os.path.exists("services/api/.env.example")
+    with open("services/api/.env.example") as f:
+        assert "API_KEY=" in f.read()
+
+
+def test_sync_schema_creates_python_local_file_when_missing(tmp_path, monkeypatch):
+    """
+    A service whose 'local_file' is a Python module (not a dotenv file) gets
+    a fresh module generated from the schema, in Python assignment syntax.
+    """
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "athena" / "config").mkdir(parents=True)
+    with open("envshield.yml", "w") as f:
+        f.write(
+            "services:\n"
+            "  athena:\n"
+            "    path: athena/env.schema.toml\n"
+            "    local_file: athena/config/env_config.local.py\n"
+        )
+    with open("athena/env.schema.toml", "w") as f:
+        f.write(
+            '[DB_HOST]\ndescription="Database host"\ndefaultValue="db"\n\n'
+            '[API_ADMIN_TOKEN]\ndescription="Admin token"\nsecret=true\n'
+        )
+
+    schema_manager.sync_schema(service_name="athena")
+
+    with open("athena/config/env_config.local.py") as f:
+        content = f.read()
+    assert "DB_HOST = 'db'" in content
+    assert "API_ADMIN_TOKEN = ''" in content
+
+
+def test_sync_schema_appends_missing_vars_to_existing_python_file_without_touching_rest(
+    tmp_path, monkeypatch
+):
+    """
+    Regression: this must NOT regenerate the whole file the way '.env.example'
+    sync does -- a hand-maintained Python config module can contain real
+    logic (imports, conditionals) beyond simple assignments, and a full
+    rewrite would destroy it. Only variables missing from the file should be
+    appended; everything else -- including an already-set value that
+    happens to be blank -- is left completely alone.
+    """
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "athena" / "config").mkdir(parents=True)
+    with open("envshield.yml", "w") as f:
+        f.write(
+            "services:\n"
+            "  athena:\n"
+            "    path: athena/env.schema.toml\n"
+            "    local_file: athena/config/env_config.local.py\n"
+        )
+    with open("athena/env.schema.toml", "w") as f:
+        f.write(
+            '[DB_HOST]\ndescription="Database host"\ndefaultValue="db"\n\n'
+            '[INTREPID_KEY]\ndescription="Intrepid API key"\nsecret=true\n\n'
+            '[NEW_FEATURE_FLAG]\ndescription="Newly added var"\ndefaultValue="no"\n'
+        )
+    existing_content = (
+        "import os\n\n"
+        'DB_HOST = "db"\n'
+        'INTREPID_KEY = ""\n\n'
+        'if os.environ.get("USE_LOCAL_DB") == "yes":\n'
+        '    DB_HOST = "db"\n'
+    )
+    with open("athena/config/env_config.local.py", "w") as f:
+        f.write(existing_content)
+
+    schema_manager.sync_schema(service_name="athena")
+
+    with open("athena/config/env_config.local.py") as f:
+        content = f.read()
+
+    # Existing lines and logic are byte-for-byte untouched...
+    assert existing_content in content
+    # ...and only the missing variable was appended.
+    assert "NEW_FEATURE_FLAG = 'no'" in content
+
+
+def test_sync_schema_reports_when_python_file_already_declares_everything(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "athena").mkdir(parents=True)
+    with open("envshield.yml", "w") as f:
+        f.write(
+            "services:\n"
+            "  athena:\n"
+            "    path: athena/env.schema.toml\n"
+            "    local_file: athena/env_config.local.py\n"
+        )
+    with open("athena/env.schema.toml", "w") as f:
+        f.write('[DB_HOST]\ndescription="x"\ndefaultValue="db"\n')
+    with open("athena/env_config.local.py", "w") as f:
+        f.write('DB_HOST = "db"\n')
+
+    before = open("athena/env_config.local.py").read()
+    schema_manager.sync_schema(service_name="athena")
+    after = open("athena/env_config.local.py").read()
+
+    assert before == after

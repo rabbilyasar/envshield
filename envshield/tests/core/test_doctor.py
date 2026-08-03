@@ -127,3 +127,73 @@ def test_doctor_fix_flow(mocker, tmp_path):
         assert "Not installed" in result.stdout
         assert "Fixed!" in result.stdout
         mock_install_hook.assert_called_once()
+
+
+def test_check_config_files_looks_up_the_services_own_schema_path(tmp_path, monkeypatch):
+    """
+    Regression: doctor --service used to always check for the ROOT
+    'env.schema.toml', even though a multi-service project's schemas live at
+    each service's own path -- so a perfectly healthy service was reported
+    as missing its schema entirely.
+    """
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "services" / "api").mkdir(parents=True)
+    with open(CONFIG_FILE_NAME, "w") as f:
+        f.write("services:\n  api:\n    path: services/api/env.schema.toml\n")
+    with open("services/api/env.schema.toml", "w") as f:
+        f.write("[API_KEY]\n")
+
+    passed, message = doctor._check_config_files(service_name="api")
+
+    assert passed is True, message
+
+
+def test_check_config_files_reports_missing_service_schema(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with open(CONFIG_FILE_NAME, "w") as f:
+        f.write("services:\n  api:\n    path: services/api/env.schema.toml\n")
+
+    passed, message = doctor._check_config_files(service_name="api")
+
+    assert passed is False
+    assert "services/api/env.schema.toml" in message
+
+
+def test_check_local_env_sync_scopes_to_service_directory(tmp_path, monkeypatch):
+    """The 'Local Environment Sync' check must look at the service's own '.env', not the root one."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "services" / "api").mkdir(parents=True)
+    with open(CONFIG_FILE_NAME, "w") as f:
+        f.write("services:\n  api:\n    path: services/api/env.schema.toml\n")
+    with open("services/api/env.schema.toml", "w") as f:
+        f.write('[API_KEY]\ndescription="x"\n')
+    with open("services/api/.env", "w") as f:
+        f.write("API_KEY=abc\n")
+
+    passed, message = doctor._check_local_env_sync(service_name="api")
+
+    assert passed is True, message
+
+
+def test_check_example_file_sync_skips_python_format_local_file(tmp_path, monkeypatch):
+    """
+    A Python-module local file has no separate '.env.example' to drift out
+    of sync -- it IS the contract. This check should pass through with an
+    informational message instead of reporting a missing template.
+    """
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "athena").mkdir(parents=True)
+    with open(CONFIG_FILE_NAME, "w") as f:
+        f.write(
+            "services:\n"
+            "  athena:\n"
+            "    path: athena/env.schema.toml\n"
+            "    local_file: athena/env_config.local.py\n"
+        )
+    with open("athena/env.schema.toml", "w") as f:
+        f.write('[DB_HOST]\ndescription="x"\n')
+
+    passed, message = doctor._check_example_file_sync(service_name="athena")
+
+    assert passed is True
+    assert "no separate template file" in message

@@ -79,6 +79,7 @@ def test_importer_classifies_correctly(mocker):
         "DEBUG": "True",
         "HOST": "localhost",
         "APP_NAME": "My Awesome App",
+        "OPTIONAL_FLAG": "",
     }
 
     mock_parser_instance = mocker.Mock()
@@ -102,4 +103,91 @@ def test_importer_classifies_correctly(mocker):
     assert 'defaultValue = "localhost"' in schema_content.split("[HOST]")[1]
 
     assert "secret = false" in schema_content.split("[APP_NAME]")[1]
-    assert "defaultValue" not in schema_content.split("[APP_NAME]")[1]
+    # Any non-secret var with a concrete value gets that value suggested as
+    # the default now, not just names on a small hardcoded whitelist.
+    assert 'defaultValue = "My Awesome App"' in schema_content.split("[APP_NAME]")[1]
+    # A blank value has no signal to suggest a default from at all.
+    assert "defaultValue" not in schema_content.split("[OPTIONAL_FLAG]")[1]
+
+
+def test_classify_variable_suggests_default_for_any_nonsecret_value_with_content():
+    """
+    Regression: default-value suggestion used to be limited to a small
+    hardcoded whitelist of variable names (DEBUG, LOG_LEVEL, PORT, HOST,
+    ...), so importing a real project's config -- most of whose non-secret
+    variables aren't on that list -- suggested zero defaults even for
+    obviously safe, stable values like a local dev DB name or cache port.
+    """
+    is_secret, default = importer._classify_variable("DB_NAME", "athena")
+    assert is_secret is False
+    assert default == "athena"
+
+    is_secret, default = importer._classify_variable("CACHE_PORT", "6379")
+    assert is_secret is False
+    assert default == "6379"
+
+
+def test_classify_variable_suggests_no_default_for_blank_value():
+    is_secret, default = importer._classify_variable("CACHE_HOST", "")
+    assert is_secret is False
+    assert default is None
+
+
+def test_classify_variable_treats_next_public_prefixed_vars_as_non_secret():
+    """
+    Regression: NEXT_PUBLIC_/VITE_/REACT_APP_/NUXT_PUBLIC_-prefixed vars are
+    inlined straight into the client-side bundle by design -- they are
+    public regardless of what their name contains. A Stripe *publishable*
+    key legitimately has "key" in its name (NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY)
+    but was getting flagged secret purely from the keyword heuristic, which
+    would wrap it in a masking Secret<T> in generated code and break the app
+    (it needs to be a plain embeddable string).
+    """
+    is_secret, default = importer._classify_variable(
+        "NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY", "pk_test_fakekeyforfakekeyforfakekey"
+    )
+    assert is_secret is False
+    assert default == "pk_test_fakekeyforfakekeyforfakekey"
+
+    is_secret, _ = importer._classify_variable("VITE_API_KEY", "abc123")
+    assert is_secret is False
+
+    is_secret, _ = importer._classify_variable("REACT_APP_AUTH_DOMAIN", "example.auth0.com")
+    assert is_secret is False
+
+
+def test_classify_variable_treats_dotenv_public_key_as_non_secret():
+    """dotenvx's own DOTENV_PUBLIC_KEY holds a public (not secret) encryption key, despite the name."""
+    is_secret, _ = importer._classify_variable(
+        "DOTENV_PUBLIC_KEY", "03b3c5a1a1f4b5b2f1e2c3d4e5f6a7b8c9d0e1f2"
+    )
+    assert is_secret is False
+
+
+def test_classify_variable_still_flags_a_real_secret_under_a_public_prefixed_name():
+    """
+    A conventionally-public prefix must never override a high-confidence
+    match against an actual secret-shaped *value* -- a real secret key
+    accidentally placed under a NEXT_PUBLIC_ name is a genuine leak, not a
+    false positive to suppress.
+    """
+    is_secret, _ = importer._classify_variable(
+        "NEXT_PUBLIC_STRIPE_SECRET_KEY", "sk_test_fakekeyforfakekeyforfakekey"
+    )
+    assert is_secret is True
+
+
+def test_stripe_publishable_key_is_not_flagged_by_the_secret_scanner():
+    """
+    Regression: the scanner's Stripe pattern used to match both 'sk_' and
+    'pk_' prefixes, so a publishable key (meant to be public, e.g. sitting
+    right in committed frontend source) triggered a false "secret found" DANGER.
+    """
+    from envshield.core.scanner import SECRET_PATTERNS
+    import re
+
+    publishable = "pk_test_fakekeyforfakekeyforfakekey"
+    secret = "sk_test_fakekeyforfakekeyforfakekey"
+
+    assert not any(re.search(p["pattern"], publishable) for p in SECRET_PATTERNS)
+    assert any(re.search(p["pattern"], secret) for p in SECRET_PATTERNS)

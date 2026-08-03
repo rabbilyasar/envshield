@@ -16,6 +16,25 @@ console = Console()
 # Heuristics for smarter import
 SECRET_KEY_KEYWORDS = ["secret", "token", "password", "key", "auth", "credential"]
 
+# Naming conventions several frontend frameworks use to mark an env var as
+# intentionally public: these get inlined straight into the client-side
+# bundle at build time, so by design they are never secret -- regardless of
+# what their name happens to contain (a Stripe *publishable* key legitimately
+# has "key" in its name, e.g. NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY).
+PUBLIC_KEY_PREFIXES = (
+    "NEXT_PUBLIC_",  # Next.js
+    "VITE_",  # Vite
+    "REACT_APP_",  # Create React App
+    "NUXT_PUBLIC_",  # Nuxt 3
+    "PUBLIC_",  # SvelteKit
+    "GATSBY_",  # Gatsby
+)
+
+# Specific well-known variable names that are public by convention even
+# though the name alone would otherwise look secret-ish -- e.g. dotenvx's
+# own encryption metadata variable, which holds a *public* key.
+KNOWN_PUBLIC_VAR_NAMES = {"DOTENV_PUBLIC_KEY"}
+
 
 def key_contains_secret_keyword(key: str, keywords=SECRET_KEY_KEYWORDS) -> bool:
     """
@@ -29,6 +48,18 @@ def key_contains_secret_keyword(key: str, keywords=SECRET_KEY_KEYWORDS) -> bool:
     return any(keyword in tokens for keyword in keywords)
 
 
+def _is_conventionally_public(key: str) -> bool:
+    """
+    True for a variable that's public by a well-known naming convention.
+    Doesn't override a high-confidence match against an actual secret-shaped
+    *value* -- see _classify_variable -- so a real secret accidentally
+    placed under e.g. a NEXT_PUBLIC_ name is still flagged.
+    """
+    if key in KNOWN_PUBLIC_VAR_NAMES:
+        return True
+    return key.upper().startswith(PUBLIC_KEY_PREFIXES)
+
+
 def _classify_variable(key: str, value: str) -> Tuple[bool, Any]:
     """
     Intelligently classifies a variable as a secret and suggests a default value.
@@ -36,16 +67,22 @@ def _classify_variable(key: str, value: str) -> Tuple[bool, Any]:
     Returns:
         A tuple of (is_secret: bool, default_value: Any | None).
     """
-    # 1. Check value against high-confidence secret patterns first
+    # 1. Check value against high-confidence secret patterns first -- this
+    # always wins, even for a conventionally-public name.
     for secret in SECRET_PATTERNS:
         if re.search(secret["pattern"], value):
             return True, None
 
-    # 2. Check the key for common secret-indicating keywords
+    # 2. A conventionally-public name is never treated as secret from its
+    # name alone -- skip the keyword heuristic entirely for these.
+    if _is_conventionally_public(key):
+        return False, value or None
+
+    # 3. Check the key for common secret-indicating keywords
     if key_contains_secret_keyword(key):
         return True, None
 
-    # 3. Anything else with a concrete value already sitting in the source
+    # 4. Anything else with a concrete value already sitting in the source
     # file is worth suggesting as the default -- it's already committed (or
     # already on this developer's disk) and isn't keyword-flagged as a
     # secret, so carrying it forward as a schema default doesn't expose
@@ -57,7 +94,7 @@ def _classify_variable(key: str, value: str) -> Tuple[bool, Any]:
     if value:
         return False, value
 
-    # 4. Blank value, no other signal: genuinely undetermined.
+    # 5. Blank value, no other signal: genuinely undetermined.
     return False, None
 
 

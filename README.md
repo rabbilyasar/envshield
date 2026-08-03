@@ -123,28 +123,84 @@ envshield generate --lang python  # Generate typed config.py (pydantic-settings)
 
 ### 3. For multi-service (the real win)
 ```bash
-# At repo root with multiple services
-cat envshield.yml
+# At repo root with multiple services -- no envshield.yml needed yet
+envshield service discover
 ```
-```yaml
-project_name: my-platform
-services:
-  api:
-    path: services/api/env.schema.toml
-    description: Backend API
-  web:
-    path: services/web/env.schema.toml
-    description: Frontend
+```
+                         Discovered Services
+┏━━━━━━━━┳━━━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Name   ┃ Directory      ┃ Format ┃ Config File           ┃
+┡━━━━━━━━╇━━━━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━┩
+│ api    │ services/api   │ dotenv │ (default .env)        │
+│ web    │ services/web   │ dotenv │ (default .env)        │
+└────────┴────────────────┴────────┴───────────────────────┘
+? Add these services to envshield.yml? (api, web pre-selected) Yes
+✓ Registered api → services/api/env.schema.toml
+✓ Registered web → services/web/env.schema.toml
+```
+
+One command scans for service-like directories (a dotenv file, or a
+recognizable config module -- see below), registers each one in
+`envshield.yml`, and **seeds every schema straight from that service's
+real, current values** (the same logic as `import`) -- skipping any
+directory that's just a shared library with no environment config of its
+own. Run it again later to pick up a new service without touching the
+ones already configured -- it's additive, not a one-time bootstrap.
+
+Detection isn't limited to a plain `.env`: it matches any `.env.*` file, so
+Rails/Mastodon's `.env.production`, Nx's per-target
+`.env.<target>.<configuration>`, and similar conventions are all found --
+falling back to a checked-in template (`.env.example`, `.env.sample`, ...)
+when no real local file exists yet.
+
+Prefer to wire things up by hand, or auto-detection missed something?
+```bash
+envshield service add api services/api --import services/api/.env
+envshield service list
 ```
 
 ```bash
-# Now each command is service-aware
-envshield import services/api/.env --service api
-envshield import services/web/.env --service web
+# Now every command is service-aware
 envshield scan --service api              # Scan API's code for undeclared vars
 envshield setup --service web             # Setup web service
 envshield setup                           # "Which service? (api / web / all)"
 ```
+
+`schema sync`, `setup`, `doctor`, and `check` all resolve `.env.example` /
+`.env` inside **each service's own directory** by default (wherever its
+`env.schema.toml` lives) -- so two services never clobber the same
+root-level file. And `--service` is genuinely optional on a multi-service
+project: omit it with only one service configured and that one is used
+automatically; omit it with several and you're prompted -- pick one, or
+`All services` to run against every service in the same command (`setup`
+walks through each service's wizard in turn; the rest just loop and report
+per service).
+
+### Not using dotenv? Point EnvShield at your real local config file
+
+Some projects don't use `.env` at all -- e.g. a Flask app whose local
+config is a plain Python module (`config/env_config.local.py`) checked
+straight into git. `envshield service discover` already looks for this
+shape automatically (alongside a handful of other common config-module
+paths) and sets it up for you; to do it by hand, override `local_file` per
+service and EnvShield reads and writes it as source, not as a dotenv file:
+
+```yaml
+services:
+  athena:
+    path: athena/env.schema.toml
+    local_file: athena/config/env_config.local.py
+```
+
+```bash
+envshield import athena/config/env_config.local.py --service athena
+envshield schema sync --service athena   # appends any missing schema vars as `KEY = "..."` -- never rewrites the file
+envshield setup --service athena         # prompts only for vars that are still blank or missing, patches them in place
+```
+
+Both commands only ever append or patch the specific lines they own --
+existing values, comments, imports, and any other logic in the file
+(conditionals, etc.) are left completely untouched.
 
 ---
 
@@ -170,6 +226,15 @@ envshield import .env                 # Reads your current .env
 #   - Default values extracted
 envshield import --interactive        # Confirm each classification
 ```
+
+Classification understands frontend "intentionally public" naming
+conventions too -- `NEXT_PUBLIC_*`, `VITE_*`, `REACT_APP_*`, `NUXT_PUBLIC_*`,
+`GATSBY_*`, and dotenvx's `DOTENV_PUBLIC_KEY` are never treated as secrets
+just because their name contains "key" or "token": these values are
+inlined straight into the client-side bundle by design (a Stripe
+*publishable* key is meant to be public). A real secret-shaped value under
+one of these names still gets flagged -- only the naming convention's
+false positive is suppressed.
 
 ### ✅ Typed, Validated Config Code
 Stop using `os.getenv()`. Generate real, importable config modules:

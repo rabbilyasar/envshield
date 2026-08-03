@@ -207,3 +207,96 @@ def test_init_force_flag_with_confirmation(mocker, tmp_path):
             content = f.read()
             # The default name is the directory name, which is a random temp dir name
             assert "project_name: old_project" not in content
+
+
+def _write_two_service_project():
+    os.makedirs("athena")
+    os.makedirs("hermes")
+    with open(CONFIG_FILE_NAME, "w") as f:
+        f.write(
+            "services:\n"
+            "  athena:\n"
+            "    path: athena/env.schema.toml\n"
+            "  hermes:\n"
+            "    path: hermes/env.schema.toml\n"
+        )
+    with open("athena/env.schema.toml", "w") as f:
+        f.write('[API_KEY]\ndescription="Athena key"\nsecret=true\n')
+    with open("hermes/env.schema.toml", "w") as f:
+        f.write('[DB_URL]\ndescription="Hermes DB"\nsecret=true\n')
+
+
+def test_schema_sync_without_service_prompts_and_runs_for_all_services(mocker, tmp_path):
+    """
+    Regression: omitting --service on a multi-service project used to
+    silently sync a single root-level '.env.example', ignoring every
+    configured service. It must now offer 'All services' and, when chosen,
+    sync each one into its own directory.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_two_service_project()
+        mocker.patch(
+            "questionary.select"
+        ).return_value.ask.return_value = "All services"
+
+        result = runner.invoke(app, ["schema", "sync"])
+
+        assert result.exit_code == 0
+        assert "── athena ──" in result.stdout
+        assert "── hermes ──" in result.stdout
+        assert os.path.exists("athena/.env.example")
+        assert os.path.exists("hermes/.env.example")
+        assert not os.path.exists(".env.example")
+
+
+def test_schema_sync_without_service_auto_selects_the_only_service(mocker, tmp_path):
+    """With only one service configured, there's nothing to choose -- it's used automatically, no prompt."""
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.makedirs("athena")
+        with open(CONFIG_FILE_NAME, "w") as f:
+            f.write("services:\n  athena:\n    path: athena/env.schema.toml\n")
+        with open("athena/env.schema.toml", "w") as f:
+            f.write('[API_KEY]\ndescription="x"\nsecret=true\n')
+        mock_select = mocker.patch("questionary.select")
+
+        result = runner.invoke(app, ["schema", "sync"])
+
+        assert result.exit_code == 0
+        mock_select.assert_not_called()
+        assert os.path.exists("athena/.env.example")
+
+
+def test_doctor_without_service_runs_for_all_services(mocker, tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_two_service_project()
+        with open("athena/.env", "w") as f:
+            f.write("API_KEY=abc\n")
+        with open("hermes/.env", "w") as f:
+            f.write("DB_URL=postgres://x\n")
+        mocker.patch(
+            "questionary.select"
+        ).return_value.ask.return_value = "All services"
+
+        result = runner.invoke(app, ["doctor"])
+
+        assert "── athena ──" in result.stdout
+        assert "── hermes ──" in result.stdout
+
+
+def test_check_without_service_runs_for_all_services(mocker, tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_two_service_project()
+        with open("athena/.env", "w") as f:
+            f.write("API_KEY=abc\n")
+        with open("hermes/.env", "w") as f:
+            f.write("DB_URL=postgres://x\n")
+        mocker.patch(
+            "questionary.select"
+        ).return_value.ask.return_value = "All services"
+
+        result = runner.invoke(app, ["check"])
+
+        assert result.exit_code == 0
+        assert "── athena ──" in result.stdout
+        assert "── hermes ──" in result.stdout
+        assert "perfectly in sync" in result.stdout

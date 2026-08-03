@@ -14,9 +14,13 @@ from ..parsers.factory import get_parser
 # are scanned one level deeper than everything else.
 SERVICE_CONTAINER_DIRNAMES = {"services", "apps", "packages"}
 
-# Dotenv-style local files to look for directly inside a candidate
-# directory, in preference order.
-DOTENV_CANDIDATES = [".env", ".env.local", ".env.development", ".env.dev"]
+# Dotenv filenames that are a checked-in *template* (blank/example values),
+# not a real per-developer or per-deploy file. Real projects name these
+# very differently (dotenv-rails' '.env.example', dotenvx's '.env.example',
+# Rust/Go projects' '.env.dist', etc.) -- checked separately from, and only
+# after, a real dotenv file, since a template's values aren't safe to treat
+# as this service's actual current config.
+DOTENV_TEMPLATE_NAMES = {".env.example", ".env.sample", ".env.template", ".env.dist"}
 
 # Python config modules to look for, in preference order. Checked only when
 # no dotenv file was found -- a plain "config as code" module is the other
@@ -51,29 +55,86 @@ def _looks_like_python_config_module(path: str) -> bool:
     return len(upper_names) >= MIN_CONFIG_VARS
 
 
+def _find_real_dotenv_file(service_dir: str) -> Optional[str]:
+    """
+    Finds the best real (non-template) dotenv-style file directly inside
+    `service_dir`, preferring '.env' itself, then a '.local' variant, then
+    any other '.env.*' file found.
+
+    A short fixed list of names ('.env.development', '.env.dev', ...) badly
+    undercounts what real projects actually commit: Rails/Mastodon's
+    production convention is `.env.production`; Nx's per-target convention
+    is `.env.<target>.<configuration>` (e.g. `.env.serve.development`);
+    Vite/CRA add their own tiers on top. Matching any '.env.*' file (short
+    of an outright template -- see DOTENV_TEMPLATE_NAMES) covers all of
+    these without needing to enumerate every framework's naming scheme.
+    """
+    exact = os.path.join(service_dir, ".env")
+    if os.path.isfile(exact):
+        return exact
+
+    try:
+        entries = sorted(os.listdir(service_dir))
+    except OSError:
+        return None
+
+    candidates = [
+        os.path.join(service_dir, name)
+        for name in entries
+        if name.startswith(".env.")
+        and name not in DOTENV_TEMPLATE_NAMES
+        and os.path.isfile(os.path.join(service_dir, name))
+    ]
+    for candidate in candidates:
+        if candidate.endswith(".local"):
+            return candidate
+    return candidates[0] if candidates else None
+
+
+def _find_dotenv_template(service_dir: str) -> Optional[str]:
+    """Finds a checked-in dotenv template, for when no real local file exists yet."""
+    for name in (".env.example", ".env.sample", ".env.template", ".env.dist"):
+        candidate = os.path.join(service_dir, name)
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
 def detect_env_style(service_dir: str) -> Dict[str, Optional[str]]:
     """
     Looks inside `service_dir` for how it manages environment variables.
 
-    Returns {"format": "dotenv" | "python" | None, "local_file": path or None}.
-    `local_file` is only populated when it needs to differ from the default
-    ('<service_dir>/.env') -- i.e. for the python format, or when the
-    dotenv file found isn't literally named '.env'.
+    Returns {"format": "dotenv" | "python" | None, "local_file": path or
+    None, "example_file": path or None}. `local_file`/`example_file` are
+    only populated when they need to differ from the defaults
+    ('<service_dir>/.env' / '<service_dir>/.env.example') -- i.e. for the
+    python format, when the real dotenv file found isn't literally named
+    '.env', or when only a template was found under a non-standard name.
     """
-    for name in DOTENV_CANDIDATES:
-        candidate = os.path.join(service_dir, name)
-        if os.path.isfile(candidate):
-            return {
-                "format": "dotenv",
-                "local_file": None if name == ".env" else candidate,
-            }
+    real_file = _find_real_dotenv_file(service_dir)
+    if real_file:
+        return {
+            "format": "dotenv",
+            "local_file": None if os.path.basename(real_file) == ".env" else real_file,
+            "example_file": None,
+        }
+
+    template_file = _find_dotenv_template(service_dir)
+    if template_file:
+        return {
+            "format": "dotenv",
+            "local_file": None,
+            "example_file": (
+                None if os.path.basename(template_file) == ".env.example" else template_file
+            ),
+        }
 
     for rel_path in PYTHON_CONFIG_CANDIDATES:
         candidate = os.path.join(service_dir, rel_path)
         if os.path.isfile(candidate) and _looks_like_python_config_module(candidate):
-            return {"format": "python", "local_file": candidate}
+            return {"format": "python", "local_file": candidate, "example_file": None}
 
-    return {"format": None, "local_file": None}
+    return {"format": None, "local_file": None, "example_file": None}
 
 
 def _candidate_dirs(root: str) -> List[str]:
@@ -129,7 +190,7 @@ def discover_candidates(
     NOT enough by itself: a shared library package is exactly as likely to
     have one of those as a real service is, and has no env vars of its own.
 
-    Returns a list of dicts: {name, dir, project_type, format, local_file}.
+    Returns a list of dicts: {name, dir, project_type, format, local_file, example_file}.
     """
     known_dirs_norm = {os.path.normpath(d) for d in (known_dirs or [])}
     candidates = []
@@ -160,6 +221,7 @@ def discover_candidates(
                 "project_type": inspector.detect_project_type(service_dir),
                 "format": env_style["format"],
                 "local_file": env_style["local_file"],
+                "example_file": env_style["example_file"],
             }
         )
 

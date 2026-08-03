@@ -68,8 +68,12 @@ SECRET_PATTERNS: List[Dict[str, str]] = [
     {"name": "Mailchimp API Key", "pattern": r"\b[0-9a-f]{32}-us[0-9]{1,2}\b"},
     {"name": "Mailgun API Key", "pattern": r"\bkey-[0-9a-zA-Z]{32}\b"},
     {
-        "name": "Stripe API Key",
-        "pattern": r"\b(sk|pk)_(test|live)_[0-9a-zA-Z]{24,99}\b",
+        # Only the 'sk_' (secret) prefix -- 'pk_' is Stripe's *publishable*
+        # key, explicitly meant to ship in client-side code (e.g. a
+        # NEXT_PUBLIC_/VITE_-prefixed var). Flagging it as a secret was a
+        # false positive on exactly the values that are supposed to be public.
+        "name": "Stripe Secret Key",
+        "pattern": r"\bsk_(test|live)_[0-9a-zA-Z]{24,99}\b",
     },
     {
         "name": "Heroku API Key",

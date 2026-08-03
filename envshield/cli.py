@@ -635,7 +635,8 @@ def service_discover(
     table.add_column("Format", style="magenta")
     table.add_column("Config File", style="white")
     for c in candidates:
-        table.add_row(c["name"], c["dir"], c["format"], c["local_file"] or "(default .env)")
+        config_file_display = c["local_file"] or c["example_file"] or "(default .env)"
+        table.add_row(c["name"], c["dir"], c["format"], config_file_display)
     console.print(table)
 
     if yes:
@@ -661,12 +662,17 @@ def service_discover(
 
     for c in selected:
         schema_path = os.path.join(c["dir"], config_manager.SCHEMA_FILE_NAME)
-        config_manager.add_service(c["name"], schema_path, local_file=c["local_file"])
+        config_manager.add_service(
+            c["name"], schema_path, local_file=c["local_file"], example_file=c["example_file"]
+        )
         console.print(
             f"[bold green]✓[/bold green] Registered [bold cyan]{c['name']}[/bold cyan] → {schema_path}"
         )
 
-        config_file = c["local_file"] or os.path.join(c["dir"], ".env")
+        # Seed from whichever real signal was actually found: the local
+        # file if one exists, else a template (blank values, but still
+        # documents every var name) if that's all there was.
+        config_file = c["local_file"] or c["example_file"] or os.path.join(c["dir"], ".env")
         if os.path.exists(config_file) and not os.path.exists(schema_path):
             _seed_schema_from_file(config_file, schema_path)
             console.print(f"    seeded schema from [dim]{config_file}[/dim]")

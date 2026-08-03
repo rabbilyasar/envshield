@@ -155,6 +155,82 @@ def test_scan_staged_does_not_flag_secret_removed_before_staging(tmp_path):
         assert "No issues found" in result.stdout
 
 
+def test_scan_without_service_resolves_schema_per_service_directory(tmp_path):
+    """
+    Regression: on a multi-service project, `scan` without --service used to
+    look for a single root 'env.schema.toml' that was never there (each
+    service has its own), so it silently gave up on the undeclared-variable
+    check entirely -- flagging nothing, including genuinely undeclared vars.
+    This is exactly the mode the pre-commit hook runs in (`scan --staged`,
+    no --service), so it was doing nothing useful for a project like this
+    at all. Each service's own directory must now be checked against that
+    service's own schema.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.makedirs("athena")
+        os.makedirs("hermes")
+        with open("envshield.yml", "w") as f:
+            f.write(
+                "services:\n"
+                "  athena:\n"
+                "    path: athena/env.schema.toml\n"
+                "  hermes:\n"
+                "    path: hermes/env.schema.toml\n"
+            )
+        with open("athena/env.schema.toml", "w") as f:
+            f.write('[ATHENA_VAR]\ndescription="x"\n')
+        with open("hermes/env.schema.toml", "w") as f:
+            f.write('[HERMES_VAR]\ndescription="x"\n')
+
+        with open("athena/app.py", "w") as f:
+            f.write(
+                "import os\n\n"
+                "a = os.environ.get('ATHENA_VAR')\n"  # declared in athena's own schema
+                "b = os.environ.get('ATHENA_UNDECLARED')\n"  # genuinely undeclared
+            )
+        with open("hermes/app.py", "w") as f:
+            f.write(
+                "import os\n\n"
+                "c = os.environ.get('HERMES_VAR')\n"  # declared in hermes's own schema
+            )
+
+        result = runner.invoke(app, ["scan"])
+
+        assert result.exit_code == 1
+        assert "Found 1 undeclared variable(s)!" in result.stdout
+        assert "ATHENA_UNDECLARED" in result.stdout
+        # Declared-in-its-own-service vars must not be flagged just because
+        # they aren't in the *other* service's schema.
+        assert "ATHENA_VAR" not in result.stdout.split("Undeclared Variable Usage")[-1]
+        assert "HERMES_VAR" not in result.stdout.split("Undeclared Variable Usage")[-1]
+
+
+def test_scan_with_explicit_service_still_checks_a_single_schema_for_every_file(tmp_path):
+    """Passing --service explicitly keeps the original single-target behavior, even on a multi-service project."""
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.makedirs("athena")
+        os.makedirs("hermes")
+        with open("envshield.yml", "w") as f:
+            f.write(
+                "services:\n"
+                "  athena:\n"
+                "    path: athena/env.schema.toml\n"
+                "  hermes:\n"
+                "    path: hermes/env.schema.toml\n"
+            )
+        with open("athena/env.schema.toml", "w") as f:
+            f.write('[ATHENA_VAR]\ndescription="x"\n')
+        with open("hermes/env.schema.toml", "w") as f:
+            f.write('[HERMES_VAR]\ndescription="x"\n')
+        with open("hermes/app.py", "w") as f:
+            f.write("import os\n\nc = os.environ.get('HERMES_VAR')\n")
+
+        result = runner.invoke(app, ["scan", "hermes", "--service", "athena"])
+
+        assert result.exit_code == 1
+        assert "HERMES_VAR" in result.stdout
+
+
 def test_scan_gracefully_handles_missing_schema_file(tmp_path):
     """
     Edge Case: Tests that the scanner finds undeclared variables and fails,
