@@ -226,8 +226,14 @@ def run_scan(
     staged_only: bool,
     config_path: Optional[str],
     exclude_patterns: Optional[List[str]],
+    service_name: Optional[str] = None,
 ):
-    """The main function to orchestrate the scanning process."""
+    """
+    The main function to orchestrate the scanning process.
+
+    If `service_name` is provided, scans for variables against that service's schema.
+    Otherwise, scans against the root schema.
+    """
     all_exclusions = []
     try:
         config = config_manager.load_config(config_path)
@@ -240,7 +246,7 @@ def run_scan(
         all_exclusions.extend(exclude_patterns)
 
     try:
-        schema = config_manager.load_schema()
+        schema = config_manager.load_schema(service_name=service_name)
         schema_vars = set(schema.keys())
         console.print("[dim]Schema loaded for compliance check.[/dim]")
     except EnvShieldException:

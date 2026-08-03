@@ -10,7 +10,14 @@ from rich.panel import Panel
 from envshield.core import importer
 
 from .config import manager as config_manager
-from .core import schema_manager, scanner, doctor, inspector, setup_manager, generator
+from .core import (
+    schema_manager,
+    scanner,
+    doctor,
+    inspector,
+    setup_manager,
+    generator,
+)
 from .core.exceptions import EnvShieldException
 
 # --- Main App Setup ---
@@ -118,10 +125,16 @@ def init(
 @app.command()
 def check(
     file: str = typer.Argument(".env", help="The local environment file to validate."),
+    service: Optional[str] = typer.Option(
+        None,
+        "--service",
+        "-s",
+        help="If set, validate against this service's schema (for multi-service projects).",
+    ),
 ):
     """Validates a local environment file against the schema."""
     try:
-        is_in_sync = schema_manager.check_schema(file)
+        is_in_sync = schema_manager.check_schema(file, service_name=service)
         if not is_in_sync:
             raise typer.Exit(code=1)
     except EnvShieldException as e:
@@ -136,10 +149,16 @@ def doctor_command(
         "--fix",
         help="Interactively attempt to fix any issues that are found.",
     ),
+    service: Optional[str] = typer.Option(
+        None,
+        "--service",
+        "-s",
+        help="If set, check health of this service (for multi-service projects).",
+    ),
 ):
     """Runs a full health check on your project's EnvShield setup."""
     try:
-        doctor.run_health_check(fix=fix)
+        doctor.run_health_check(fix=fix, service_name=service)
     except EnvShieldException as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(code=1)
@@ -150,10 +169,16 @@ def setup(
     output_file: str = typer.Argument(
         ".env", help="The name of the local environment file to create."
     ),
+    service: Optional[str] = typer.Option(
+        None,
+        "--service",
+        "-s",
+        help="If set, setup this service's config (for multi-service projects).",
+    ),
 ):
     """Interactively creates a local environment file from .env.example."""
     try:
-        setup_manager.run_setup(output_file)
+        setup_manager.run_setup(output_file, service_name=service)
     except EnvShieldException as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(code=1)
@@ -163,10 +188,17 @@ def setup(
 
 
 @schema_app.command("sync")
-def schema_sync():
+def schema_sync(
+    service: Optional[str] = typer.Option(
+        None,
+        "--service",
+        "-s",
+        help="If set, sync this service's schema (for multi-service projects).",
+    ),
+):
     """Generates a .env.example file from your schema."""
     try:
-        schema_manager.sync_schema()
+        schema_manager.sync_schema(service_name=service)
     except EnvShieldException as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(code=1)
@@ -235,6 +267,12 @@ def generate(
         "-f",
         help="Overwrite the output file if it already exists.",
     ),
+    service: Optional[str] = typer.Option(
+        None,
+        "--service",
+        "-s",
+        help="If set, generate config for this service (for multi-service projects).",
+    ),
 ):
     """Generates a typed, validated config module (pydantic-settings or zod) from your schema."""
     try:
@@ -247,7 +285,7 @@ def generate(
             )
             raise typer.Exit()
 
-        schema = config_manager.load_schema()
+        schema = config_manager.load_schema(service_name=service)
         content = generator.generate_config(schema, lang=resolved_lang)
 
         with open(resolved_output, "w") as f:
@@ -285,6 +323,12 @@ def scan(
         "-e",
         help="Glob patterns to exclude. Can be used multiple times.",
     ),
+    service: Optional[str] = typer.Option(
+        None,
+        "--service",
+        "-s",
+        help="If set, scan against this service's schema (for multi-service projects).",
+    ),
 ):
     """Scans files for hardcoded secrets and undeclared variables."""
     try:
@@ -293,6 +337,7 @@ def scan(
             staged_only=staged,
             config_path=config,
             exclude_patterns=exclude,
+            service_name=service,
         )
     except EnvShieldException as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
@@ -331,9 +376,23 @@ def import_command(
         "--interactive",
         help="Interactively guide you through classifying each variable.",
     ),
+    service: Optional[str] = typer.Option(
+        None,
+        "--service",
+        "-s",
+        help="If set, import to this service's schema path (for multi-service projects).",
+    ),
 ):
     """Generates an env.schema.toml from an existing .env file."""
     try:
+        # If service is specified, use that service's schema path
+        if service:
+            resolved_output = config_manager.get_service_schema_path(service)
+            if not resolved_output:
+                console.print(f"[bold red]Error:[/bold red] Service '{service}' not found.")
+                raise typer.Exit(code=1)
+            output = resolved_output
+
         if os.path.exists(output) and not force and not interactive:
             console.print(
                 f"[bold yellow]Warning:[/] Output file '{output}' already exists. Use --force to overwrite."

@@ -4,7 +4,7 @@
 import datetime
 import os
 import re
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import questionary
 from rich.console import Console
@@ -29,12 +29,13 @@ def _is_secret_key(key: str) -> bool:
     return key_contains_secret_keyword(key)
 
 
-def run_setup(output_file: str = ".env"):
+def run_setup(output_file: str = ".env", service_name: Optional[str] = None):
     """
     Guides a user through creating their local env file from .env.example.
 
     Args:
         output_file: The name of the file to create (e.g., '.env' or '.env.local').
+        service_name: If provided, setup this service's config (for multi-service projects).
     """
     console.print(
         Panel(
@@ -62,7 +63,7 @@ def run_setup(output_file: str = ".env"):
     # Load the schema so we can use its authoritative 'secret' flag and
     # descriptions during prompting, instead of re-guessing from the key name.
     try:
-        schema = config_manager.load_schema()
+        schema = config_manager.load_schema(service_name=service_name)
     except EnvShieldException:
         schema = {}
 

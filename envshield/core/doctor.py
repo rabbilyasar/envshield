@@ -137,9 +137,12 @@ def _check_git_hook():
     return True, "Pre-commit hook is installed and active."
 
 
-def run_health_check(fix: bool):
+def run_health_check(fix: bool, service_name: Optional[str] = None):
     """
     Runs a suite of health checks on the project's EnvShield setup.
+
+    If `service_name` is provided, checks that specific service's setup.
+    Otherwise, checks the root setup.
     """
     console.print("\n[bold cyan]🛡️  Running EnvShield Health Check...[/bold cyan]")
 

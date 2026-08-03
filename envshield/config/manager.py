@@ -33,20 +33,66 @@ def load_config(path: Optional[str] = None) -> Dict[str, Any]:
         raise
 
 
-def load_schema() -> Dict[str, Any]:
+def load_schema(service_name: Optional[str] = None) -> Dict[str, Any]:
     """
     Loads and parses the env.schema.toml file.
+
+    If `service_name` is provided, loads the schema for that specific service
+    (from envshield.yml's `services` section). Otherwise, loads the root schema.
+
+    This enables multi-service projects: each service has its own contract.
     """
-    if not os.path.exists(SCHEMA_FILE_NAME):
-        raise SchemaNotFoundError()
+    schema_path = SCHEMA_FILE_NAME
+    if service_name:
+        schema_path = get_service_schema_path(service_name)
+        if not schema_path:
+            raise SchemaNotFoundError(
+                f"Service '{service_name}' not found in configuration."
+            )
+
+    if not os.path.exists(schema_path):
+        raise SchemaNotFoundError(f"Schema file not found: {schema_path}")
     try:
-        with open(SCHEMA_FILE_NAME, "r") as f:
+        with open(schema_path, "r") as f:
             return toml.load(f)
     except toml.TomlDecodeError as e:
         console.print(
-            f"[bold red]Error:[/bold red] Failed to parse {SCHEMA_FILE_NAME}: {e}"
+            f"[bold red]Error:[/bold red] Failed to parse {schema_path}: {e}"
         )
         raise
+
+
+def get_services() -> Dict[str, Dict[str, Any]]:
+    """
+    Returns the services defined in envshield.yml, or an empty dict if none.
+
+    Example return value:
+    {
+        "api": {"path": "services/api/env.schema.toml", "description": "Backend API"},
+        "web": {"path": "services/web/env.schema.toml", "description": "Frontend"},
+    }
+    """
+    config = load_config()
+    return config.get("services", {})
+
+
+def get_service_schema_path(service_name: str) -> Optional[str]:
+    """
+    Returns the schema path for a given service, or None if the service
+    doesn't exist.
+    """
+    services = get_services()
+    if service_name not in services:
+        return None
+    service_config = services[service_name]
+    if isinstance(service_config, dict) and "path" in service_config:
+        return service_config["path"]
+    return None
+
+
+def is_multi_service() -> bool:
+    """Returns True if the project has multiple services configured."""
+    return len(get_services()) > 0
 
 
 def generate_default_config_content(project_name: str) -> str:

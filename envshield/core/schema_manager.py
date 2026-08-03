@@ -1,5 +1,7 @@
 # envshield/core/schema_manager.py
 import datetime
+from typing import Optional
+
 from rich.console import Console
 from rich.table import Table
 
@@ -9,10 +11,13 @@ from envshield.parsers.factory import get_parser
 console = Console()
 
 
-def check_schema(file_path: str) -> bool:
+def check_schema(file_path: str, service_name: Optional[str] = None) -> bool:
     """
     Validates a local environment file against the env.schema.toml,
     intelligently handling variables with default values.
+
+    If `service_name` is provided, validates against that service's schema.
+    Otherwise, validates against the root schema.
 
     Returns:
         True if the local file is in sync with the schema, False otherwise
@@ -23,7 +28,7 @@ def check_schema(file_path: str) -> bool:
     )
 
     # Load the schema and the local .env file
-    schema = config_manager.load_schema()
+    schema = config_manager.load_schema(service_name=service_name)
     parser = get_parser(file_path)
 
     if not parser:
@@ -74,12 +79,15 @@ def check_schema(file_path: str) -> bool:
     return False
 
 
-def sync_schema():
+def sync_schema(service_name: Optional[str] = None):
     """
     Generates a .env.example from the env.schema.toml.
+
+    If `service_name` is provided, generates from that service's schema.
+    Otherwise, generates from the root schema.
     """
     console.print("\n[bold]Generating [cyan].env.example[/cyan] from schema...[/bold]")
-    schema = config_manager.load_schema()
+    schema = config_manager.load_schema(service_name=service_name)
     output_file = ".env.example"
 
     header = (
