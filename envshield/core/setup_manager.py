@@ -13,7 +13,9 @@ from rich.prompt import Prompt
 
 from .importer import key_contains_secret_keyword
 from .exceptions import EnvShieldException
+from . import file_updater
 from ..config import manager as config_manager
+from ..parsers.factory import get_parser
 
 console = Console()
 EXAMPLE_FILE = ".env.example"
@@ -29,36 +31,52 @@ def _is_secret_key(key: str) -> bool:
     return key_contains_secret_keyword(key)
 
 
-def run_setup(output_file: str = ".env", service_name: Optional[str] = None):
+def _read_seed_values(example_file: str, local_file: str) -> Dict[str, str]:
     """
-    Guides a user through creating their local env file from .env.example.
+    Determines each variable's starting value: whatever the project's local
+    file already has (if it exists -- e.g. a new dev re-running setup, or a
+    Python module like zeus's `env_config.local.py` that's checked into git
+    with working values already), falling back to the tracked template
+    (`.env.example`) when the local file doesn't exist yet at all.
+    """
+    for candidate in (local_file, example_file):
+        if not os.path.exists(candidate):
+            continue
+        parser = get_parser(candidate)
+        if not parser:
+            continue
+        try:
+            return parser.get_vars(candidate, get_values=True)
+        except FileNotFoundError:
+            continue
+    return {}
+
+
+def run_setup(output_file: Optional[str] = None, service_name: Optional[str] = None):
+    """
+    Guides a new developer through creating (or completing) their local
+    environment config, driven by the project's schema.
 
     Args:
-        output_file: The name of the file to create (e.g., '.env' or '.env.local').
-        service_name: If provided, setup this service's config (for multi-service projects).
+        output_file: Explicit path to write to. If omitted, resolves to the
+            project's (or service's) local file -- '.env' by default, or
+            whatever 'local_file' is set to for this service in envshield.yml
+            (see config_manager.get_env_paths).
+        service_name: If provided, sets up this service's config (for
+            multi-service projects).
     """
+    paths = config_manager.get_env_paths(service_name=service_name)
+    example_file = paths["example_file"]
+    local_file = output_file or paths["local_file"]
+    is_python_target = local_file.endswith(".py")
+
     console.print(
         Panel(
-            f"[bold cyan]Welcome to EnvShield Setup[/bold cyan]\n\nThis wizard will help you create your local [magenta]{output_file}[/magenta] file.",
+            f"[bold cyan]Welcome to EnvShield Setup[/bold cyan]\n\nThis wizard will help you set up your local [magenta]{local_file}[/magenta] file.",
             title="✨ Local Setup ✨",
             border_style="green",
         )
     )
-
-    # Step 1: Check for prerequisites
-    if not os.path.exists(EXAMPLE_FILE):
-        raise EnvShieldException(
-            f"'{EXAMPLE_FILE}' not found. Please run 'envshield schema sync' first to generate it."
-        )
-
-    if os.path.exists(output_file):
-        overwrite = questionary.confirm(
-            f"A '{output_file}' file already exists. Do you want to overwrite it?",
-            default=False,
-        ).ask()
-        if not overwrite:
-            console.print("[yellow]Setup cancelled.[/yellow]")
-            return
 
     # Load the schema so we can use its authoritative 'secret' flag and
     # descriptions during prompting, instead of re-guessing from the key name.
@@ -67,38 +85,56 @@ def run_setup(output_file: str = ".env", service_name: Optional[str] = None):
     except EnvShieldException:
         schema = {}
 
-    # Step 2: Parse the example file
-    console.print(
-        f"\n[bold]Reading variables from [cyan]{EXAMPLE_FILE}[/cyan]...[/bold]"
-    )
-    vars_to_prompt: List[str] = []
-    final_vars: Dict[str, str] = {}
+    seed_values = _read_seed_values(example_file, local_file)
 
-    try:
-        with open(EXAMPLE_FILE, "r") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                if "=" in line:
-                    key, value = line.split("=", 1)
-                    key = key.strip()
-                    value = value.strip()
-                    if not value:
-                        vars_to_prompt.append(key)
-                    else:
-                        final_vars[key] = value
-    except IOError as e:
-        raise EnvShieldException(f"Could not read '{EXAMPLE_FILE}': {e}")
+    if not schema and not seed_values:
+        if is_python_target:
+            raise EnvShieldException(
+                f"'{local_file}' not found, and no schema exists to generate one from. "
+                "Run 'envshield import' or 'envshield schema sync' first."
+            )
+        raise EnvShieldException(
+            f"'{example_file}' not found. Please run 'envshield schema sync' first to generate it."
+        )
 
-    # Step 3: Prompt for empty variables
-    if not vars_to_prompt:
+    # A full rewrite only makes sense for a pure generated artifact (dotenv).
+    # A Python module may hold real logic beyond simple assignments, so it's
+    # only ever patched in place -- see the write step below -- and never
+    # needs an "overwrite?" confirmation.
+    if not is_python_target and os.path.exists(local_file):
+        overwrite = questionary.confirm(
+            f"A '{local_file}' file already exists. Do you want to overwrite it?",
+            default=False,
+        ).ask()
+        if not overwrite:
+            console.print("[yellow]Setup cancelled.[/yellow]")
+            return
+
+    # Step 1: Work out which variables already have a usable value (from the
+    # local file, the template, or the schema's own default), and which still
+    # need to be asked for. Schema vars come first (they're the contract);
+    # any extra vars already present locally are carried over untouched.
+    final_vars: Dict[str, str] = dict(seed_values)
+    keys_to_prompt: List[str] = []
+    all_keys = list(schema.keys()) + [k for k in seed_values if k not in schema]
+
+    for key in all_keys:
+        if final_vars.get(key):
+            continue
+        field_schema = schema.get(key, {})
+        if "defaultValue" in field_schema:
+            final_vars[key] = field_schema["defaultValue"]
+            continue
+        keys_to_prompt.append(key)
+
+    # Step 2: Prompt for whatever's still missing
+    if not keys_to_prompt:
         console.print("[green]✓ No empty variables found to configure.[/green]")
     else:
         console.print(
             "\n[bold]Please provide values for the following variables:[/bold]"
         )
-        for key in vars_to_prompt:
+        for key in keys_to_prompt:
             field_schema = schema.get(key, {})
             description = field_schema.get("description")
             if description and not description.startswith("TODO"):
@@ -115,9 +151,20 @@ def run_setup(output_file: str = ".env", service_name: Optional[str] = None):
             )
             final_vars[key] = new_value
 
-    # Step 4: Write the new .env file
+    # Step 3: Write the result
+    if is_python_target:
+        _write_python_local_file(local_file, final_vars, keys_to_prompt)
+    else:
+        _write_dotenv_local_file(local_file, final_vars)
+
+
+def _write_dotenv_local_file(local_file: str, final_vars: Dict[str, str]) -> None:
+    """Fully regenerates a dotenv-style local file -- safe, since it's a plain generated artifact."""
     try:
-        with open(output_file, "w") as f:
+        output_dir = os.path.dirname(local_file)
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+        with open(local_file, "w") as f:
             f.write(
                 f"# Auto-generated by 'envshield setup' on {datetime.datetime.now().strftime('%Y-%m-%d')}\n\n"
             )
@@ -131,7 +178,51 @@ def run_setup(output_file: str = ".env", service_name: Optional[str] = None):
                 else:
                     f.write(f"{key}={value}\n")
         console.print(
-            f"\n[bold green]✓ Successfully created your [magenta]{output_file}[/magenta] file![/bold green]"
+            f"\n[bold green]✓ Successfully created your [magenta]{local_file}[/magenta] file![/bold green]"
         )
     except IOError as e:
-        raise EnvShieldException(f"Could not write to '{output_file}': {e}")
+        raise EnvShieldException(f"Could not write to '{local_file}': {e}")
+
+
+def _write_python_local_file(
+    local_file: str, final_vars: Dict[str, str], prompted_keys: List[str]
+) -> None:
+    """
+    Creates a fresh Python-module local file, or -- if one already exists --
+    patches only what changed: newly-prompted values, plus any schema
+    variable that isn't declared in the file at all yet (even if it was
+    silently filled from a schema default rather than prompted). Everything
+    else already in the file is left completely untouched.
+    """
+    if not os.path.exists(local_file):
+        try:
+            output_dir = os.path.dirname(local_file)
+            if output_dir:
+                os.makedirs(output_dir, exist_ok=True)
+            with open(local_file, "w") as f:
+                f.write(
+                    f"# Auto-generated by 'envshield setup' on {datetime.datetime.now().strftime('%Y-%m-%d')}\n\n"
+                )
+                for key, value in final_vars.items():
+                    f.write(f"{key} = {value!r}\n")
+            console.print(
+                f"\n[bold green]✓ Successfully created your [magenta]{local_file}[/magenta] file![/bold green]"
+            )
+        except IOError as e:
+            raise EnvShieldException(f"Could not write to '{local_file}': {e}")
+        return
+
+    parser = get_parser(local_file)
+    existing_keys = parser.get_vars(local_file) if parser else set()
+    keys_needing_write = set(prompted_keys) | (set(final_vars.keys()) - existing_keys)
+
+    if not keys_needing_write:
+        console.print(f"[green]✓ '{local_file}' already has values for every variable.[/green]")
+        return
+
+    updates = [{"key": key, "value": final_vars[key]} for key in keys_needing_write]
+    file_updater.update_variables_in_file(local_file, updates)
+    console.print(
+        f"\n[bold green]✓ Updated [magenta]{local_file}[/magenta] with {len(updates)} value(s): "
+        f"{', '.join(sorted(keys_needing_write))}[/bold green]"
+    )

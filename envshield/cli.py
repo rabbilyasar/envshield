@@ -6,6 +6,7 @@ import questionary
 import typer
 from rich.console import Console
 from rich.panel import Panel
+from rich.table import Table
 
 from envshield.core import importer
 
@@ -16,6 +17,8 @@ from .core import (
     doctor,
     inspector,
     setup_manager,
+    service_manager,
+    service_discovery,
     generator,
 )
 from .core.exceptions import EnvShieldException
@@ -32,6 +35,27 @@ schema_app = typer.Typer(
     name="schema", help="Check and sync your environment schema.", no_args_is_help=True
 )
 app.add_typer(schema_app, name="schema")
+service_app = typer.Typer(
+    name="service",
+    help="Discover, add, and list services for a multi-service project.",
+    no_args_is_help=True,
+)
+app.add_typer(service_app, name="service")
+
+
+def _seed_schema_from_file(config_file: str, schema_path: str) -> None:
+    """Writes a schema at `schema_path` generated from `config_file`'s real values, unless one already exists there."""
+    if os.path.exists(schema_path):
+        return
+    content = importer.generate_schema_from_file(config_file)
+    with open(schema_path, "w") as f:
+        f.write(content)
+
+
+def _print_service_header(targets: List[Optional[str]], target: Optional[str]) -> None:
+    """Labels each service's output when a command is running against more than one."""
+    if len(targets) > 1:
+        console.print(f"\n[bold underline]── {target} ──[/bold underline]")
 
 
 # --- Commands ---
@@ -124,7 +148,10 @@ def init(
 
 @app.command()
 def check(
-    file: str = typer.Argument(".env", help="The local environment file to validate."),
+    file: Optional[str] = typer.Argument(
+        None,
+        help="The local environment file to validate. Defaults to the project's (or service's) local file.",
+    ),
     service: Optional[str] = typer.Option(
         None,
         "--service",
@@ -134,11 +161,31 @@ def check(
 ):
     """Validates a local environment file against the schema."""
     try:
-        is_in_sync = schema_manager.check_schema(file, service_name=service)
-        if not is_in_sync:
-            raise typer.Exit(code=1)
+        targets = service_manager.resolve_targets(service)
     except EnvShieldException as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
+        raise typer.Exit(code=1)
+
+    # An explicit file only makes sense for a single target -- it can't
+    # apply to every service's own local file at once.
+    if len(targets) > 1 and file:
+        console.print(
+            "[yellow]Ignoring the explicit file argument -- each service's own local file is checked when validating multiple services.[/yellow]"
+        )
+        file = None
+
+    had_error = False
+    for target in targets:
+        _print_service_header(targets, target)
+        try:
+            resolved_file = file or config_manager.get_env_paths(service_name=target)["local_file"]
+            if not schema_manager.check_schema(resolved_file, service_name=target):
+                had_error = True
+        except EnvShieldException as e:
+            console.print(f"[bold red]Error:[/bold red] {e}")
+            had_error = True
+
+    if had_error:
         raise typer.Exit(code=1)
 
 
@@ -158,16 +205,32 @@ def doctor_command(
 ):
     """Runs a full health check on your project's EnvShield setup."""
     try:
-        doctor.run_health_check(fix=fix, service_name=service)
+        targets = service_manager.resolve_targets(service)
     except EnvShieldException as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
+        raise typer.Exit(code=1)
+
+    had_error = False
+    for target in targets:
+        _print_service_header(targets, target)
+        try:
+            doctor.run_health_check(fix=fix, service_name=target)
+        except typer.Exit as e:
+            if e.exit_code:
+                had_error = True
+        except EnvShieldException as e:
+            console.print(f"[bold red]Error:[/bold red] {e}")
+            had_error = True
+
+    if had_error:
         raise typer.Exit(code=1)
 
 
 @app.command()
 def setup(
-    output_file: str = typer.Argument(
-        ".env", help="The name of the local environment file to create."
+    output_file: Optional[str] = typer.Argument(
+        None,
+        help="The name of the local environment file to create. Defaults to the project's (or service's) local file.",
     ),
     service: Optional[str] = typer.Option(
         None,
@@ -176,9 +239,25 @@ def setup(
         help="If set, setup this service's config (for multi-service projects).",
     ),
 ):
-    """Interactively creates a local environment file from .env.example."""
+    """Interactively creates (or completes) a local environment file from the schema."""
     try:
-        setup_manager.run_setup(output_file, service_name=service)
+        targets = service_manager.resolve_targets(service)
+    except EnvShieldException as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
+        raise typer.Exit(code=1)
+
+    # An explicit output file only makes sense for a single target -- it
+    # can't apply to every service's own local file at once.
+    if len(targets) > 1 and output_file:
+        console.print(
+            "[yellow]Ignoring the explicit output file argument -- each service uses its own local file when setting up multiple services.[/yellow]"
+        )
+        output_file = None
+
+    try:
+        for target in targets:
+            _print_service_header(targets, target)
+            setup_manager.run_setup(output_file, service_name=target)
     except EnvShieldException as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(code=1)
@@ -196,11 +275,23 @@ def schema_sync(
         help="If set, sync this service's schema (for multi-service projects).",
     ),
 ):
-    """Generates a .env.example file from your schema."""
+    """Generates/updates the environment template from your schema."""
     try:
-        schema_manager.sync_schema(service_name=service)
+        targets = service_manager.resolve_targets(service)
     except EnvShieldException as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
+        raise typer.Exit(code=1)
+
+    had_error = False
+    for target in targets:
+        _print_service_header(targets, target)
+        try:
+            schema_manager.sync_schema(service_name=target)
+        except EnvShieldException as e:
+            console.print(f"[bold red]Error:[/bold red] {e}")
+            had_error = True
+
+    if had_error:
         raise typer.Exit(code=1)
 
 
@@ -415,10 +506,169 @@ def import_command(
         console.print(
             f"\nSuccessfully generated schema at [bold cyan]{output}[/bold cyan]"
         )
-
     except EnvShieldException as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(code=1)
     except (KeyboardInterrupt, TypeError):
         console.print("\n[yellow]Import cancelled by user.[/yellow]")
         raise typer.Exit()
+
+
+@service_app.command("list")
+def service_list():
+    """Lists the services currently configured in envshield.yml."""
+    services = config_manager.get_services()
+    if not services:
+        console.print(
+            "[yellow]No services configured -- this is a single-service/root project.[/yellow]"
+        )
+        return
+
+    table = Table(title="Configured Services")
+    table.add_column("Name", style="cyan")
+    table.add_column("Schema", style="white")
+    table.add_column("Local File", style="white")
+    for name in sorted(services.keys()):
+        paths = config_manager.get_env_paths(service_name=name)
+        schema_path = config_manager.get_service_schema_path(name)
+        table.add_row(name, schema_path or "-", paths["local_file"])
+    console.print(table)
+
+
+@service_app.command("add")
+def service_add(
+    name: str = typer.Argument(
+        ..., help="Name for the service (used everywhere else via --service)."
+    ),
+    directory: str = typer.Argument(..., help="The service's own directory."),
+    local_file: Optional[str] = typer.Option(
+        None,
+        "--local-file",
+        help="Override the local env file path -- required when it isn't a dotenv file, e.g. a Python config module.",
+    ),
+    example_file: Optional[str] = typer.Option(
+        None, "--example-file", help="Override the tracked template file path."
+    ),
+    description: Optional[str] = typer.Option(
+        None, "--description", "-d", help="Optional description for this service."
+    ),
+    schema: Optional[str] = typer.Option(
+        None,
+        "--schema",
+        help="Path to the schema file. Defaults to '<directory>/env.schema.toml'.",
+    ),
+    import_from: Optional[str] = typer.Option(
+        None,
+        "--import",
+        help="If given, seed the new service's schema from this existing config file (same as running 'envshield import').",
+    ),
+):
+    """Registers one service in envshield.yml by hand, creating the file if needed."""
+    try:
+        schema_path = schema or os.path.join(directory, config_manager.SCHEMA_FILE_NAME)
+        config_manager.add_service(
+            name,
+            schema_path,
+            local_file=local_file,
+            example_file=example_file,
+            description=description,
+        )
+        console.print(
+            f"[bold green]✓[/bold green] Registered service [bold cyan]{name}[/bold cyan] → {schema_path}"
+        )
+
+        if import_from:
+            if os.path.exists(schema_path):
+                console.print(
+                    f"[yellow]'{schema_path}' already exists -- not overwriting. "
+                    f"Run 'envshield import {import_from} --service {name} --force' to regenerate it.[/yellow]"
+                )
+            else:
+                _seed_schema_from_file(import_from, schema_path)
+                console.print(
+                    f"[bold green]✓[/bold green] Seeded schema from [bold cyan]{import_from}[/bold cyan]"
+                )
+    except EnvShieldException as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
+        raise typer.Exit(code=1)
+
+
+@service_app.command("discover")
+def service_discover(
+    root: str = typer.Argument(
+        ".", help="Directory to scan for service-like subdirectories."
+    ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Register every discovered service without an interactive confirmation (for scripting/CI).",
+    ),
+):
+    """
+    Scans for service-like directories not already configured -- a
+    directory with a dotenv file, or a recognizable Python config module --
+    and offers to register them in envshield.yml, seeding each one's schema
+    from its real, current config where one was found.
+
+    Bootstraps a fresh envshield.yml if none exists yet, or extends an
+    existing one with whatever's new -- already-configured services are
+    never touched.
+    """
+    try:
+        known_dirs = [
+            config_manager.get_service_dir(name)
+            for name in config_manager.get_services().keys()
+        ]
+        candidates = service_discovery.discover_candidates(root, known_dirs=known_dirs)
+    except EnvShieldException as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
+        raise typer.Exit(code=1)
+
+    if not candidates:
+        console.print("[green]No new service-like directories found.[/green]")
+        return
+
+    table = Table(title="Discovered Services")
+    table.add_column("Name", style="cyan")
+    table.add_column("Directory", style="white")
+    table.add_column("Format", style="magenta")
+    table.add_column("Config File", style="white")
+    for c in candidates:
+        table.add_row(c["name"], c["dir"], c["format"], c["local_file"] or "(default .env)")
+    console.print(table)
+
+    if yes:
+        selected_names = [c["name"] for c in candidates]
+    else:
+        selected_names = questionary.checkbox(
+            "Add these services to envshield.yml? (seeds each schema from its real config where found)",
+            choices=[
+                questionary.Choice(
+                    f"{c['name']}  ({c['dir']}, {c['format']})", value=c["name"], checked=True
+                )
+                for c in candidates
+            ],
+        ).ask()
+        if selected_names is None:
+            console.print("[yellow]Cancelled.[/yellow]")
+            raise typer.Exit()
+
+    selected = [c for c in candidates if c["name"] in selected_names]
+    if not selected:
+        console.print("[yellow]Nothing selected.[/yellow]")
+        return
+
+    for c in selected:
+        schema_path = os.path.join(c["dir"], config_manager.SCHEMA_FILE_NAME)
+        config_manager.add_service(c["name"], schema_path, local_file=c["local_file"])
+        console.print(
+            f"[bold green]✓[/bold green] Registered [bold cyan]{c['name']}[/bold cyan] → {schema_path}"
+        )
+
+        config_file = c["local_file"] or os.path.join(c["dir"], ".env")
+        if os.path.exists(config_file) and not os.path.exists(schema_path):
+            _seed_schema_from_file(config_file, schema_path)
+            console.print(f"    seeded schema from [dim]{config_file}[/dim]")
+
+    console.print(f"\n[bold green]✨ Added {len(selected)} service(s) to envshield.yml.[/bold green]")

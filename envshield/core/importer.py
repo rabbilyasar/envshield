@@ -15,15 +15,6 @@ console = Console()
 
 # Heuristics for smarter import
 SECRET_KEY_KEYWORDS = ["secret", "token", "password", "key", "auth", "credential"]
-COMMON_NON_SECRETS = {
-    "DEBUG": ["true", "false"],
-    "LOG_LEVEL": ["info", "debug", "warning", "error", "critical"],
-    "ENV": ["development", "staging", "production", "test"],
-    "FLASK_ENV": ["development", "production"],
-    "APP_ENV": ["development", "staging", "production"],
-    "PORT": None,  # Indicates any numeric value is a default
-    "HOST": ["localhost", "0.0.0.0", "127.0.0.1"],
-}
 
 
 def key_contains_secret_keyword(key: str, keywords=SECRET_KEY_KEYWORDS) -> bool:
@@ -54,15 +45,19 @@ def _classify_variable(key: str, value: str) -> Tuple[bool, Any]:
     if key_contains_secret_keyword(key):
         return True, None
 
-    # 3. Check for common non-secret patterns that are good candidates for default values
-    if key in COMMON_NON_SECRETS:
-        allowed_values = COMMON_NON_SECRETS[key]
-        if allowed_values is None and value.isdigit():
-            return False, value  # For PORT etc.
-        if allowed_values and value.lower() in allowed_values:
-            return False, value
+    # 3. Anything else with a concrete value already sitting in the source
+    # file is worth suggesting as the default -- it's already committed (or
+    # already on this developer's disk) and isn't keyword-flagged as a
+    # secret, so carrying it forward as a schema default doesn't expose
+    # anything new. This used to be limited to a small hardcoded whitelist
+    # of variable names (DEBUG, LOG_LEVEL, PORT, HOST, ...), which missed
+    # every project-specific non-secret var -- e.g. a Flask app's
+    # `DB_NAME = "athena"` or `CACHE_PORT = 6379` got no suggested default
+    # at all, just because the name wasn't on the list.
+    if value:
+        return False, value
 
-    # 4. Default classification
+    # 4. Blank value, no other signal: genuinely undetermined.
     return False, None
 
 

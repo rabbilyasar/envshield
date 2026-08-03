@@ -1,6 +1,6 @@
 # envshield/core/doctor.py
 import os
-from typing import List
+from typing import List, Optional
 
 import questionary
 import typer
@@ -43,13 +43,21 @@ class HealthCheck:
             console.print(f"[bold green]✓ {self.description}[/bold green]")
 
 
-def _check_config_files():
+def _check_config_files(service_name: Optional[str] = None):
     config_exists = os.path.exists(config_manager.CONFIG_FILE_NAME)
-    schema_exists = os.path.exists(config_manager.SCHEMA_FILE_NAME)
+
+    if service_name:
+        schema_path = config_manager.get_service_schema_path(service_name)
+        schema_exists = bool(schema_path) and os.path.exists(schema_path)
+        schema_label = schema_path or f"schema for service '{service_name}'"
+    else:
+        schema_exists = os.path.exists(config_manager.SCHEMA_FILE_NAME)
+        schema_label = config_manager.SCHEMA_FILE_NAME
+
     if not config_exists and not schema_exists:
         return (
             False,
-            f"Neither '{config_manager.CONFIG_FILE_NAME}' nor '{config_manager.SCHEMA_FILE_NAME}' found.",
+            f"Neither '{config_manager.CONFIG_FILE_NAME}' nor '{schema_label}' found.",
         )
     if not config_exists:
         return (
@@ -57,28 +65,28 @@ def _check_config_files():
             f"Configuration file '{config_manager.CONFIG_FILE_NAME}' not found.",
         )
     if not schema_exists:
-        return False, f"Schema file '{config_manager.SCHEMA_FILE_NAME}' not found."
+        return False, f"Schema file '{schema_label}' not found."
     return True, "Found and accessible."
 
 
-def _check_local_env_sync():
+def _check_local_env_sync(service_name: Optional[str] = None):
     try:
-        schema = config_manager.load_schema()
+        schema = config_manager.load_schema(service_name=service_name)
         schema_vars = set(schema.keys())
-        local_file = ".env"
+        local_file = config_manager.get_env_paths(service_name=service_name)["local_file"]
         if not os.path.exists(local_file):
             return False, f"Local env file '{local_file}' not found."
 
         parser = get_parser(local_file)
         if not parser:
-            return False, "Cannot parse local env file."
+            return False, f"Cannot parse local env file '{local_file}'."
         local_vars = parser.get_vars(local_file)
 
         missing = schema_vars - local_vars
         extra = local_vars - schema_vars
 
         if not missing and not extra:
-            return True, "Local '.env' is in sync with schema."
+            return True, f"'{local_file}' is in sync with schema."
 
         messages = []
         if missing:
@@ -91,31 +99,41 @@ def _check_local_env_sync():
         return False, "Could not load schema to perform check."
 
 
-def _check_example_file_sync():
+def _check_example_file_sync(service_name: Optional[str] = None):
     try:
-        schema = config_manager.load_schema()
+        schema = config_manager.load_schema(service_name=service_name)
     except EnvShieldException:
         return False, "Could not load schema to perform sync check."
 
-    if not os.path.exists(".env.example"):
-        return False, "'.env.example' file is missing."
+    paths = config_manager.get_env_paths(service_name=service_name)
+    local_file = paths["local_file"]
+    example_file = paths["example_file"]
+
+    # A Python-module local file (e.g. zeus's env_config.local.py) has no
+    # separate tracked template -- it IS the contract. 'Local Environment
+    # Sync' already checks it declares every schema variable.
+    if local_file.endswith(".py"):
+        return True, f"'{local_file}' has no separate template file (see 'Local Environment Sync')."
+
+    if not os.path.exists(example_file):
+        return False, f"'{example_file}' file is missing."
 
     schema_vars = set(schema.keys())
-    parser = get_parser(".env.example")
+    parser = get_parser(example_file)
     if not parser:
-        return False, "Cannot parse '.env.example'."
-    example_vars = parser.get_vars(".env.example")
+        return False, f"Cannot parse '{example_file}'."
+    example_vars = parser.get_vars(example_file)
 
     missing = schema_vars - example_vars
     extra = example_vars - schema_vars
     if not missing and not extra:
-        return True, "'.env.example' is in sync with schema."
+        return True, f"'{example_file}' is in sync with schema."
 
     messages = []
     if missing:
-        messages.append(f"Missing from '.env.example': {', '.join(missing)}")
+        messages.append(f"Missing from '{example_file}': {', '.join(missing)}")
     if extra:
-        messages.append(f"Extra in '.env.example': {', '.join(extra)}")
+        messages.append(f"Extra in '{example_file}': {', '.join(extra)}")
     return False, "; ".join(messages)
 
 
@@ -149,16 +167,20 @@ def run_health_check(fix: bool, service_name: Optional[str] = None):
     checks: List[HealthCheck] = [
         HealthCheck(
             "Configuration Files",
-            _check_config_files,
+            lambda: _check_config_files(service_name),
             fix_func=lambda: os.system("envshield init"),
             fix_description="No config found. Run 'envshield init' to create them?",
         ),
-        HealthCheck("Local Environment Sync", _check_local_env_sync, fix_func=None),
         HealthCheck(
-            "Example File Sync",
-            _check_example_file_sync,
-            fix_func=schema_manager.sync_schema,
-            fix_description="'.env.example' is missing or out of sync. Generate it from the schema?",
+            "Local Environment Sync",
+            lambda: _check_local_env_sync(service_name),
+            fix_func=None,
+        ),
+        HealthCheck(
+            "Template Sync",
+            lambda: _check_example_file_sync(service_name),
+            fix_func=lambda: schema_manager.sync_schema(service_name=service_name),
+            fix_description="Template is missing or out of sync. Generate/update it from the schema?",
         ),
         HealthCheck(
             "Git Pre-commit Hook",

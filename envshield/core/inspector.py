@@ -17,13 +17,14 @@ def _find_framework_in_list(dependencies: List[str]) -> Optional[str]:
     return None
 
 
-def _check_pyproject_toml() -> Optional[str]:
+def _check_pyproject_toml(directory: str) -> Optional[str]:
     """Parses pyproject.toml to find a framework."""
-    if not os.path.exists("pyproject.toml"):
+    path = os.path.join(directory, "pyproject.toml")
+    if not os.path.exists(path):
         return None
 
     try:
-        with open("pyproject.toml", "r") as f:
+        with open(path, "r") as f:
             data = toml.load(f)
 
         dependencies = data.get("project", {}).get("dependencies", [])
@@ -43,13 +44,14 @@ def _check_pyproject_toml() -> Optional[str]:
     return "python"
 
 
-def _check_requirements_txt() -> Optional[str]:
+def _check_requirements_txt(directory: str) -> Optional[str]:
     """Parses requirements.txt to find a framework."""
-    if not os.path.exists("requirements.txt"):
+    path = os.path.join(directory, "requirements.txt")
+    if not os.path.exists(path):
         return None
 
     try:
-        with open("requirements.txt", "r") as f:
+        with open(path, "r") as f:
             dependencies = f.readlines()
 
         framework = _find_framework_in_list(dependencies)
@@ -61,14 +63,20 @@ def _check_requirements_txt() -> Optional[str]:
     return "python"
 
 
-def detect_project_type() -> Optional[str]:
+def detect_project_type(directory: str = ".") -> Optional[str]:
     """
     Detects the project type by looking for marker files and their content.
+
+    `directory` defaults to the current directory (EnvShield's original,
+    single-project behavior), but can be any path -- used by service
+    discovery to identify each candidate service's own framework from its
+    own directory, rather than the repo root's.
     """
     # Check for Node.js projects
-    if os.path.exists("package.json"):
+    package_json_path = os.path.join(directory, "package.json")
+    if os.path.exists(package_json_path):
         try:
-            with open("package.json", "r") as f:
+            with open(package_json_path, "r") as f:
                 lines = [line for line in f if not line.strip().startswith("//")]
                 content = "".join(lines)
                 data = json.loads(content)
@@ -84,16 +92,16 @@ def detect_project_type() -> Optional[str]:
             return "nodejs"
 
     # Check for Python projects with specific frameworks
-    framework = _check_pyproject_toml()
+    framework = _check_pyproject_toml(directory)
     if framework:
         return framework
 
-    framework = _check_requirements_txt()
+    framework = _check_requirements_txt(directory)
     if framework:
         return framework
 
     # Check for Go projects
-    if os.path.exists("go.mod"):
+    if os.path.exists(os.path.join(directory, "go.mod")):
         return "go"
 
     return None

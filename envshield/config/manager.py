@@ -95,6 +95,102 @@ def is_multi_service() -> bool:
     return len(get_services()) > 0
 
 
+def add_service(
+    name: str,
+    schema_path: str,
+    local_file: Optional[str] = None,
+    example_file: Optional[str] = None,
+    description: Optional[str] = None,
+) -> None:
+    """
+    Adds (or overwrites) one service entry in envshield.yml, creating the
+    file if it doesn't exist yet. Every other top-level key and every other
+    already-configured service is left untouched -- this is what makes
+    `envshield service discover`/`add` safe to run repeatedly to extend an
+    existing multi-service setup, not just bootstrap a fresh one.
+
+    Note: envshield.yml is rewritten via a full YAML re-serialization, so
+    any hand-written comments in an existing file won't survive.
+    """
+    config = load_config()
+    services = config.get("services")
+    if not isinstance(services, dict):
+        services = {}
+    config["services"] = services
+
+    entry: Dict[str, Any] = {"path": schema_path}
+    if description:
+        entry["description"] = description
+    if local_file:
+        entry["local_file"] = local_file
+    if example_file:
+        entry["example_file"] = example_file
+    services[name] = entry
+
+    with open(CONFIG_FILE_NAME, "w") as f:
+        yaml.dump(config, f, sort_keys=False, indent=2)
+
+
+def get_service_dir(service_name: str) -> str:
+    """
+    Returns the directory a service's schema lives in -- treated throughout
+    EnvShield as that service's root (e.g. 'athena' for a schema at
+    'athena/env.schema.toml'). Raises SchemaNotFoundError if the service
+    isn't declared in envshield.yml.
+    """
+    schema_path = get_service_schema_path(service_name)
+    if not schema_path:
+        raise SchemaNotFoundError(
+            f"Service '{service_name}' not found in configuration."
+        )
+    return os.path.dirname(schema_path) or "."
+
+
+def get_env_paths(service_name: Optional[str] = None) -> Dict[str, str]:
+    """
+    Resolves the 'template' (tracked, e.g. '.env.example') and 'local' (real,
+    per-developer, e.g. '.env') environment file paths for a project or service.
+
+    For a single-service project these default to '.env.example' / '.env' in
+    the current directory -- EnvShield's original behaviour. For a service
+    declared in envshield.yml, they default to the same filenames inside that
+    service's own directory (the directory its schema lives in), so sibling
+    services in a monorepo don't collide on one shared root-level file.
+
+    Either can be overridden per-service via 'example_file' / 'local_file' in
+    envshield.yml. An override is required whenever the local config isn't a
+    dotenv file at all -- e.g. a Python module such as `env_config.local.py`
+    in a Flask project. EnvShield picks its reader/writer by the file's
+    extension (see parsers.factory.get_parser), so a '.py' override is enough
+    to make 'schema sync' and 'setup' treat it as source code instead of a
+    dotenv file: they patch/append plain assignments in place rather than
+    regenerating the file wholesale.
+    """
+    service_dir = "."
+    service_config: Dict[str, Any] = {}
+
+    if service_name:
+        service_dir = get_service_dir(service_name)
+        raw_config = get_services().get(service_name)
+        if isinstance(raw_config, dict):
+            service_config = raw_config
+
+    def _resolve(override_key: str, default_name: str) -> str:
+        override = service_config.get(override_key)
+        if override:
+            return override
+        return (
+            default_name
+            if service_dir == "."
+            else os.path.join(service_dir, default_name)
+        )
+
+    return {
+        "example_file": _resolve("example_file", ".env.example"),
+        "local_file": _resolve("local_file", ".env"),
+    }
+
+
 def generate_default_config_content(project_name: str) -> str:
     """
     Generates the YAML content for a default envshield.yml configuration file.

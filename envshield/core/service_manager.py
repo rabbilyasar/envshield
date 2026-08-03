@@ -1,14 +1,17 @@
 # envshield/core/service_manager.py
 # Helpers for multi-service projects.
 
-from typing import List, Optional
+from typing import List, Optional, Union
 
 import questionary
 from rich.console import Console
 
 from ..config import manager as config_manager
+from .exceptions import EnvShieldException
 
 console = Console()
+
+ALL_SERVICES_CHOICE = "All services"
 
 
 def get_available_services() -> List[str]:
@@ -19,18 +22,20 @@ def get_available_services() -> List[str]:
 
 def resolve_service(
     service_name: Optional[str] = None, allow_multiple: bool = False
-) -> Optional[str] | List[str]:
+) -> Union[Optional[str], List[str]]:
     """
-    Resolves which service(s) to operate on.
+    Resolves which service(s) a command should operate on.
 
     If `service_name` is provided, validates it exists and returns it.
-    If None and there's only one service, returns that service.
-    If None and multiple services, prompts the user to pick one (or all if allowed).
+    If None and there's only one service, returns that service automatically.
+    If None and multiple services are configured, interactively prompts the
+    user to pick one (or, if `allow_multiple`, all of them at once).
 
     Returns:
         - A single service name (str)
-        - A list of service names (if allow_multiple=True and user selects multiple)
-        - None if no services are configured (single-service project)
+        - A list of every configured service name (if `allow_multiple=True`
+          and the user picks "All services")
+        - None if no services are configured (single-service/root project)
     """
     available = get_available_services()
 
@@ -41,26 +46,40 @@ def resolve_service(
     # User explicitly specified a service
     if service_name:
         if service_name not in available:
-            raise ValueError(f"Service '{service_name}' not found. Available: {', '.join(available)}")
+            raise EnvShieldException(
+                f"Service '{service_name}' not found. Available: {', '.join(available)}"
+            )
         return service_name
 
     # Only one service: select it automatically
     if len(available) == 1:
         return available[0]
 
-    # Multiple services: prompt the user
-    choices = available + (["All services"] if allow_multiple else [])
+    # Multiple services, none specified: prompt the user
+    choices = available + ([ALL_SERVICES_CHOICE] if allow_multiple else [])
     selected = questionary.select(
         "Which service?",
         choices=choices,
     ).ask()
 
-    if selected == "All services":
+    if selected is None:
+        raise EnvShieldException("No service selected.")
+
+    if selected == ALL_SERVICES_CHOICE:
         return available
 
     return selected
 
 
-def prompt_for_services(default_all: bool = False) -> Optional[str] | List[str]:
-    """Prompts user to select one or more services. Returns None for single-service projects."""
-    return resolve_service(allow_multiple=True)
+def resolve_targets(service_name: Optional[str] = None) -> List[Optional[str]]:
+    """
+    Resolves --service into the list of service_name targets a command should
+    run against. A single-service/root project, an explicit service, or one
+    auto-selected because it's the only one configured all yield a single
+    target; picking "All services" (see resolve_service) yields every
+    configured service. Always returns a list, so callers can loop
+    unconditionally instead of branching on the return type of
+    `resolve_service`.
+    """
+    resolved = resolve_service(service_name, allow_multiple=True)
+    return resolved if isinstance(resolved, list) else [resolved]

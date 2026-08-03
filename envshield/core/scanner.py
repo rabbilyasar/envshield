@@ -221,6 +221,81 @@ def _filter_files(files: List[str], exclude_patterns: List[str]) -> List[str]:
     return final_files
 
 
+def _normalize_for_dir_match(file_path: str) -> str:
+    """Best-effort normalization to a cwd-relative path, for comparing a scanned file against a service directory."""
+    if os.path.isabs(file_path):
+        try:
+            file_path = os.path.relpath(file_path, os.getcwd())
+        except ValueError:
+            pass
+    return os.path.normpath(file_path)
+
+
+def _build_undeclared_var_resolver(service_name: Optional[str]):
+    """
+    Returns a function mapping a scanned file path to the schema variable
+    set it should be checked against for undeclared-variable detection --
+    or None if there's no schema at all to check against.
+
+    An explicit `service_name` (or a single-service/root project) checks
+    every file against that one schema -- unchanged, single-target
+    behavior.
+
+    Otherwise, for a multi-service project scanned without --service, each
+    configured service's own schema is matched against files under that
+    service's own directory (the directory its schema lives in) -- a file
+    under 'athena/' is checked against athena's schema, not hermes's.
+    Files outside every service's directory fall back to the root schema,
+    if one exists. Without this, running the pre-commit hook's plain
+    `envshield scan --staged` (no --service) on a multi-service project
+    would look for a root 'env.schema.toml' that was never there, and
+    silently skip the undeclared-variable check for every service.
+    """
+    if service_name or not config_manager.is_multi_service():
+        try:
+            schema_vars = set(config_manager.load_schema(service_name=service_name).keys())
+            console.print("[dim]Schema loaded for compliance check.[/dim]")
+        except EnvShieldException:
+            console.print(
+                "[yellow]Warning: Schema not found. Skipping undeclared variable check.[/yellow]"
+            )
+            return None
+        return lambda _file_path: schema_vars
+
+    service_dirs = []
+    for name in sorted(config_manager.get_services().keys()):
+        try:
+            service_dir = _normalize_for_dir_match(config_manager.get_service_dir(name))
+            schema_vars = set(config_manager.load_schema(service_name=name).keys())
+        except EnvShieldException:
+            continue
+        service_dirs.append((service_dir, schema_vars))
+    # Longest directory first, so a nested service dir wins over a shorter sibling.
+    service_dirs.sort(key=lambda item: len(item[0]), reverse=True)
+
+    try:
+        root_vars = set(config_manager.load_schema().keys())
+    except EnvShieldException:
+        root_vars = set()
+
+    if not service_dirs and not root_vars:
+        console.print(
+            "[yellow]Warning: No schema found for any configured service. Skipping undeclared variable check.[/yellow]"
+        )
+        return None
+
+    console.print("[dim]Per-service schemas loaded for compliance check.[/dim]")
+
+    def _resolve(file_path: str) -> set:
+        normalized = _normalize_for_dir_match(file_path)
+        for service_dir, schema_vars in service_dirs:
+            if normalized == service_dir or normalized.startswith(service_dir + os.sep):
+                return schema_vars
+        return root_vars
+
+    return _resolve
+
+
 def run_scan(
     paths: Optional[List[str]],
     staged_only: bool,
@@ -232,7 +307,8 @@ def run_scan(
     The main function to orchestrate the scanning process.
 
     If `service_name` is provided, scans for variables against that service's schema.
-    Otherwise, scans against the root schema.
+    Otherwise, on a multi-service project, each file is checked against
+    whichever service's schema its directory belongs to.
     """
     all_exclusions = []
     try:
@@ -245,15 +321,7 @@ def run_scan(
     if exclude_patterns:
         all_exclusions.extend(exclude_patterns)
 
-    try:
-        schema = config_manager.load_schema(service_name=service_name)
-        schema_vars = set(schema.keys())
-        console.print("[dim]Schema loaded for compliance check.[/dim]")
-    except EnvShieldException:
-        schema_vars = set()
-        console.print(
-            "[yellow]Warning: Schema not found. Skipping undeclared variable check.[/yellow]"
-        )
+    schema_resolver = _build_undeclared_var_resolver(service_name)
 
     files_to_scan = _collect_files_to_scan(paths, staged_only)
     final_files_to_scan = _filter_files(files_to_scan, all_exclusions)
@@ -273,6 +341,8 @@ def run_scan(
             progress.update(
                 scan_task, description=os.path.basename(file_path), advance=1
             )
+
+            schema_vars = schema_resolver(file_path) if schema_resolver else set()
 
             if staged_only:
                 # Scan what's actually staged in the index, not the working-tree
