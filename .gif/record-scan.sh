@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# record-scan.sh - Record scan.gif demo
+# record-scan.sh - Record scan.gif demo (with pauses)
 
 set -e
 
@@ -39,14 +39,24 @@ EOF
 # Show the problematic code
 clear
 echo "$ cat app.py"
+sleep 1
 cat app.py
+sleep 3
 
+echo ""
+echo "❌ Scanning for secrets and undeclared variables..."
 echo ""
 echo "$ envshield scan"
+sleep 2
 envshield scan || true
+sleep 3
 
 echo ""
+echo "✅ Fixing the issues..."
+echo ""
 echo "$ cat app.py  # (after fixing)"
+sleep 1
+
 cat > app.py << 'EOF'
 import os
 
@@ -55,7 +65,10 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 EOF
 
 cat app.py
+sleep 2
 
 echo ""
 echo "$ envshield scan"
+sleep 2
 envshield scan
+sleep 2

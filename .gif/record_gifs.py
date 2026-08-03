@@ -65,12 +65,13 @@ def record_gif(script_name: str, gif_name: str):
         ]
         subprocess.run(cmd, env=env, check=True)
 
-        # Convert to GIF
-        print("🎨 Converting to GIF...")
+        # Convert to GIF with slower playback (0.7x speed = slower)
+        print("🎨 Converting to GIF (slowed for readability)...")
         cmd = [
             "agg",
             str(cast_path),
-            str(gif_path)
+            str(gif_path),
+            "--speed", "0.7"  # Slow down to 70% speed (30% slower)
         ]
         subprocess.run(cmd, check=True)
 

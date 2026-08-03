@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# record-setup.sh - Record setup.gif demo
+# record-setup.sh - Record setup.gif demo (with pauses for readability)
 
 set -e
 
@@ -26,15 +26,24 @@ EOF
 
 # Sync to create .env.example
 envshield schema sync
+sleep 1
 
 # Show initial state
 clear
 echo "$ ls -la"
 ls -la
+sleep 2
+
+echo ""
+echo "$ cat env.schema.toml"
+sleep 1
+head -15 env.schema.toml
+sleep 2
 
 echo ""
 echo "$ envshield setup"
 echo ""
+sleep 2
 
 # Create responses file
 cat > responses.txt << 'EOF'
@@ -45,12 +54,17 @@ EOF
 
 # Pipe responses to setup
 cat responses.txt | envshield setup
+sleep 3
 
 # Show the created .env
 echo ""
 echo "$ cat .env"
+sleep 1
 cat .env
+sleep 2
 
 echo ""
 echo "$ envshield check .env"
+sleep 1
 envshield check .env
+sleep 2

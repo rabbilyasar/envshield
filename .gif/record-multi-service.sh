@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# record-multi-service.sh - Record multi-service.gif demo
+# record-multi-service.sh - Record multi-service.gif demo (with pauses)
 
 set -e
 
@@ -35,25 +35,37 @@ EOF
 # Show the project structure
 clear
 echo "$ cat envshield.yml"
+sleep 1
 cat envshield.yml
+sleep 3
 
 echo ""
 echo "$ envshield import services/api/.env --service api"
+sleep 2
 envshield import services/api/.env --service api
+sleep 2
 
 echo ""
 echo "$ envshield import services/web/.env --service web"
+sleep 2
 envshield import services/web/.env --service web
+sleep 2
 
 # Show both schemas
 echo ""
 echo "$ ls services/*/env.schema.toml"
+sleep 1
 ls services/*/env.schema.toml
+sleep 2
 
 echo ""
 echo "$ envshield scan --service api"
+sleep 1
 envshield scan --service api
+sleep 2
 
 echo ""
 echo "$ envshield scan --service web"
+sleep 1
 envshield scan --service web
+sleep 2

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# record-doctor.sh - Record doctor.gif demo
+# record-doctor.sh - Record doctor.gif demo (with pauses)
 
 set -e
 
@@ -36,24 +36,42 @@ mkdir -p .git/hooks
 # Show initial state
 clear
 echo "$ cat env.schema.toml"
-head -15 env.schema.toml
+sleep 1
+cat env.schema.toml
+sleep 2
 
 echo ""
 echo "$ cat .env.example"
+sleep 1
 cat .env.example
+sleep 2
+
+echo ""
+echo "❌ Notice: NEW_FEATURE_FLAG is in schema but NOT in .env.example"
+sleep 2
 
 echo ""
 echo "$ envshield doctor"
+sleep 2
 envshield doctor
+sleep 3
 
+echo ""
+echo "✅ Running schema sync to fix the drift..."
 echo ""
 echo "$ envshield schema sync"
+sleep 2
 envshield schema sync
+sleep 2
 
 echo ""
 echo "$ cat .env.example"
+sleep 1
 cat .env.example
+sleep 2
 
 echo ""
 echo "$ envshield doctor"
+sleep 1
 envshield doctor
+sleep 2
