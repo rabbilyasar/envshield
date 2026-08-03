@@ -104,6 +104,57 @@ def test_scan_ignores_dependency_and_vcs_dirs_by_default(tmp_path):
         assert "No issues found" in result.stdout
 
 
+def test_scan_staged_scans_index_content_not_working_tree(tmp_path):
+    """
+    Regression (critical): the pre-commit hook (`scan --staged`) must scan
+    what's actually staged in the Git index, not the working-tree copy on
+    disk. Previously it read the file straight off disk, so staging a secret
+    and then editing it out *without re-staging* would let the commit
+    through, even though the secret is still exactly what gets committed.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.system("git init -q")
+        os.system('git config user.email "test@example.com"')
+        os.system('git config user.name "Test"')
+
+        with open("config.py", "w") as f:
+            f.write("STRIPE_KEY = 'sk_live_123456789abcdefghijklmnopqrstuv'\n")
+        os.system("git add config.py")
+
+        # Clean up the secret on disk *without* re-staging the change.
+        with open("config.py", "w") as f:
+            f.write("STRIPE_KEY = os.environ['STRIPE_KEY']\n")
+
+        result = runner.invoke(app, ["scan", "--staged"])
+
+        assert result.exit_code == 1, (
+            "The staged (committed) content still has the secret, even "
+            "though the working-tree copy was cleaned up"
+        )
+        assert "DANGER" in result.stdout
+
+
+def test_scan_staged_does_not_flag_secret_removed_before_staging(tmp_path):
+    """Sanity check: a secret staged and then genuinely fixed *and re-staged* must not be flagged."""
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.system("git init -q")
+        os.system('git config user.email "test@example.com"')
+        os.system('git config user.name "Test"')
+
+        with open("config.py", "w") as f:
+            f.write("STRIPE_KEY = 'sk_live_123456789abcdefghijklmnopqrstuv'\n")
+        os.system("git add config.py")
+
+        with open("config.py", "w") as f:
+            f.write("STRIPE_KEY = os.environ['STRIPE_KEY']\n")
+        os.system("git add config.py")
+
+        result = runner.invoke(app, ["scan", "--staged"])
+
+        assert result.exit_code == 0
+        assert "No issues found" in result.stdout
+
+
 def test_scan_gracefully_handles_missing_schema_file(tmp_path):
     """
     Edge Case: Tests that the scanner finds undeclared variables and fails,

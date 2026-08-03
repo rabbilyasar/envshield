@@ -20,6 +20,9 @@ def test_init_command_in_git_repo(tmp_path):
         assert os.path.exists(".env.example")
         with open(".gitignore", "r") as f:
             content = f.read()
+            # Regression: '.env' itself (the actual secrets file) must be
+            # ignored, not just the '.local' override variants.
+            assert ".env" in content.splitlines()
             assert ".env.local" in content
             assert ".envshield/" in content
         assert os.path.exists(".git/hooks/pre-commit")

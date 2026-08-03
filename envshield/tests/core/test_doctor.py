@@ -3,8 +3,43 @@ from typer.testing import CliRunner
 
 from envshield.cli import app
 from envshield.config.manager import CONFIG_FILE_NAME, SCHEMA_FILE_NAME
+from envshield.core import doctor
 
 runner = CliRunner()
+
+
+def test_check_example_file_sync_detects_drift(tmp_path, monkeypatch):
+    """
+    Regression: this check previously only verified that '.env.example'
+    *exists*, so it reported success even when someone added a variable to
+    the schema and forgot to run 'schema sync' -- exactly the drift scenario
+    doctor exists to catch.
+    """
+    monkeypatch.chdir(tmp_path)
+    with open(SCHEMA_FILE_NAME, "w") as f:
+        f.write(
+            '[FOO]\ndescription="x"\nsecret=false\n\n'
+            '[BAR]\ndescription="y"\nsecret=false\n'
+        )
+    with open(".env.example", "w") as f:
+        f.write("FOO=\n")  # BAR is missing
+
+    passed, message = doctor._check_example_file_sync()
+
+    assert passed is False
+    assert "BAR" in message
+
+
+def test_check_example_file_sync_passes_when_in_sync(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with open(SCHEMA_FILE_NAME, "w") as f:
+        f.write('[FOO]\ndescription="x"\nsecret=false\n')
+    with open(".env.example", "w") as f:
+        f.write("FOO=\n")
+
+    passed, message = doctor._check_example_file_sync()
+
+    assert passed is True
 
 
 def test_doctor_all_ok(mocker, tmp_path):
@@ -46,7 +81,7 @@ def test_doctor_with_issues(mocker, tmp_path):
 
         result = runner.invoke(app, ["doctor"])
 
-        assert result.exit_code == 0
+        assert result.exit_code == 1
         assert "Config missing" in result.stdout
         assert "Example out of sync" in result.stdout
         assert "Some issues were found" in result.stdout
