@@ -121,42 +121,55 @@ def _is_default_excluded_dir(dirname: str) -> bool:
     )
 
 
-def _scan_single_file(file_path: str, schema_vars: set) -> (List[Dict], List[Dict]):
+def _scan_single_file(
+    file_path: str, schema_vars: set, content: Optional[str] = None
+) -> (List[Dict], List[Dict]):
     """
     Helper to scan one file for both secrets and undeclared variables.
     Returns two lists: one for secrets, one for undeclared variables.
+
+    If `content` is provided, it's scanned directly instead of reading the
+    file from disk — used for `--staged` scans, where we must scan what's
+    actually staged in the Git index, not the working-tree copy (which can
+    differ, e.g. if a secret was staged and then edited out without
+    re-staging).
     """
     secret_findings = []
     undeclared_findings = []
 
     try:
-        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-            for line_num, line in enumerate(f, 1):
-                # Check for secrets
-                for secret in SECRET_PATTERNS:
-                    if re.search(secret["pattern"], line):
-                        secret_findings.append(
+        if content is not None:
+            lines = content.splitlines(keepends=True)
+        else:
+            with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                lines = f.readlines()
+
+        for line_num, line in enumerate(lines, 1):
+            # Check for secrets
+            for secret in SECRET_PATTERNS:
+                if re.search(secret["pattern"], line):
+                    secret_findings.append(
+                        {
+                            "file_path": file_path,
+                            "line_num": line_num,
+                            "secret_type": secret["name"],
+                            "line_content": line.strip(),
+                        }
+                    )
+                    break
+
+            # Check for undeclared variables
+            for usage in USAGE_PATTERNS:
+                matches = re.findall(usage["pattern"], line)
+                for var_name in matches:
+                    if var_name not in schema_vars:
+                        undeclared_findings.append(
                             {
                                 "file_path": file_path,
                                 "line_num": line_num,
-                                "secret_type": secret["name"],
-                                "line_content": line.strip(),
+                                "variable_name": var_name,
                             }
                         )
-                        break
-
-                # Check for undeclared variables
-                for usage in USAGE_PATTERNS:
-                    matches = re.findall(usage["pattern"], line)
-                    for var_name in matches:
-                        if var_name not in schema_vars:
-                            undeclared_findings.append(
-                                {
-                                    "file_path": file_path,
-                                    "line_num": line_num,
-                                    "variable_name": var_name,
-                                }
-                            )
 
     except (IOError, OSError):
         return [], []
@@ -254,9 +267,21 @@ def run_scan(
             progress.update(
                 scan_task, description=os.path.basename(file_path), advance=1
             )
-            if os.path.exists(file_path) and os.path.getsize(file_path) > 1_000_000:
-                continue
-            secrets, undeclared = _scan_single_file(file_path, schema_vars)
+
+            if staged_only:
+                # Scan what's actually staged in the index, not the working-tree
+                # copy on disk -- they can differ (see get_staged_file_content).
+                content = git_utils.get_staged_file_content(file_path)
+                if content is None or len(content) > 1_000_000:
+                    continue
+                secrets, undeclared = _scan_single_file(
+                    file_path, schema_vars, content=content
+                )
+            else:
+                if os.path.exists(file_path) and os.path.getsize(file_path) > 1_000_000:
+                    continue
+                secrets, undeclared = _scan_single_file(file_path, schema_vars)
+
             all_secret_findings.extend(secrets)
             all_undeclared_findings.extend(undeclared)
 

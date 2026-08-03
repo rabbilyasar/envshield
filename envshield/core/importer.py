@@ -26,6 +26,18 @@ COMMON_NON_SECRETS = {
 }
 
 
+def key_contains_secret_keyword(key: str, keywords=SECRET_KEY_KEYWORDS) -> bool:
+    """
+    Checks whether any '_'-delimited token in `key` matches a secret keyword.
+
+    Token-based (not substring) matching avoids false positives on compound
+    names that merely *contain* a keyword as a substring -- e.g. MONKEY_PATCH
+    contains "key" and AUTHOR_NAME contains "auth", but neither is a secret.
+    """
+    tokens = key.lower().split("_")
+    return any(keyword in tokens for keyword in keywords)
+
+
 def _classify_variable(key: str, value: str) -> Tuple[bool, Any]:
     """
     Intelligently classifies a variable as a secret and suggests a default value.
@@ -39,10 +51,8 @@ def _classify_variable(key: str, value: str) -> Tuple[bool, Any]:
             return True, None
 
     # 2. Check the key for common secret-indicating keywords
-    key_lower = key.lower()
-    for keyword in SECRET_KEY_KEYWORDS:
-        if keyword in key_lower:
-            return True, None
+    if key_contains_secret_keyword(key):
+        return True, None
 
     # 3. Check for common non-secret patterns that are good candidates for default values
     if key in COMMON_NON_SECRETS:

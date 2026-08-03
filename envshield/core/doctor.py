@@ -3,6 +3,7 @@ import os
 from typing import List
 
 import questionary
+import typer
 from rich.console import Console
 
 from . import schema_manager, scanner
@@ -92,11 +93,30 @@ def _check_local_env_sync():
 
 def _check_example_file_sync():
     try:
-        if not os.path.exists(".env.example"):
-            return False, "'.env.example' file is missing."
-        return True, "'.env.example' exists."
+        schema = config_manager.load_schema()
     except EnvShieldException:
         return False, "Could not load schema to perform sync check."
+
+    if not os.path.exists(".env.example"):
+        return False, "'.env.example' file is missing."
+
+    schema_vars = set(schema.keys())
+    parser = get_parser(".env.example")
+    if not parser:
+        return False, "Cannot parse '.env.example'."
+    example_vars = parser.get_vars(".env.example")
+
+    missing = schema_vars - example_vars
+    extra = example_vars - schema_vars
+    if not missing and not extra:
+        return True, "'.env.example' is in sync with schema."
+
+    messages = []
+    if missing:
+        messages.append(f"Missing from '.env.example': {', '.join(missing)}")
+    if extra:
+        messages.append(f"Extra in '.env.example': {', '.join(extra)}")
+    return False, "; ".join(messages)
 
 
 def _check_git_hook():
@@ -160,3 +180,4 @@ def run_health_check(fix: bool):
         console.print(
             "[bold yellow]Health check complete. Some issues were found.[/bold yellow]"
         )
+        raise typer.Exit(code=1)

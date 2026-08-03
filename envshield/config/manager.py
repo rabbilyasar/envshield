@@ -158,8 +158,11 @@ def generate_default_schema_content(project_type: Optional[str]) -> str:
 
 def update_gitignore():
     """Appends EnvShield patterns to the project's .gitignore file if they don't exist."""
+    # '.env' comes first and matters most: it's the actual secrets file every
+    # other command assumes is never committed. The '.local'/'.envshield'
+    # variants are for per-developer overrides and EnvShield's own state.
     patterns_to_add = [
-        "\n# EnvShield Files\n",
+        ".env",
         ".env.local",
         ".env.*.local",
         ".envshield/",
@@ -171,21 +174,21 @@ def update_gitignore():
             with open(GITIGNORE_FILE_NAME, "r") as f:
                 existing_content = f.read()
 
-        # Use a flag to avoid adding the header if any pattern already exists
-        header_needed = True
-        for pattern in patterns_to_add:
-            if pattern.strip() in existing_content:
-                header_needed = False
-                break
+        # Check each pattern independently -- a project that already has
+        # '.env.local' ignored (e.g. from an older EnvShield version) should
+        # still get '.env' added, not have the whole update skipped.
+        existing_lines = {line.strip() for line in existing_content.splitlines()}
+        missing_patterns = [p for p in patterns_to_add if p not in existing_lines]
 
-        if not header_needed:
+        if not missing_patterns:
             console.print(
                 f"[dim]'{GITIGNORE_FILE_NAME}' already contains EnvShield patterns. Skipping.[/dim]"
             )
             return
 
         with open(GITIGNORE_FILE_NAME, "a") as f:
-            for pattern in patterns_to_add:
+            f.write("\n# EnvShield Files\n")
+            for pattern in missing_patterns:
                 f.write(pattern + "\n")
 
         console.print(

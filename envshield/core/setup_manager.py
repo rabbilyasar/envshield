@@ -11,18 +11,22 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt
 
+from .importer import key_contains_secret_keyword
 from .exceptions import EnvShieldException
+from ..config import manager as config_manager
 
 console = Console()
 EXAMPLE_FILE = ".env.example"
 
 
 def _is_secret_key(key: str) -> bool:
-    """A simple heuristic to determine if a key is likely a secret."""
-    key_lower = key.lower()
-    return any(
-        keyword in key_lower for keyword in ["secret", "token", "key", "password"]
-    )
+    """
+    Fallback heuristic for whether a key is likely a secret, used only when
+    the key isn't declared in env.schema.toml. Whenever the schema declares
+    the variable, its explicit `secret` flag is authoritative -- see
+    run_setup() -- so this never overrides a documented decision.
+    """
+    return key_contains_secret_keyword(key)
 
 
 def run_setup(output_file: str = ".env"):
@@ -54,6 +58,13 @@ def run_setup(output_file: str = ".env"):
         if not overwrite:
             console.print("[yellow]Setup cancelled.[/yellow]")
             return
+
+    # Load the schema so we can use its authoritative 'secret' flag and
+    # descriptions during prompting, instead of re-guessing from the key name.
+    try:
+        schema = config_manager.load_schema()
+    except EnvShieldException:
+        schema = {}
 
     # Step 2: Parse the example file
     console.print(
@@ -87,9 +98,19 @@ def run_setup(output_file: str = ".env"):
             "\n[bold]Please provide values for the following variables:[/bold]"
         )
         for key in vars_to_prompt:
+            field_schema = schema.get(key, {})
+            description = field_schema.get("description")
+            if description and not description.startswith("TODO"):
+                console.print(f"  [dim]{description}[/dim]")
+
+            is_secret = (
+                field_schema["secret"]
+                if "secret" in field_schema
+                else _is_secret_key(key)
+            )
             new_value = Prompt.ask(
                 f"  Please enter the value for [bold cyan]{key}[/bold cyan]",
-                password=_is_secret_key(key),
+                password=is_secret,
             )
             final_vars[key] = new_value
 
