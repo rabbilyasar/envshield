@@ -1,6 +1,4 @@
-
-# EnvShield 🛡️ – The Environment Contract CLI for Python & TypeScript
-
+# EnvShield 🛡️ – Configuration Orchestration for Multi-Service Projects
 
 [![CI](https://github.com/rabbilyasar/envshield/actions/workflows/ci.yml/badge.svg)](https://github.com/rabbilyasar/envshield/actions/workflows/ci.yml)
 [![PyPI version](https://badge.fury.io/py/envshield.svg)](https://pypi.org/project/envshield/)
@@ -9,168 +7,385 @@
 [![Website](https://img.shields.io/badge/Website-envshield.dev-blue?logo=google-chrome&logoColor=white)](https://www.envshield.dev)
 ![Stars](https://img.shields.io/github/stars/rabbilyasar/envshield?style=social)
 
-**EnvShield turns `env.schema.toml` into your project's Environment Contract — one schema that generates your docs, validates every local setup, and compiles into typed, secret-masked config code for Python or TypeScript. It's your caffeine-proof way to avoid the "oops, I just leaked prod keys" nightmare.**
+**Stop managing configuration like it's a secret. Start declaring it like it's code.**
 
-[📚 Full Documentation](https://docs.envshield.dev/)
+EnvShield turns scattered `.env` files and configuration chaos into a single, **versioned contract** (`env.schema.toml`) that every service agrees on. One schema, multiple services, always in sync — with typed config code, automated onboarding, and zero-friction validation.
 
+For teams that have:
+- 🔀 Multiple services in one repo (API + web + worker)
+- 😰 Config drift between local, staging, and production
+- ⏰ Long onboarding where devs spend 2 hours figuring out what env vars they need
+- 🤦 Silent failures because a typo in `os.getenv("DATABSE_URL")` returns `None`
 
-### Table of Contents
+**EnvShield is your answer.**
 
-1. [Why Secure Environment Management Matters](#why-secure-environment-management-matters)
-2. [Key Features of the EnvShield CLI](#key-features-of-the-envshield-cli)
-3. [Installation](#installation)
+[📚 Full Documentation](https://docs.envshield.dev/) | [🌐 Website](https://www.envshield.dev)
 
-4. [The EnvShield Philosophy: Schema-First Configuration](#the-envshield-philosophy-schema-first-configuration)
-5. [CLI Commands](#cli-commands)
+---
 
-6. [Competitor Comparison: Choosing the Right Tool](#competitor-comparison-choosing-the-right-tool)
+## The Problem
 
-7. [The Brains of the Operation: The Core Files](#the-brains-of-the-operation-the-core-files)
+**Configuration is chaos.**
 
-8. [Future Roadmap: Teams & Enterprise](#future-roadmap-teams--enterprise)
+Your project probably looks like this:
+```
+├── .env.example        (2 years out of date)
+├── services/
+│   ├── api/
+│   │   ├── config/env_config.local.py
+│   │   └── app/...
+│   ├── web/
+│   │   ├── .env.example  (missing DATABASE_URL, has dead vars)
+│   │   └── src/...
+│   └── worker/
+│       └── ... (config docs are in a Slack thread)
+```
 
-9. [Community & Support](#community--support)
-10. [TL;DR](#tldr)
+**The pain:**
+- New dev: "What env vars do I need?" → 2 hours of digging
+- Refactoring `DB_HOST` to `DATABASE_HOST` → breaks 3 services before anyone notices
+- `.env.example` drifts from reality → someone commits a secret, doesn't catch it, pushes to prod
+- CI fails because `STRIPE_API_KEY` isn't in the staging secrets — nobody knows if it should be there
+- Adding a new third-party integration → scattered across 5 config files with no central record
 
-## Why Secure Environment Management Matters
+**EnvShield solves this by treating configuration as a contract, not a file.**
 
-Managing `.env` files by copy-pasting them around like a hot potato is fun… until a secret lands in a public repo, or `os.getenv("MAX_RETIRES")` (typo and all) silently returns `None` in production.
-EnvShield solves the “dotenv dumpster fire” by giving you a single **Environment Contract** — `env.schema.toml` — that generates your documentation, validates every local setup, compiles into typed config code, and blocks secrets before they're ever committed. All wrapped in a workflow lazy enough for a 3 a.m. commit.
+---
 
+## The Solution: Configuration as Contract
 
-## Key Features of the EnvShield CLI
+One file, multiple services, single source of truth.
 
-![Demo of EnvShield generate compiling a schema into typed TypeScript config](.gif/generate.gif)
+```bash
+# Single command: read your existing configs
+envshield import services/api/config/env_config.local.py --service api
+envshield import services/web/.env --service web
 
--   **One Environment Contract** – `env.schema.toml` becomes the single source of truth every other command reads from.
+# Now you have a contract
+cat services/api/env.schema.toml
+```
 
--   **Typed Config Generation** – `envshield generate` compiles your schema into real, importable `pydantic-settings` (Python) or `zod` (TypeScript) code — secrets are masked by default (`SecretStr` / `Secret<T>`), everything else is a validated, correctly-typed value instead of a raw string.
+```toml
+[DATABASE_URL]
+description = "PostgreSQL connection string for the API"
+secret = true
 
--   **Open-Source Secret Scanner** – Detects API keys, private keys, and other credentials _before_ you push.
+[API_PORT]
+description = "Port the API listens on (dev: 5000, prod: 8000)"
+secret = false
+defaultValue = "5000"
 
--   **Local Development Workflow** – Automatic `.env.example` syncing and onboarding that even future-you will thank you for.
+[STRIPE_API_KEY]
+description = "Stripe API key for payment processing"
+secret = true
+```
 
--   **Git Pre-commit Hook** – Blocks secret leaks faster than you can say `git push --force`.
+**What this gets you:**
 
--   **Configuration as Code** – Your environment config is version-controlled and documented like real code.
+1. **Typed config code** — Not raw strings, actual validated objects:
+   ```python
+   from config import env
+   
+   db = psycopg2.connect(env.DATABASE_URL)  # Type-checked, SecretStr (won't log)
+   port = env.API_PORT  # Typed as int, validates on startup
+   ```
 
-_(Translation: EnvShield is that overprotective friend who checks the door lock five times so you can sleep.)_
+2. **Sync everything** — All services agree on what config exists:
+   ```bash
+   envshield check services/api/config/.env --service api     # Is API's config valid?
+   envshield scan --staged --service api                      # Are there secrets staged?
+   envshield setup --service api                              # New dev? Interactive setup
+   ```
 
-## Installation
-Requires **Python 3.10+**.
+3. **One source of truth** — Change the contract, everyone sees it:
+   ```bash
+   # Edit services/api/env.schema.toml
+   envshield schema sync --service api    # Regenerates .env.example from the contract
+   envshield doctor --service api         # Health check: is .env.example in sync?
+   ```
+
+---
+
+## Quick Start
+
+### 1. Install
 ```bash
 pip install envshield
-envshield --help
 ```
- Done. Your project is now 72 % less combustible.
 
-## The EnvShield Philosophy: Schema-First Configuration
+### 2. For a single service
+```bash
+cd my-project
+envshield init                    # Create env.schema.toml + .env.example
+envshield setup                   # Interactive setup for new devs
+envshield generate --lang python  # Generate typed config.py (pydantic-settings)
+```
 
-EnvShield's power comes from a simple idea: your configuration should be treated like code. It introduces a single source of truth, the `env.schema.toml` file.
+### 3. For multi-service (the real win)
+```bash
+# At repo root with multiple services
+cat envshield.yml
+```
+```yaml
+project_name: my-platform
+services:
+  api:
+    path: services/api/env.schema.toml
+    description: Backend API
+  web:
+    path: services/web/env.schema.toml
+    description: Frontend
+```
 
-This file is a **"configuration contract"** that explicitly defines every environment variable your project needs. By defining your variables here, you get:
+```bash
+# Now each command is service-aware
+envshield import services/api/.env --service api
+envshield import services/web/.env --service web
+envshield scan --service api              # Scan API's code for undeclared vars
+envshield setup --service web             # Setup web service
+envshield setup                           # "Which service? (api / web / all)"
+```
 
--   **Automated Documentation**: Your `.env.example` is always perfectly in sync with your schema.
--   **Ironclad Validation**: Catch typos and missing variables before you even run your app.
--   **Proactive Security**: A built-in scanner and Git hook **prevent secrets from ever being committed**.
+---
+
+## Key Features
+
+### ✅ One Schema, All Services
+Declare what config each service needs in one place. Multi-service projects finally have a single source of truth.
+
+**Real-life:** Your API added `STRIPE_API_KEY` last month. Did the worker service get it? Web service? With EnvShield, you know instantly.
+
+### ✅ Migrate Existing Projects in Seconds
+`envshield import` reads your actual `.env` or `settings.py` and generates 90% of the schema for you. No manual TOML writing.
+
+```bash
+envshield import .env                 # Reads your current .env
+# → Generates env.schema.toml with:
+#   - All variables auto-detected
+#   - Secrets vs. non-secrets classified
+#   - Default values extracted
+envshield import --interactive        # Confirm each classification
+```
+
+### ✅ Typed, Validated Config Code
+Stop using `os.getenv()`. Generate real, importable config modules:
+
+```python
+# Before (error-prone, untyped)
+from os import getenv
+db_url = getenv("DATABASE_URL")  # str | None, untyped
+api_port = getenv("API_PORT", "5000")  # defaults as strings
+stripe_key = getenv("STRIPE_API_KEY")  # visible in logs if leaked!
+
+# After (type-safe, validated, secret-masked)
+from config import env
+
+db_url = env.DATABASE_URL    # Validated on startup, typed
+api_port = env.API_PORT      # Validated as int, wrong type fails immediately
+stripe_key = env.STRIPE_API_KEY  # SecretStr — won't appear in logs
+```
+
+For TypeScript:
+```typescript
+import { env } from './config';
+
+const db = await postgres.connect(env.DATABASE_URL);  // Zod-validated, typed
+const port: number = env.API_PORT;  // Type error if not number
+```
+
+### ✅ Interactive Onboarding
+New developer? `envshield setup` walks them through creating `.env`, knows which vars are secrets, shows descriptions:
+
+```
+🛡️  EnvShield Setup
+Which service? api
+
+Please provide values for the following variables:
+
+[DATABASE_URL]
+PostgreSQL connection string for the API
+Enter value (password): ••••••••••••
+
+[API_PORT]
+Port the API listens on (dev: 5000, prod: 8000)
+Enter value: 5000
+
+✓ Successfully created your .env file!
+```
+
+### ✅ Prevents Configuration Drift
+Validate at every step:
+
+```bash
+envshield check services/api/.env --service api
+# ✗ Missing in Local: STRIPE_API_KEY (required, no default)
+# ✓ Extra in Local: DEBUG_MODE (not in schema — typo?)
+
+envshield doctor --service api
+# ✗ .env.example is out of sync with schema (5 new vars added)
+# Suggestion: run `envshield schema sync --service api`
+```
+
+### ✅ Secret Scanning (Pre-commit Hook)
+Blocks secrets before they're committed:
+
+```bash
+git add config.py  # Accidentally left DB_PASSWORD in it
+envshield scan --staged
+# 🚨 DANGER: Found 1 potential secret(s)!
+# Line 5: DB_PASSWORD = 'postgres://...:secretpassword@...'
+# Commit aborted.
+```
+
+---
 
 ## CLI Commands
 
-| Command | Purpose | Demo |
+| Command | What It Does | Real-Life Use |
 |---|---|---|
-| `envshield init` | Auto-detects framework, creates env.schema.toml, installs the Git hook. | ![Demo of EnvShield init](.gif/init.gif) |
-| `envshield scan` | Scans files or staged commits for secrets. | ![Demo of EnvShield scan](.gif/scan.gif) |
-| `envshield install-hook` | Manually install or update the Git pre-commit hook. | For when you skipped step one because YOLO. |
-| `envshield check <file>` | Validates a local .env file against the schema. | ![Demo of EnvShield check](.gif/check.gif) |
-| `envshield schema sync` | Regenerates .env.example from the schema. | ![Demo of EnvShield sync](.gif/sync.gif) |
-| `envshield setup` | Interactive onboarding to create a local env. | ![Demo of EnvShield setup](.gif/setup.gif) |
-| `envshield doctor` | Runs a full health check (and can auto-fix). | ![Demo of EnvShield check](.gif/check.gif) |
-| `envshield import <file>` | Intelligently converts an existing .env file into a new env.schema.toml. | The fastest way to adopt EnvShield for an existing project. |
-| `envshield generate` | Compiles your schema into a typed, validated config module — `pydantic-settings` (Python) or `zod` (TypeScript), auto-detected or set via `--lang`. | ![Demo of EnvShield generate](.gif/generate.gif) |
+| `envshield init` | Auto-detect framework, create schema & hook | Fresh project setup |
+| `envshield import <file>` | Convert existing `.env` to schema | Adopting on existing project |
+| `envshield check <file>` | Validate local env against schema | "Is my .env valid?" |
+| `envshield scan [paths]` | Find secrets & undeclared variables | CI gate, pre-commit |
+| `envshield setup` | Interactive onboarding wizard | New dev on the team |
+| `envshield generate` | Compile schema into typed config code | Generate `config.py` or `config.ts` |
+| `envshield schema sync` | Regenerate `.env.example` from schema | Keep docs fresh |
+| `envshield doctor` | Health check your setup | "Is everything wired up?" |
+| `envshield install-hook` | Install Git pre-commit hook | CI/security integration |
 
+**All commands support `--service <name>` for multi-service projects.**
 
-## Competitor Comparison: Choosing the Right Tool
+---
 
-A scanner is a smoke detector. A cloud vault is an off-site bank. **EnvShield is the fireproof, self-organizing house you should have been living in all along.** It provides the complete local workflow that developers need to prevent secret leaks in the first place.
+## Real-Life Example: A Multi-Service Monorepo
 
-| **Developer Pain Point**              | **EnvShield** 🛡️                                                                                             | **TruffleHog / Gitleaks**                                        | **Doppler / Infisical**                                                                 | **`direnv`**                      |
-| :------------------------------------ | :----------------------------------------------------------------------------------------------------------- | :--------------------------------------------------------------- | :-------------------------------------------------------------------------------------- | :-------------------------------- |
-| **Preventing Secret Commits**         | ✅ **Built-in**. `init` sets up an automated pre-commit hook.                                                | ✅ **Core feature**. Specialized tools for just finding secrets. | ❌ **Indirectly**. Doesn't actively scan commits.                                       | ❌ **Not addressed.**             |
-| **Migrating Existing Projects**   |  ✅ One-command `import`. `import` command auto-generates a schema from an existing .env file. |  ❌ Not addressed. | ❌ Not addressed. (They manage, but don't import your old files) | ❌ Not addressed.
-| **Streamlining Developer Onboarding** | ✅ **Automated**. The `setup` command interactively creates a local `.env` file from the project's template. | ❌ **Not addressed.**                                            | ✅ **Strong**. Provides a central place to get secrets, but doesn't manage local files. | ❌ **Not addressed.**             |
-| **Preventing Configuration Drift**    | ✅ **Solved**. The schema is the source of truth. `schema sync` and `check` enforce consistency.             | ❌ **Not addressed.**                                            | ✅ **Solved**. The cloud is the single source of truth.                                 | ❌ **Not addressed.**             |
-| **Typed, Validated Config Code**      | ✅ **`generate`**. Compiles your schema straight into `pydantic-settings` (Python) or `zod` (TypeScript), with secrets masked by default. | ❌ **Not addressed.**                                            | ❌ **Not addressed.** (SDKs fetch secrets; they don't generate a typed module from a governed schema.) | ❌ **Not addressed.**             |
-| **Primary Focus**                     | **Complete Local Workflow**. Manages files, documents schemas, validates setups, scans for leaks, and generates typed code.        | **Secret Detection Engine.**                                     | **Cloud-Based Secret** Vault.                                                           | **Shell Environment Automation.** |
-
-
-
-Think of scanners as smoke detectors and cloud vaults as off-site banks.
-**EnvShield is the fire-proof, self-organizing house you should have been living in all along.**
-
-## The Brains of the Operation: The Core Files
-
-`envshield` is managed by two simple files you commit to your repository.
-
--   `env.schema.toml`: The source of truth. This is where you define every variable your project needs.
-
+### Before EnvShield
 ```
-    # env.schema.toml
+services/
+├── api/
+│   ├── .env (has DATABASE_URL, missing STRIPE_API_KEY)
+│   └── config/app_config.py (uses getenv, untyped)
+├── web/
+│   ├── .env.example (outdated, has LEGACY_VAR)
+│   └── config/.env (fresh, correct)
+└── worker/
+    └── (no documented env vars at all)
 
-    [DATABASE_URL]
-    description = "The full connection string for the PostgreSQL database."
-    secret = true # Marks this as sensitive
-
-    [LOG_LEVEL]
-    description = "Controls the application's log verbosity."
-    secret = false
-    defaultValue = "info" # Provides a fallback
+Problem: Is DATABASE_URL the same across all three? Nobody knows.
+New dev: "I set up my .env but the API won't start."
+         → After 2 hours: missing STRIPE_API_KEY (only used in API, not documented)
 ```
 
--   `envshield.yml`: The workflow config. In Phase 1, it's very simple and mainly points to your schema and defines scanner exclusions.
+### After EnvShield
+```bash
+# Phase 1: Import existing configs (30 seconds)
+envshield import services/api/.env --service api
+envshield import services/web/.env --service web
+envshield import services/worker/config.py --service worker
 
-## Future Roadmap: Teams & Enterprise✨
+# Now we have:
+services/
+├── api/env.schema.toml (5 variables, all documented)
+├── web/env.schema.toml (5 variables, all documented)
+└── worker/env.schema.toml (3 variables, all documented)
 
-Phase 1 is the free, powerful "Local Guardian." But the journey doesn't end there. Upcoming paid tiers will turn `envshield` into a complete collaboration and automation platform.
+# Phase 2: Sync documentation (5 seconds)
+envshield schema sync --service api
+envshield schema sync --service web
+envshield schema sync --service worker
+# → .env.example files regenerated, always in sync
 
-### Phase 2: The Team Collaborator (Paid Tier)
+# Phase 3: Onboarding (2 minutes instead of 2 hours)
+# New dev clones repo
+envshield setup
+# ? Which service? (api / web / worker / all)
+#   → New dev runs through *all three* services interactively
+#   → Gets descriptions of what each variable is for
+#   → Passwords are prompted as hidden input
+#   → Done
 
--   `envshield use <profile>`: Instantly switch your entire project's configuration between different environments (e.g., `local`, `staging`).
+# Phase 4: Prevent drift
+# Someone adds ANALYTICS_KEY to API mid-sprint
+envshield scan --staged
+# ✗ Undeclared variable: ANALYTICS_KEY (used in code, not in schema)
+# Commit aborted. Update env.schema.toml first.
 
--   `envshield onboard <profile>`: A supercharged `setup` that can also run scripts like` docker compose up` and database migrations for a true one-command setup.
+envshield doctor
+# ✓ Configuration Files
+# ✗ Example File Sync: api/.env.example missing ANALYTICS_KEY
+# → Run `envshield schema sync --service api` to fix
+```
 
--   `envshield share`: Securely share a secret with a teammate via an encrypted, one-time-use link.
+---
 
--   `envshield docs`: Generate beautiful Markdown or HTML documentation from your schema.
+## How It Compares
 
-### Phase 3: The Enterprise-Grade System (Paid Tier)
+| Problem | EnvShield | Gitleaks | dotenvx | Infisical | direnv |
+|---|---|---|---|---|---|
+| Prevent secrets in commits | ✅ | ✅ Better detection | ✅ | ❌ (stores them) | ❌ |
+| Validate .env against schema | ✅ Unique | ❌ | ✅ | ✅ | ❌ |
+| Generate typed config code | ✅ Unique | ❌ | ❌ | ❌ | ❌ |
+| Onboarding wizard | ✅ | ❌ | ❌ | ✅ Cloud-only | ❌ |
+| Multi-service support | ✅ Built-in | ❌ | ❌ | ❌ | ❌ |
+| Works offline | ✅ | ✅ | ✅ | ❌ | ✅ |
+| Single source of truth | ✅ | ❌ | ❌ | ✅ Cloud | ❌ |
 
--   `envshield login`, `pull`, `push`: Full integration with a centralized, cloud-based secret vault.
+**The difference:** EnvShield is the only tool that treats configuration as a *contract* — one schema that drives docs, validation, onboarding, and code generation. Others solve pieces of the puzzle; EnvShield solves the whole problem.
 
--   `envshield export`: Securely inject secrets into your CI/CD pipelines for automated deployments.
+---
 
--   **Audit Logs & RBAC**: A complete, compliant, and auditable history of all secret access and team permissions, managed through a web dashboard.
+## Roadmap
 
-## **Community & Support**
+**Phase 1 (Free)** ✅ Live now
+- Multi-service schema management
+- Schema validation & syncing
+- Typed config generation (Python + TypeScript)
+- Secret scanning & pre-commit hook
+- Interactive onboarding
 
-Got questions? Have a brilliant idea? Come hang out with us!
+**Phase 2 (Paid tier, coming soon)**
+- Config profiles (dev/staging/prod schemas with environment-specific overrides)
+- Schema diffing ("What changed between staging and prod?")
+- CI/CD integration (validate config before deploy)
+- Team workspaces & change notifications
+- Auto-generated team documentation
 
--   🤔 **Ask a question on GitHub Discussions:**[Discussions](https://github.com/rabbilyasar/envshield/discussions/)
+**Phase 3 (Enterprise, future)**
+- Cloud config backend (optional)
+- Vault integration (pull from HashiCorp, AWS Secrets)
+- Audit logs & advanced RBAC
+- Policy engine (enforce naming conventions, require descriptions)
+- Deployment automation
 
-Or, Follow us on our socials:
+---
 
-## 🌍 Community & Links
+## Installation & Next Steps
 
--   🌐 Website: [envshield.dev](https://www.envshield.dev)
--   🐙 GitHub: [rabbilyasar/envshield](https://github.com/rabbilyasar/envshield)
--   🐍 PyPI: [EnvShield on PyPI](https://pypi.org/project/envshield/)
--   🤔 GitHub Discussions: [GitHub Discussions](https://github.com/rabbilyasar/envshield/discussions)
--   💬 Join our Discord:[@discord](https://discord.gg/dSEbvPW57N)
+```bash
+pip install envshield
+envshield --help
 
-## **Contributing (Don't Be Shy)**
+# Read the docs
+open https://docs.envshield.dev/
+```
 
-Spotted a bug? Think our jokes are terrible? We want to hear it all. Check out `CONTRIBUTING.md` to get started.
+---
 
-### TL;DR
+## Community
 
-**EnvShield = one Environment Contract that gives you docs, validation, secret scanning, and typed Python/TypeScript config code — plus just enough sarcasm to keep you awake.**
-Stop leaking secrets. Start shipping securely.
+Questions? Ideas? Found a bug?
+
+- 🐙 [GitHub Issues](https://github.com/rabbilyasar/envshield/issues)
+- 💬 [GitHub Discussions](https://github.com/rabbilyasar/envshield/discussions)
+- 🌐 [Website](https://www.envshield.dev)
+- 🐍 [PyPI](https://pypi.org/project/envshield/)
+
+---
+
+## License
+
+MIT — Use it freely, in any project.
+
+---
+
+**TL;DR:** EnvShield stops configuration chaos. One schema, multiple services, always in sync. Migrate existing projects in seconds. Generate typed config code. Onboard devs in minutes, not hours. All free, all local, all in your git repo.
