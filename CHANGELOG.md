@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented in this file.
 
+## [3.1.1] - 2026-08-03
+
+### Fixed
+- **Critical:** `envshield scan --staged` (the pre-commit hook) now reads each file's actual staged content via the Git index, instead of the working-tree copy on disk. Previously, staging a secret and then editing it out on disk *without* re-staging would let the commit through — the hook scanned the clean working-tree file while the secret still shipped in the index.
+- `envshield doctor` now exits with a non-zero status when any health check fails, matching `envshield check`. Previously it always exited `0`, so a broken setup couldn't fail a CI job.
+- `envshield init`'s `.gitignore` update now adds `.env` itself, not just the `.env.local`/`.env.*.local` override variants — the actual secrets file was previously left untracked-but-unprotected. Fixed alongside a related bug where the update would skip *all* patterns (including the new `.env` one) if *any* single pattern was already present, which would have silently prevented existing projects from ever getting the new `.env` entry.
+- `envshield doctor`'s "Example File Sync" check now actually compares `.env.example`'s variables against the schema, instead of only checking that the file exists. It previously reported success even when the schema and `.env.example` had drifted apart.
+- `envshield setup` now uses `env.schema.toml`'s `secret` flag (and shows its `description`) when prompting for a value, instead of re-deriving secrecy from its own hardcoded keyword list. The two heuristics could previously disagree with each other and with the schema, undermining the "one source of truth" premise.
+- The dotenv parser (used by `import`, `check`, `setup`, `doctor`) now strips matching surrounding quotes from values, strips inline `# comments` from unquoted values, and correctly handles `export KEY=value`-style lines. Previously these could corrupt values on import or misparse shell-style `.env` files.
+- The secret-keyword heuristic (`import`, `setup`) now matches whole `_`-delimited tokens instead of raw substrings, fixing false positives like `MONKEY_PATCH_ENABLED` or `AUTHOR_NAME` being flagged as secrets just because they contain "key" or "auth" as a substring.
+
 ## [3.1.0] - 2026-07-31
 
 ### Added
@@ -34,6 +45,7 @@ All notable changes to this project are documented in this file.
 ## [1.4.0] - 2025-09-03
 - Earlier release predating the schema-first redesign. Detailed changes were not tracked in a changelog at this point in the project's history.
 
+[3.1.1]: https://github.com/rabbilyasar/envshield/compare/v3.1.0...v3.1.1
 [3.1.0]: https://github.com/rabbilyasar/envshield/compare/v3.0.0...v3.1.0
 [3.0.0]: https://github.com/rabbilyasar/envshield/compare/v2.1.0...v3.0.0
 [2.1.0]: https://github.com/rabbilyasar/envshield/compare/v2.0.1...v2.1.0
