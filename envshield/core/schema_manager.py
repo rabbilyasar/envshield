@@ -38,10 +38,12 @@ def check_schema(file_path: str, service_name: Optional[str] = None) -> bool:
         return False
 
     try:
-        local_vars = parser.get_vars(file_path)
+        local_values = parser.get_vars(file_path, get_values=True)
     except FileNotFoundError:
         console.print(f"[red]Error:[/red] File not found: '{file_path}'.")
         return False
+
+    local_vars = set(local_values.keys())
 
     # Get all variables defined in the schema
     schema_vars_all = set(schema.keys())
@@ -52,11 +54,22 @@ def check_schema(file_path: str, service_name: Optional[str] = None) -> bool:
         key for key, details in schema.items() if "defaultValue" not in details
     }
 
-    # Determine what's actually missing and what's extra
-    missing_in_local = schema_vars_required - local_vars
+    # A required var declared only as a blank placeholder (e.g.
+    # `SECRETS_ENCRYPTION_KEY = ""` checked in ahead of a real per-developer
+    # secret) is just as incomplete as one missing outright -- checking only
+    # for the key's presence let this go undetected until it broke at
+    # runtime. Distinguish the two so the report is precise about which.
+    missing_in_local = set()
+    blank_in_local = set()
+    for key in schema_vars_required:
+        if key not in local_values:
+            missing_in_local.add(key)
+        elif not local_values[key]:
+            blank_in_local.add(key)
+
     extra_in_local = local_vars - schema_vars_all
 
-    if not missing_in_local and not extra_in_local:
+    if not missing_in_local and not blank_in_local and not extra_in_local:
         console.print(
             "[bold green]✓ Your configuration is perfectly in sync with the schema![/bold green]"
         )
@@ -68,10 +81,13 @@ def check_schema(file_path: str, service_name: Optional[str] = None) -> bool:
     table.add_column("Variable Name", style="white")
     table.add_column("Source", style="white")
 
-    for var in sorted(list(missing_in_local)):
+    for var in sorted(missing_in_local):
         table.add_row("[red]Missing in Local[/red]", var, "env.schema.toml (Required)")
 
-    for var in sorted(list(extra_in_local)):
+    for var in sorted(blank_in_local):
+        table.add_row("[red]Blank in Local[/red]", var, "env.schema.toml (Required)")
+
+    for var in sorted(extra_in_local):
         table.add_row("[yellow]Extra in Local[/yellow]", var, file_path)
 
     console.print(table)

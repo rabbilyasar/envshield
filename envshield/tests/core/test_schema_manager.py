@@ -48,6 +48,43 @@ def test_check_schema_out_of_sync(mocker, tmp_path):
         assert mock_console.print.call_count > 2
 
 
+def test_check_schema_flags_a_required_var_declared_but_left_blank(mocker, tmp_path):
+    """
+    Regression, found via a real incident: a required var (no schema
+    default) checked into a Python config module as a blank placeholder --
+    e.g. `SECRETS_ENCRYPTION_KEY = ""` ahead of a real per-developer secret
+    -- used to be reported as "in sync" because the key's presence was all
+    that got checked, never its value. A developer only found out it was
+    unset when the app raised at runtime. It must be flagged before that.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        mocker.patch(
+            "envshield.config.manager.load_schema",
+            return_value={"SECRETS_ENCRYPTION_KEY": {"secret": True}},
+        )
+        with open("env_config.local.py", "w") as f:
+            f.write('SECRETS_ENCRYPTION_KEY = ""\n')
+
+        is_in_sync = schema_manager.check_schema("env_config.local.py")
+
+        assert is_in_sync is False
+
+
+def test_check_schema_does_not_flag_a_blank_var_that_has_a_default(mocker, tmp_path):
+    """A var with a schema default is fine to leave blank locally -- the default covers it."""
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        mocker.patch(
+            "envshield.config.manager.load_schema",
+            return_value={"LOG_LEVEL": {"defaultValue": "info"}},
+        )
+        with open(".env.local", "w") as f:
+            f.write("LOG_LEVEL=\n")
+
+        is_in_sync = schema_manager.check_schema(".env.local")
+
+        assert is_in_sync is True
+
+
 def test_sync_schema_generates_perfect_file(mocker, tmp_path):
     """Tests that schema sync correctly generates a .env.example file with exact content."""
     with runner.isolated_filesystem(temp_dir=tmp_path) as td:

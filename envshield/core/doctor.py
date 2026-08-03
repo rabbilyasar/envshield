@@ -73,6 +73,9 @@ def _check_local_env_sync(service_name: Optional[str] = None):
     try:
         schema = config_manager.load_schema(service_name=service_name)
         schema_vars = set(schema.keys())
+        required_vars = {
+            key for key, details in schema.items() if "defaultValue" not in details
+        }
         local_file = config_manager.get_env_paths(service_name=service_name)["local_file"]
         if not os.path.exists(local_file):
             return False, f"Local env file '{local_file}' not found."
@@ -80,19 +83,30 @@ def _check_local_env_sync(service_name: Optional[str] = None):
         parser = get_parser(local_file)
         if not parser:
             return False, f"Cannot parse local env file '{local_file}'."
-        local_vars = parser.get_vars(local_file)
+        local_values = parser.get_vars(local_file, get_values=True)
+        local_vars = set(local_values.keys())
 
         missing = schema_vars - local_vars
+        # A required var (no schema default) present only as a blank
+        # placeholder -- e.g. `SECRETS_ENCRYPTION_KEY = ""` checked in ahead
+        # of a real per-developer secret -- is just as incomplete as one
+        # missing outright. Checking only for the key's presence let this
+        # go undetected right up until it broke at runtime.
+        blank_required = {
+            key for key in required_vars if key in local_values and not local_values[key]
+        }
         extra = local_vars - schema_vars
 
-        if not missing and not extra:
+        if not missing and not blank_required and not extra:
             return True, f"'{local_file}' is in sync with schema."
 
         messages = []
         if missing:
-            messages.append(f"Missing variables: {', '.join(missing)}")
+            messages.append(f"Missing variables: {', '.join(sorted(missing))}")
+        if blank_required:
+            messages.append(f"Required but blank: {', '.join(sorted(blank_required))}")
         if extra:
-            messages.append(f"Extra variables: {', '.join(extra)}")
+            messages.append(f"Extra variables: {', '.join(sorted(extra))}")
         return False, "; ".join(messages)
 
     except EnvShieldException:

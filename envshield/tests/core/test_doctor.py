@@ -175,6 +175,37 @@ def test_check_local_env_sync_scopes_to_service_directory(tmp_path, monkeypatch)
     assert passed is True, message
 
 
+def test_check_local_env_sync_flags_a_required_var_declared_but_left_blank(
+    tmp_path, monkeypatch
+):
+    """
+    Regression, found via a real incident: 'doctor' reported a service as
+    healthy even though a required secret (no schema default) was checked
+    into the local Python config module as a blank placeholder
+    (`SECRETS_ENCRYPTION_KEY = ""`) -- because only the key's presence was
+    checked, never its value. This is exactly the gap that let a developer
+    hit a runtime error instead of 'doctor' catching it first.
+    """
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "hermes").mkdir()
+    with open(CONFIG_FILE_NAME, "w") as f:
+        f.write(
+            "services:\n"
+            "  hermes:\n"
+            "    path: hermes/env.schema.toml\n"
+            "    local_file: hermes/env_config.local.py\n"
+        )
+    with open("hermes/env.schema.toml", "w") as f:
+        f.write('[SECRETS_ENCRYPTION_KEY]\ndescription="x"\nsecret=true\n')
+    with open("hermes/env_config.local.py", "w") as f:
+        f.write('SECRETS_ENCRYPTION_KEY = ""\n')
+
+    passed, message = doctor._check_local_env_sync(service_name="hermes")
+
+    assert passed is False
+    assert "SECRETS_ENCRYPTION_KEY" in message
+
+
 def test_check_example_file_sync_skips_python_format_local_file(tmp_path, monkeypatch):
     """
     A Python-module local file has no separate '.env.example' to drift out
