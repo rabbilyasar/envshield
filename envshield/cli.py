@@ -644,18 +644,27 @@ def service_discover(
     if yes:
         selected_names = [c["name"] for c in candidates]
     else:
-        selected_names = questionary.checkbox(
+        choices = [
+            questionary.Choice(
+                f"{c['name']}  ({c['dir']}, {c['format']})", value=c["name"]
+            )
+            for c in candidates
+        ]
+        choices.append(questionary.Separator())
+        choices.append(questionary.Choice("All", value="__all__"))
+
+        selection = questionary.select(
             "Add these services to envshield.yml? (seeds each schema from its real config where found)",
-            choices=[
-                questionary.Choice(
-                    f"{c['name']}  ({c['dir']}, {c['format']})", value=c["name"], checked=True
-                )
-                for c in candidates
-            ],
+            choices=choices,
         ).ask()
-        if selected_names is None:
+        if selection is None:
             console.print("[yellow]Cancelled.[/yellow]")
             raise typer.Exit()
+
+        if selection == "__all__":
+            selected_names = [c["name"] for c in candidates]
+        else:
+            selected_names = [selection]
 
     selected = [c for c in candidates if c["name"] in selected_names]
     if not selected:
