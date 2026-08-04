@@ -54,9 +54,9 @@ jobs:
         run: python -m build
 
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1.8.14
+        uses: pypa/gh-action-pypi-publish@release/v1
 
       - name: Create matching GitHub Release
-        uses: softprops/action-gh-release@v2.0.7
+        uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
