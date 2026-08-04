@@ -84,3 +84,31 @@ def get_staged_file_content(file_path: str) -> str | None:
         return result.stdout.decode("utf-8", errors="ignore")
     except (subprocess.CalledProcessError, FileNotFoundError):
         return None
+
+
+def get_head_file_content(file_path: str) -> str | None:
+    """
+    Reads a file's content from HEAD (the last committed version).
+
+    Used for diff-aware scanning: compares HEAD vs staged to detect new lines.
+
+    Returns:
+        The file content from HEAD, or None if the file doesn't exist in HEAD
+        (brand new file), can't be read, or is binary/undecodable.
+    """
+    git_root = get_git_root()
+    if not git_root:
+        return None
+
+    relative_path = os.path.relpath(file_path, git_root)
+    try:
+        result = subprocess.run(
+            ["git", "show", f"HEAD:{relative_path}"],
+            cwd=git_root,
+            capture_output=True,
+            check=True,
+        )
+        return result.stdout.decode("utf-8", errors="ignore")
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        # File doesn't exist in HEAD (brand new file) or git error
+        return None

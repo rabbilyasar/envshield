@@ -125,8 +125,52 @@ def _is_default_excluded_dir(dirname: str) -> bool:
     )
 
 
+def _get_diff_lines(file_path: str) -> Optional[set]:
+    """Get line numbers that are newly added in the staged version.
+
+    Compares the staged version against HEAD to find lines that are new in
+    this commit (present in staged but not in HEAD).
+
+    Args:
+        file_path: Path to the file to check
+
+    Returns:
+        set: Line numbers (1-indexed) that are newly added
+        None: If the file doesn't exist in HEAD (brand new file) - scan all lines
+        empty set: If there are no new lines
+    """
+    try:
+        head_content = git_utils.get_head_file_content(file_path)
+
+        # Brand new file - return None to indicate "scan all lines"
+        if head_content is None:
+            return None
+
+        staged_content = git_utils.get_staged_file_content(file_path)
+        if staged_content is None:
+            return set()
+
+        # Extract lines
+        head_lines = head_content.splitlines()
+        staged_lines = staged_content.splitlines()
+
+        # Build a set of existing lines from HEAD (for comparison)
+        head_line_set = set(head_lines)
+
+        # Find newly added line numbers
+        new_line_numbers = set()
+        for i, line in enumerate(staged_lines, start=1):
+            if line not in head_line_set:
+                new_line_numbers.add(i)
+
+        return new_line_numbers
+    except Exception:
+        # On any error, return empty set (conservative - don't scan)
+        return set()
+
+
 def _scan_single_file(
-    file_path: str, schema_vars: set, content: Optional[str] = None
+    file_path: str, schema_vars: set, content: Optional[str] = None, new_lines_only: Optional[set] = None
 ) -> (List[Dict], List[Dict]):
     """
     Helper to scan one file for both secrets and undeclared variables.
@@ -137,6 +181,9 @@ def _scan_single_file(
     actually staged in the Git index, not the working-tree copy (which can
     differ, e.g. if a secret was staged and then edited out without
     re-staging).
+
+    If `new_lines_only` is provided, only those line numbers are scanned.
+    Used for diff-aware scanning of excluded files.
     """
     secret_findings = []
     undeclared_findings = []
@@ -149,6 +196,10 @@ def _scan_single_file(
                 lines = f.readlines()
 
         for line_num, line in enumerate(lines, 1):
+            # If new_lines_only is specified, skip lines not in that set
+            if new_lines_only is not None and line_num not in new_lines_only:
+                continue
+
             # Check for secrets
             for secret in SECRET_PATTERNS:
                 if re.search(secret["pattern"], line):
@@ -328,7 +379,20 @@ def run_scan(
     schema_resolver = _build_undeclared_var_resolver(service_name)
 
     files_to_scan = _collect_files_to_scan(paths, staged_only)
-    final_files_to_scan = _filter_files(files_to_scan, all_exclusions)
+
+    # For staged scans: keep excluded files for diff-aware scanning
+    # For non-staged scans: filter out excluded files as before
+    if staged_only:
+        final_files_to_scan = files_to_scan
+        excluded_files = set()
+        for pattern in all_exclusions:
+            for file_path in files_to_scan:
+                normalized_path = file_path.replace(os.getcwd() + os.sep, "")
+                if fnmatch.fnmatch(normalized_path, pattern):
+                    excluded_files.add(file_path)
+    else:
+        final_files_to_scan = _filter_files(files_to_scan, all_exclusions)
+        excluded_files = set()
 
     all_secret_findings = []
     all_undeclared_findings = []
@@ -354,8 +418,25 @@ def run_scan(
                 content = git_utils.get_staged_file_content(file_path)
                 if content is None or len(content) > 1_000_000:
                     continue
+
+                # C6: Diff-aware scanning for excluded files
+                new_lines_only = None
+                if file_path in excluded_files:
+                    new_lines = _get_diff_lines(file_path)
+                    if new_lines is None:
+                        # Brand new file - scan all lines despite exclusion
+                        console.print(f"[yellow]ℹ️  Scanning new file {os.path.basename(file_path)} (despite exclusion)[/yellow]")
+                        new_lines_only = None
+                    elif len(new_lines) == 0:
+                        # File is excluded and has no new lines - skip it
+                        continue
+                    else:
+                        # File is excluded, but scan only newly-added lines
+                        console.print(f"[dim]ℹ️  {os.path.basename(file_path)} (excluded; diffs only: {len(new_lines)} new line(s))[/dim]")
+                        new_lines_only = new_lines
+
                 secrets, undeclared = _scan_single_file(
-                    file_path, schema_vars, content=content
+                    file_path, schema_vars, content=content, new_lines_only=new_lines_only
                 )
             else:
                 if os.path.exists(file_path) and os.path.getsize(file_path) > 1_000_000:
@@ -483,9 +564,25 @@ def install_pre_commit_hook(force: bool = False, non_interactive: bool = False):
 def _generate_post_merge_hook_content() -> str:
     """
     Generates the bash script content for the post-merge hook.
+    Smart: only runs if schema files actually changed.
     Dynamically detects single-service vs multi-service projects.
     """
     config = config_manager.load_config()
+
+    # Schema files that might have changed
+    schema_files = []
+    if config.get("services"):
+        # Multi-service: collect all service schema paths
+        for service_name, service_config in config["services"].items():
+            schema_path = service_config.get("path")
+            if schema_path:
+                schema_files.append(schema_path)
+    else:
+        # Single-service: use root schema
+        schema_files = ["env.schema.toml"]
+
+    # Build the hook script with schema change detection
+    schema_check = " ".join(f'"{f}"' for f in schema_files)
 
     if config.get("services"):
         # Multi-service project: generate a doctor call for each service
@@ -497,10 +594,13 @@ def _generate_post_merge_hook_content() -> str:
         return (
             "#!/bin/sh\n\n"
             "# Hook installed by EnvShield\n"
-            "# This hook checks environment configuration after pulling changes.\n"
+            "# Smart: only runs if schema files actually changed.\n"
             "# If new required variables were added, it alerts the developer immediately.\n"
             "# Non-blocking: warns but doesn't fail the merge.\n\n"
-            f"  {service_checks}\n\n"
+            f"# Check if any schema files changed in this merge\n"
+            f"if git diff --name-only HEAD@{{1}}..HEAD | grep -qE {schema_check} 2>/dev/null; then\n"
+            f"  {service_checks}\n"
+            f"fi\n\n"
             "exit 0\n"
         )
     else:
@@ -508,10 +608,13 @@ def _generate_post_merge_hook_content() -> str:
         return (
             "#!/bin/sh\n\n"
             "# Hook installed by EnvShield\n"
-            "# This hook checks environment configuration after pulling changes.\n"
+            "# Smart: only runs if schema files actually changed.\n"
             "# If new required variables were added, it alerts the developer immediately.\n"
             "# Non-blocking: warns but doesn't fail the merge.\n\n"
-            "envshield doctor 2>/dev/null\n\n"
+            f"# Check if schema file changed in this merge\n"
+            f"if git diff --name-only HEAD@{{1}}..HEAD | grep -qE {schema_check} 2>/dev/null; then\n"
+            f"  envshield doctor 2>/dev/null\n"
+            f"fi\n\n"
             "exit 0\n"
         )
 

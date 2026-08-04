@@ -20,6 +20,7 @@ from .core import (
     service_manager,
     service_discovery,
     generator,
+    hooks_manager,
 )
 from .core.exceptions import EnvShieldException
 
@@ -123,16 +124,9 @@ def init(
         config_manager.update_gitignore()
         schema_manager.sync_schema()
 
-        try:
-            scanner.install_pre_commit_hook(non_interactive=True)
-            scanner.install_post_merge_hook(non_interactive=True)
-        except EnvShieldException as e:
-            console.print(
-                f"\n[bold yellow]⚠️  Warning:[/] Could not install Git hooks: {e}"
-            )
-            console.print(
-                "    You can install them later by running 'envshield install-hook' after initializing your Git repository."
-            )
+        # Offer to install git hooks
+        hm = hooks_manager.HooksManager()
+        hm.install_hooks_if_needed(auto=True, force=False)
 
     except EnvShieldException as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
@@ -145,6 +139,8 @@ def init(
     console.print(
         "Your project is now protected. Define your variables in 'env.schema.toml'."
     )
+    console.print("\n[bold cyan]Next step:[/bold cyan]")
+    console.print("  envshield setup    # Configure your local environment")
 
 
 @app.command()
@@ -259,6 +255,13 @@ def setup(
         for target in targets:
             _print_service_header(targets, target)
             setup_manager.run_setup(output_file, service_name=target)
+
+        # After successful setup, offer to install git hooks
+        hm = hooks_manager.HooksManager()
+        hm.install_hooks_if_needed(auto=True, force=False)
+
+        console.print("\n[bold green]✓ Configuration complete![/bold green]")
+        hm.print_hook_status()
     except EnvShieldException as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(code=1)
@@ -690,13 +693,9 @@ def service_discover(
 
     console.print(f"\n[bold green]✨ Added {len(selected)} service(s) to envshield.yml.[/bold green]")
 
-    try:
-        scanner.install_pre_commit_hook(non_interactive=True)
-        scanner.install_post_merge_hook(non_interactive=True)
-    except EnvShieldException as e:
-        console.print(
-            f"\n[bold yellow]⚠️  Warning:[/] Could not install Git hooks: {e}"
-        )
-        console.print(
-            "    You can install them later by running 'envshield install-hook' after initializing your Git repository."
-        )
+    # Offer to install git hooks
+    hm = hooks_manager.HooksManager()
+    hm.install_hooks_if_needed(auto=True, force=False)
+
+    console.print("\n[bold cyan]Next step:[/bold cyan]")
+    console.print("  envshield setup    # Configure your local environment")
