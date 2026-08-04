@@ -8,8 +8,8 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from envshield import __version__
 from envshield.core import importer
-
 from .config import manager as config_manager
 from .core import (
     schema_manager,
@@ -25,6 +25,14 @@ from .core import (
 from .core.exceptions import EnvShieldException
 
 # --- Main App Setup ---
+def _version_callback(version: bool) -> None:
+    """Print version and exit."""
+    if version:
+        console = Console()
+        console.print(f"envshield {__version__}")
+        raise typer.Exit()
+
+
 app = typer.Typer(
     name="envshield",
     help="🛡️ EnvShield: Your Environment's First Line of Defense.",
@@ -32,6 +40,21 @@ app = typer.Typer(
     add_completion=False,
 )
 console = Console()
+
+
+@app.callback()
+def main(
+    version: bool = typer.Option(
+        None,
+        "--version",
+        "-v",
+        help="Show version and exit.",
+        callback=_version_callback,
+        is_eager=True,
+    ),
+) -> None:
+    """EnvShield: Your Environment's First Line of Defense."""
+    pass
 schema_app = typer.Typer(
     name="schema", help="Check and sync your environment schema.", no_args_is_help=True
 )
