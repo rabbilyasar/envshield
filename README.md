@@ -206,6 +206,23 @@ existing values, comments, imports, and any other logic in the file
 
 ## Key Features
 
+### ✅ Intelligent Lifecycle Management
+Automatically install and manage Git hooks during project setup with intelligent prompting. When you run `init`, `service discover`, or `setup`, EnvShield asks if you want to install pre-commit and post-merge hooks — but only once. The lifecycle improvements include:
+
+- **Smart Hook Prompting**: Asked once during initial setup, never spammed again
+- **Schema-Aware Post-Merge Hook**: After merging branches, the hook only runs `envshield doctor` if schemas actually changed
+- **Single-Step Integration**: Hooks installed automatically during `init` or `service discover`
+
+```bash
+# Initialize a project and get prompted for hook installation
+$ envshield init
+✓ Created env.schema.toml
+✓ Created envshield.yml
+? Install git hooks for security? (Y/n) y
+✓ Pre-commit hook installed (scans for secrets before commits)
+✓ Post-merge hook installed (checks config drift after merges)
+```
+
 ### ✅ One Schema, All Services
 Declare what config each service needs in one place. Multi-service projects finally have a single source of truth.
 
@@ -299,18 +316,33 @@ envshield doctor --service api
 # Suggestion: run `envshield schema sync --service api`
 ```
 
-### ✅ Secret Scanning (Pre-commit Hook)
-Blocks secrets before they're committed:
+### ✅ Diff-Aware Secret Scanning (C6)
+Blocks secrets before they're committed, with line-level intelligence:
 
 ![Secret and undeclared variable detection](.gif/scan.gif)
 
+EnvShield's C6 feature scans only **newly-added lines** in excluded files, allowing pre-existing baseline secrets while catching real secrets you just added:
+
 ```bash
-git add config.py  # Accidentally left DB_PASSWORD in it
-envshield scan --staged
-# 🚨 DANGER: Found 1 potential secret(s)!
-# Line 5: DB_PASSWORD = 'postgres://...:secretpassword@...'
-# Commit aborted.
+# Scenario: You have a baseline config with 15 fake dev secrets
+# (excluded from scanning). A teammate adds a REAL secret.
+
+$ git add config/env_config.local.py
+$ git commit -m "Update config"
+
+# Pre-commit hook runs:
+$ envshield scan --staged
+ℹ️  config/env_config.local.py (excluded; diffs only: 1 new line)
+🚨 DANGER: Found 1 potential secret(s)!
+
+Line 47: PRODUCTION_SECRET = 'real_secret_key_with_long_content'
+Commit aborted. Please fix the issues above.
+
+# Pre-existing fakes on lines 1-46 are NOT flagged
+# Only the newly-added real secret on line 47 is caught
 ```
+
+**Why it matters:** For projects like Zeus with intentional fake secrets in local configs, this prevents false positives while still catching real secrets before they ship.
 
 ---
 
