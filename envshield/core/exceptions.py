@@ -41,3 +41,11 @@ class SourceFileNotFoundError(EnvShieldException):
     def __init__(self, source_path: str):
         self.message = f"Source file '{source_path}' does not exist."
         super().__init__(self.message)
+
+
+class SchemaParseError(EnvShieldException):
+    """Raised when the env.schema.toml file cannot be parsed."""
+
+    def __init__(self, schema_path: str, details: str):
+        self.message = f"Schema parse error in {schema_path}: {details}"
+        super().__init__(self.message)

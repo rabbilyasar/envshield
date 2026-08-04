@@ -5,7 +5,7 @@ import toml
 import yaml
 from rich.console import Console
 
-from envshield.core.exceptions import ConfigNotFoundError, SchemaNotFoundError
+from envshield.core.exceptions import ConfigNotFoundError, SchemaNotFoundError, SchemaParseError
 
 CONFIG_FILE_NAME = "envshield.yml"
 SCHEMA_FILE_NAME = "env.schema.toml"
@@ -59,17 +59,10 @@ def load_schema(service_name: Optional[str] = None) -> Dict[str, Any]:
         error_msg = str(e)
         if "already exists" in error_msg:
             dup_key = error_msg.split("What? ")[1].split(" ")[0] if "What? " in error_msg else "unknown"
-            console.print(
-                f"[bold red]Error:[/bold red] Schema parse error in {schema_path}\n"
-                f"[yellow]Duplicate key found:[/yellow] {dup_key}\n"
-                f"[dim]Check your schema file for duplicate [bold]{dup_key}[/bold] definitions[/dim]"
-            )
+            details = f"Duplicate key found: {dup_key}\nCheck your schema file for duplicate [{dup_key}] definitions"
         else:
-            console.print(
-                f"[bold red]Error:[/bold red] Failed to parse {schema_path}\n"
-                f"[yellow]{error_msg.split('(line')[0].strip()}[/yellow]"
-            )
-        raise
+            details = error_msg.split("(line")[0].strip() if "(line" in error_msg else error_msg
+        raise SchemaParseError(schema_path, details)
 
 
 def get_services() -> Dict[str, Dict[str, Any]]:
