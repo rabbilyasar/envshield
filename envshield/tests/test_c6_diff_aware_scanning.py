@@ -1,8 +1,6 @@
 """Tests for C6: Diff-aware secret scanning in excluded files."""
 
-import os
-import tempfile
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import pytest
 
@@ -26,28 +24,26 @@ class TestGetDiffLines:
         """File with no new lines should return empty set."""
         with patch.object(
             git_utils, "get_head_file_content", return_value="line1\nline2"
+        ), patch.object(
+            git_utils, "get_staged_file_content", return_value="line1\nline2"
         ):
-            with patch.object(
-                git_utils, "get_staged_file_content", return_value="line1\nline2"
-            ):
-                result = scanner._get_diff_lines("test.py")
-                assert result == set()
+            result = scanner._get_diff_lines("test.py")
+            assert result == set()
 
     def test_detects_new_lines(self):
         """Should detect line numbers that are new in staged version."""
         head_content = "line1\nline2\nline3"
         staged_content = "line1\nnew_line2\nline2\nline3\nnew_line4"
 
-        with patch.object(git_utils, "get_head_file_content", return_value=head_content):
-            with patch.object(
-                git_utils, "get_staged_file_content", return_value=staged_content
-            ):
-                result = scanner._get_diff_lines("test.py")
-                # Line 2 is "new_line2", line 5 is "new_line4"
-                assert 2 in result
-                assert 5 in result
-                assert 1 not in result  # "line1" existed
-                assert 3 not in result  # "line2" existed
+        with patch.object(git_utils, "get_head_file_content", return_value=head_content), patch.object(
+            git_utils, "get_staged_file_content", return_value=staged_content
+        ):
+            result = scanner._get_diff_lines("test.py")
+            # Line 2 is "new_line2", line 5 is "new_line4"
+            assert 2 in result
+            assert 5 in result
+            assert 1 not in result  # "line1" existed
+            assert 3 not in result  # "line2" existed
 
     def test_handles_git_errors_gracefully(self):
         """Should return empty set on git command errors."""
@@ -59,10 +55,11 @@ class TestGetDiffLines:
 
     def test_empty_staged_returns_empty_set(self):
         """File staged but empty should return empty set."""
-        with patch.object(git_utils, "get_head_file_content", return_value="content"):
-            with patch.object(git_utils, "get_staged_file_content", return_value=None):
-                result = scanner._get_diff_lines("test.py")
-                assert result == set()
+        with patch.object(git_utils, "get_head_file_content", return_value="content"), patch.object(
+            git_utils, "get_staged_file_content", return_value=None
+        ):
+            result = scanner._get_diff_lines("test.py")
+            assert result == set()
 
 
 class TestScanSingleFileWithDiffAware:
@@ -153,18 +150,19 @@ class TestRunScanIntegration:
     """Integration tests for the updated run_scan() with diff-aware logic."""
 
     def test_excludes_files_during_non_staged_scan(self):
-        """During non-staged scans, excluded files should still be filtered."""
-        # This test verifies backward compatibility: non-staged scans ignore excluded files
-        # (we don't actually run the scan, just verify the logic path)
-        # The test would require mocking file system and config, so we document the behavior
-        pass
+        """During non-staged scans, excluded files should still be filtered.
+
+        This test verifies backward compatibility: non-staged scans ignore excluded files.
+        Full implementation would require mocking file system and config.
+        """
 
     def test_kept_in_scan_list_during_staged_scan(self):
-        """During staged scans, excluded files should be kept for diff-aware scanning."""
-        # This would require a full integration test with git mocking
-        # The logic is: for staged_only=True, excluded_files set is populated
-        # but the files are NOT filtered out from final_files_to_scan
-        pass
+        """During staged scans, excluded files should be kept for diff-aware scanning.
+
+        This would require a full integration test with git mocking.
+        The logic is: for staged_only=True, excluded_files set is populated
+        but the files are NOT filtered out from final_files_to_scan.
+        """
 
 
 if __name__ == "__main__":
