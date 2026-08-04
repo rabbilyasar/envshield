@@ -12,7 +12,7 @@ from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
 from ..config import manager as config_manager
-from ..core.exceptions import EnvShieldException
+from ..core.exceptions import EnvShieldException, SchemaNotFoundError
 from ..utils import git_utils
 
 console = Console()
@@ -259,7 +259,7 @@ def _build_undeclared_var_resolver(service_name: Optional[str]):
         try:
             schema_vars = set(config_manager.load_schema(service_name=service_name).keys())
             console.print("[dim]Schema loaded for compliance check.[/dim]")
-        except EnvShieldException:
+        except SchemaNotFoundError:
             console.print(
                 "[yellow]Warning: Schema not found. Skipping undeclared variable check.[/yellow]"
             )
@@ -271,7 +271,7 @@ def _build_undeclared_var_resolver(service_name: Optional[str]):
         try:
             service_dir = _normalize_for_dir_match(config_manager.get_service_dir(name))
             schema_vars = set(config_manager.load_schema(service_name=name).keys())
-        except EnvShieldException:
+        except SchemaNotFoundError:
             continue
         service_dirs.append((service_dir, schema_vars))
     # Longest directory first, so a nested service dir wins over a shorter sibling.
@@ -279,7 +279,7 @@ def _build_undeclared_var_resolver(service_name: Optional[str]):
 
     try:
         root_vars = set(config_manager.load_schema().keys())
-    except EnvShieldException:
+    except SchemaNotFoundError:
         root_vars = set()
 
     if not service_dirs and not root_vars:
