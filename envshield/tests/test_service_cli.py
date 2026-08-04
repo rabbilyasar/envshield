@@ -115,11 +115,21 @@ def test_service_discover_interactive_selection_skips_unchecked_candidates(mocke
         with open("hermes/.env", "w") as f:
             f.write("DB_URL=postgres://x\n")
 
-        mocker.patch("questionary.checkbox").return_value.ask.return_value = ["athena"]
+        # Initialize git repo for hook installation prompt
+        os.system("git init")
+
+        # Mock questionary prompts: checkbox for service selection, confirm for hooks
+        checkbox_mock = mocker.MagicMock()
+        checkbox_mock.ask.return_value = ["athena"]
+        mocker.patch("questionary.checkbox", return_value=checkbox_mock)
+
+        confirm_mock = mocker.MagicMock()
+        confirm_mock.ask.return_value = False  # Don't install hooks
+        mocker.patch("questionary.confirm", return_value=confirm_mock)
 
         result = runner.invoke(app, ["service", "discover"])
 
-        assert result.exit_code == 0
+        assert result.exit_code == 0, f"Exit code: {result.exit_code}, Output: {result.stdout}"
         assert set(config_manager.get_services().keys()) == {"athena"}
 
 

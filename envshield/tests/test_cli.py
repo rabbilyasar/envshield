@@ -9,13 +9,14 @@ from envshield.config.manager import CONFIG_FILE_NAME, SCHEMA_FILE_NAME
 runner = CliRunner()
 
 
-def test_init_command_in_git_repo(tmp_path):
+def test_init_command_in_git_repo(tmp_path, mocker):
     """Tests the init command in a clean, git-initialized directory."""
     with runner.isolated_filesystem(temp_dir=tmp_path):
         os.system("git init")
+        # Mock the hook installation prompt to answer "yes"
+        mocker.patch("questionary.confirm").return_value.ask.return_value = True
         result = runner.invoke(app, ["init"])
-        assert result.exit_code == 0
-        assert "Setup Complete!" in result.stdout
+        assert result.exit_code == 0, f"Exit code: {result.exit_code}, Output: {result.stdout}"
         assert os.path.exists(CONFIG_FILE_NAME)
         assert os.path.exists(SCHEMA_FILE_NAME)
         assert os.path.exists(".env.example")
@@ -30,12 +31,13 @@ def test_init_command_in_git_repo(tmp_path):
 
 
 def test_init_command_in_non_git_repo(tmp_path):
-    """Tests that init succeeds but warns if not in a git repo."""
+    """Tests that init succeeds but doesn't install hooks if not in a git repo."""
     with runner.isolated_filesystem(temp_dir=tmp_path):
         result = runner.invoke(app, ["init"])
         assert result.exit_code == 0
-        assert "Setup Complete!" in result.stdout
-        assert "Warning: Could not install Git hook" in result.stdout
+        assert os.path.exists(CONFIG_FILE_NAME)
+        assert os.path.exists(SCHEMA_FILE_NAME)
+        # No git repo, so no hooks should be installed
         assert not os.path.exists(".git/hooks/pre-commit")
 
 
