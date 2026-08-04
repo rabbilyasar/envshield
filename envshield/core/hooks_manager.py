@@ -1,14 +1,11 @@
 """Manages Git hooks installation and lifecycle."""
 
 import os
-import stat
-from typing import Optional, Tuple
+from typing import Tuple
 
 import questionary
-import typer
 from rich.console import Console
 
-from ..config import manager as config_manager
 from ..core.exceptions import EnvShieldException
 from ..utils import git_utils
 
@@ -22,7 +19,7 @@ class HooksManager:
         """Initialize the hooks manager."""
         try:
             self.git_root = git_utils.get_git_root()
-        except:
+        except Exception:
             self.git_root = None
 
     def are_hooks_installed(self) -> Tuple[bool, bool]:
