@@ -478,3 +478,97 @@ def install_pre_commit_hook(force: bool = False, non_interactive: bool = False):
     except (TypeError, KeyboardInterrupt):
         console.print("[yellow]Hook installation cancelled by user.[/yellow]")
         raise typer.Exit()
+
+
+def _generate_post_merge_hook_content() -> str:
+    """
+    Generates the bash script content for the post-merge hook.
+    Dynamically detects single-service vs multi-service projects.
+    """
+    config = config_manager.load_config()
+
+    if config.get("services"):
+        # Multi-service project: generate a doctor call for each service
+        services = list(config["services"].keys())
+        service_checks = "\n  ".join(
+            f'envshield doctor --service {svc} 2>/dev/null'
+            for svc in services
+        )
+        return (
+            "#!/bin/sh\n\n"
+            "# Hook installed by EnvShield\n"
+            "# This hook checks environment configuration after pulling changes.\n"
+            "# If new required variables were added, it alerts the developer immediately.\n"
+            "# Non-blocking: warns but doesn't fail the merge.\n\n"
+            f"  {service_checks}\n\n"
+            "exit 0\n"
+        )
+    else:
+        # Single-service project: check the root schema
+        return (
+            "#!/bin/sh\n\n"
+            "# Hook installed by EnvShield\n"
+            "# This hook checks environment configuration after pulling changes.\n"
+            "# If new required variables were added, it alerts the developer immediately.\n"
+            "# Non-blocking: warns but doesn't fail the merge.\n\n"
+            "envshield doctor 2>/dev/null\n\n"
+            "exit 0\n"
+        )
+
+
+def install_post_merge_hook(force: bool = False, non_interactive: bool = False):
+    """
+    Installs a Git post-merge hook that runs 'envshield doctor' after pulling changes.
+    This ensures developers are alerted immediately if a pulled commit adds a new required
+    environment variable, without waiting for a container restart.
+    """
+    git_root = git_utils.get_git_root()
+    if not git_root:
+        raise EnvShieldException("Not inside a Git repository. Cannot install hook.")
+
+    hooks_dir = os.path.join(git_root, ".git", "hooks")
+    os.makedirs(hooks_dir, exist_ok=True)
+    post_merge_path = os.path.join(hooks_dir, "post-merge")
+
+    hook_script_content = _generate_post_merge_hook_content()
+
+    try:
+        if os.path.exists(post_merge_path):
+            if non_interactive:
+                console.print(
+                    "[bold yellow]⚠️  Warning:[/] A post-merge hook already exists. EnvShield was not installed automatically."
+                )
+                console.print(
+                    "    Please add 'envshield doctor' calls to your existing hook script."
+                )
+                return
+
+            if not force:
+                overwrite = questionary.confirm(
+                    "A post-merge hook already exists. Do you want to overwrite it?",
+                    default=False,
+                ).ask()
+                if not overwrite:
+                    console.print("[yellow]Hook installation cancelled.[/yellow]")
+                    raise typer.Exit()
+
+        with open(post_merge_path, "w") as f:
+            f.write(hook_script_content)
+
+        current_permissions = os.stat(post_merge_path).st_mode
+        os.chmod(
+            post_merge_path,
+            current_permissions | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH,
+        )
+
+        console.print(
+            "[bold green]✓ Git post-merge hook installed successfully![/bold green]"
+        )
+
+    except (IOError, OSError) as e:
+        raise EnvShieldException(
+            f"Failed to write or set permissions for the hook file: {e}"
+        )
+    except (TypeError, KeyboardInterrupt):
+        console.print("[yellow]Hook installation cancelled by user.[/yellow]")
+        raise typer.Exit()

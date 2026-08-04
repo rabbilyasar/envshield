@@ -398,14 +398,14 @@ envshield doctor
 | Problem | EnvShield | Gitleaks | dotenvx | Infisical | direnv |
 |---|---|---|---|---|---|
 | Prevent secrets in commits | ✅ | ✅ Better detection | ✅ | ❌ (stores them) | ❌ |
-| Validate .env against schema | ✅ Unique | ❌ | ✅ | ✅ | ❌ |
-| Generate typed config code | ✅ Unique | ❌ | ❌ | ❌ | ❌ |
+| Validate .env against schema | ✅ | ❌ | ✅ | ✅ | ❌ |
+| Generate typed config code | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Onboarding wizard | ✅ | ❌ | ❌ | ✅ Cloud-only | ❌ |
 | Multi-service support | ✅ Built-in | ❌ | ❌ | ❌ | ❌ |
 | Works offline | ✅ | ✅ | ✅ | ❌ | ✅ |
 | Single source of truth | ✅ | ❌ | ❌ | ✅ Cloud | ❌ |
 
-**The difference:** EnvShield is the only tool that treats configuration as a *contract* — one schema that drives docs, validation, onboarding, and code generation. Others solve pieces of the puzzle; EnvShield solves the whole problem.
+**The difference:** Gitleaks detects secrets. dotenvx encrypts files. Infisical stores secrets in the cloud. EnvShield takes a different angle — one schema that drives docs, validation, onboarding, and typed code generation, for one service or many.
 
 ---
 

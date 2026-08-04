@@ -125,12 +125,13 @@ def init(
 
         try:
             scanner.install_pre_commit_hook(non_interactive=True)
+            scanner.install_post_merge_hook(non_interactive=True)
         except EnvShieldException as e:
             console.print(
-                f"\n[bold yellow]⚠️  Warning:[/] Could not install Git hook: {e}"
+                f"\n[bold yellow]⚠️  Warning:[/] Could not install Git hooks: {e}"
             )
             console.print(
-                "    You can install it later by running 'envshield install-hook' after initializing your Git repository."
+                "    You can install them later by running 'envshield install-hook' after initializing your Git repository."
             )
 
     except EnvShieldException as e:
@@ -437,9 +438,10 @@ def scan(
 
 @app.command("install-hook")
 def install_hook():
-    """Installs the Git pre-commit hook to scan for secrets automatically."""
+    """Installs Git hooks: pre-commit (scan for secrets) and post-merge (check env config after pull)."""
     try:
         scanner.install_pre_commit_hook()
+        scanner.install_post_merge_hook()
     except EnvShieldException as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(code=1)
@@ -678,3 +680,14 @@ def service_discover(
             console.print(f"    seeded schema from [dim]{config_file}[/dim]")
 
     console.print(f"\n[bold green]✨ Added {len(selected)} service(s) to envshield.yml.[/bold green]")
+
+    try:
+        scanner.install_pre_commit_hook(non_interactive=True)
+        scanner.install_post_merge_hook(non_interactive=True)
+    except EnvShieldException as e:
+        console.print(
+            f"\n[bold yellow]⚠️  Warning:[/] Could not install Git hooks: {e}"
+        )
+        console.print(
+            "    You can install them later by running 'envshield install-hook' after initializing your Git repository."
+        )
