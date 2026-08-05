@@ -5,12 +5,41 @@ import toml
 import yaml
 from rich.console import Console
 
-from envshield.core.exceptions import ConfigNotFoundError, SchemaNotFoundError, SchemaParseError
+from envshield.core.exceptions import (
+    ConfigNotFoundError,
+    SchemaNotFoundError,
+    SchemaParseError,
+    UnsafePathError,
+)
 
 CONFIG_FILE_NAME = "envshield.yml"
 SCHEMA_FILE_NAME = "env.schema.toml"
 GITIGNORE_FILE_NAME = ".gitignore"
 console = Console()
+
+
+def _ensure_within_project(path: str, label: str) -> str:
+    """
+    Validates that `path` -- typically a service's schema/local_file/
+    example_file entry read from envshield.yml -- stays within the current
+    project directory, and returns it unchanged if so.
+
+    Raises UnsafePathError otherwise. See UnsafePathError's docstring for
+    why this matters: envshield.yml is committed to the repo, so an
+    unvalidated override is a supply-chain-style arbitrary read/write vector
+    for anyone who clones the repo and runs ordinary commands.
+    """
+    project_root = os.path.abspath(os.getcwd())
+    candidate = os.path.abspath(os.path.join(project_root, path))
+    try:
+        is_within = os.path.commonpath([project_root, candidate]) == project_root
+    except ValueError:
+        # Raised on Windows when the two paths are on different drives --
+        # definitionally not "within" the project.
+        is_within = False
+    if not is_within:
+        raise UnsafePathError(label, path, project_root)
+    return path
 
 
 def load_config(path: Optional[str] = None) -> Dict[str, Any]:
@@ -89,7 +118,9 @@ def get_service_schema_path(service_name: str) -> Optional[str]:
         return None
     service_config = services[service_name]
     if isinstance(service_config, dict) and "path" in service_config:
-        return service_config["path"]
+        return _ensure_within_project(
+            service_config["path"], f"service '{service_name}' schema path"
+        )
     return None
 
 
@@ -115,6 +146,12 @@ def add_service(
     Note: envshield.yml is rewritten via a full YAML re-serialization, so
     any hand-written comments in an existing file won't survive.
     """
+    schema_path = _ensure_within_project(schema_path, f"service '{name}' schema path")
+    if local_file:
+        local_file = _ensure_within_project(local_file, f"service '{name}' local_file")
+    if example_file:
+        example_file = _ensure_within_project(example_file, f"service '{name}' example_file")
+
     config = load_config()
     services = config.get("services")
     if not isinstance(services, dict):
@@ -181,7 +218,10 @@ def get_env_paths(service_name: Optional[str] = None) -> Dict[str, str]:
     def _resolve(override_key: str, default_name: str) -> str:
         override = service_config.get(override_key)
         if override:
-            return override
+            return _ensure_within_project(
+                override,
+                f"service '{service_name}' {override_key}" if service_name else override_key,
+            )
         return (
             default_name
             if service_dir == "."

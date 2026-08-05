@@ -119,6 +119,23 @@ def test_generate_typescript_infers_types_from_default_values():
     assert "new Secret(_parsed[\"LOG_LEVEL\"])" not in content
 
 
+def test_generate_typescript_secret_uses_true_private_field():
+    """
+    Regression: the Secret<T> wrapper used TypeScript's `private` keyword,
+    which is compile-time-only and still emits a plain, enumerable runtime
+    property -- so a bare `console.log(secret)` printed the real value in
+    full, directly contradicting the wrapper's own doc comment. A true
+    EcmaScript private field (`#value`) is invisible to default object
+    inspection, so it must be used instead.
+    """
+    content = generator.generate_config({"API_KEY": {"secret": True}}, lang="typescript")
+
+    assert "#value" in content
+    assert "private _value" not in content
+    assert "this.#value = value" in content
+    assert "nodejs.util.inspect.custom" in content
+
+
 def test_generate_typescript_empty_schema():
     content = generator.generate_config({}, lang="typescript")
 

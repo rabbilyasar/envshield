@@ -2,6 +2,21 @@
 
 All notable changes to this project are documented in this file.
 
+## [4.1.1] - 2026-08-06
+
+### Fixed
+- **Critical:** the "Generic API Key" and "AWS Secret Access Key" scan patterns required the value to be quoted (`KEY = "value"`), so they were completely blind to plain, unquoted `KEY=value` assignments — the conventional `.env` format this tool exists to protect, and the format most real secrets are actually committed in. Both patterns now also match the unquoted form, bounded so they can't start or stop mid-token.
+- **Critical:** a service's `path` / `local_file` / `example_file` in `envshield.yml` was used verbatim, with no check that it stayed inside the project. Since `envshield.yml` is normally committed to the repo, a malicious or mistaken entry (an absolute path, or `../../../.ssh/authorized_keys`) could make ordinary commands like `setup` or `schema sync` read or overwrite an arbitrary file outside the project for any teammate who cloned it. These paths are now validated to resolve within the project directory, raising a clear error otherwise.
+- `scan` silently skipped any file over 1MB, with no indication that coverage was incomplete — a real secret padded past the size threshold would pass the pre-commit hook unnoticed. Skipped files are now listed in a warning.
+- The C6 diff-aware exclusion matched "new" lines by comparing line *text* against the full set of lines in HEAD, so a genuinely new line was treated as pre-existing whenever some unrelated line elsewhere in the file happened to have identical text (e.g. a repeated comment or template block). It now uses a proper positional diff.
+- Generated TypeScript config's `Secret<T>` wrapper used TypeScript's `private` keyword, which is compile-time-only and still emits a plain, enumerable runtime property — so a bare `console.log(secret)` printed the real value in full, directly contradicting the wrapper's own doc comment. It now uses a true EcmaScript private field (`#value`) plus an explicit Node inspect hook, so default object inspection can no longer see it.
+- Git hook install/checks (`install-hook`, `scan`'s hook installer, `doctor`'s hook check) hardcoded `.git/hooks`, ignoring a configured `core.hooksPath` (e.g. Husky) — silently installing or checking a hook Git never actually runs, with `doctor` falsely reporting it as active. They now resolve the real hooks directory via `git config core.hooksPath`.
+- Overwriting an existing pre-commit/post-merge hook no longer just asks a generic yes/no — it now says whether the existing hook was installed by EnvShield or is foreign, and how many lines of unrelated logic would be deleted, before confirming.
+- `file_updater.update_variables_in_file` (used by `schema sync`/`setup` when patching a non-dotenv local file) wrote dotenv values with no escaping at all, so a value containing a literal newline would split into extra physical lines — potentially injecting an unintended new assignment into the file. `setup`'s own dotenv writer had the same gap for embedded newlines despite already quoting other special characters. Both now escape embedded newlines/carriage returns.
+- `doctor --fix`'s "Configuration Files" fix shelled out to a bare `envshield init` via `os.system`, which silently did nothing if the console script wasn't on `PATH` in whatever shell/venv `doctor` was run from, with no error surfaced either way. It now runs `init` via the current Python interpreter and reports a non-zero exit instead of swallowing it.
+- Private-key detection only matched the `-----BEGIN ... PRIVATE KEY-----` header; it now also matches the `-----END-----` footer, in case one was stripped from a leaked key blob.
+- Removed a stale, unused `[tool.bumpversion]` block from `pyproject.toml` that had drifted to a different version than the actual release config in `.bumpversion.cfg`.
+
 ## [4.0.1] - 2026-08-03
 
 ### Fixed

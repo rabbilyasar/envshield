@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "envshield"
-version = "4.1.0"  # must be a string for PEP 621 compliance
+version = "4.1.1"  # must be a string for PEP 621 compliance
 description = "EnvShield: A CLI for secure local environment management and secret prevention."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -39,21 +39,6 @@ dependencies = [
 
 [project.scripts]
 envshield = "envshield.cli:app"
-
-[tool.bumpversion]
-current_version = "4.0.0"
-commit = true
-tag = true
-
-[[tool.bumpversion.files]]
-filename = "envshield/__init__.py"
-search = '__version__ = "{current_version}"'
-replace = '__version__ = "{new_version}"'
-
-[[tool.bumpversion.files]]
-filename = "pyproject.toml"
-search = 'version = "{current_version}"'
-replace = 'version = "{new_version}"'
 
 [project.optional-dependencies]
 dev = [

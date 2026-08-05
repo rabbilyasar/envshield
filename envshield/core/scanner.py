@@ -1,4 +1,5 @@
 # envshield/core/scanner.py
+import difflib
 import fnmatch
 import os
 import re
@@ -19,12 +20,24 @@ console = Console()
 
 SECRET_PATTERNS: List[Dict[str, str]] = [
     {
+        # Value may be quoted (Python/JSON-style: KEY = "value") or bare
+        # (dotenv-style: KEY=value) -- real .env files are conventionally
+        # unquoted, so requiring quotes here used to make this pattern blind
+        # to the exact file format EnvShield exists to protect. The unquoted
+        # branch is bounded on both sides so it can't start/stop mid-token.
         "name": "Generic API Key",
-        "pattern": r"(?i)(key|api(?!version)|token|secret|password|auth|credential)[a-z0-9_ .\-,]{0,25}\s*[:=]\s*['\"]([0-9a-zA-Z\-_=]{16,64})['\"]",
+        # No leading lookbehind on the unquoted branch: the value's start is
+        # already unambiguously anchored by the preceding literal '[:=]\s*'
+        # (unlike the AWS pattern below, which has no such anchor). Adding
+        # one here would misfire on the single most common shape -- 'KEY='
+        # with no space -- since '=' is itself a member of the value charset.
+        "pattern": r"(?i)(key|api(?!version)|token|secret|password|auth|credential)[a-z0-9_ .\-,]{0,25}\s*[:=]\s*(?:['\"][0-9a-zA-Z\-_=]{16,64}['\"]|[0-9a-zA-Z\-_=]{16,64}(?![0-9a-zA-Z\-_=]))",
     },
     {
+        # Matches either the header or footer line, in case one was
+        # deliberately stripped from a leaked key blob.
         "name": "Private Key",
-        "pattern": r"-----BEGIN (?:EC|PGP|DSA|RSA|OPENSSH|ENCRYPTED)? ?PRIVATE KEY(?: BLOCK)?-----",
+        "pattern": r"-----(?:BEGIN|END) (?:EC|PGP|DSA|RSA|OPENSSH|ENCRYPTED)? ?PRIVATE KEY(?: BLOCK)?-----",
     },
     {
         "name": "JSON Web Token (JWT)",
@@ -40,7 +53,13 @@ SECRET_PATTERNS: List[Dict[str, str]] = [
     },
     {
         "name": "AWS Secret Access Key",
-        "pattern": r"(?i)aws(.{0,20})?['\"][0-9a-zA-Z\/+=]{40}['\"]",
+        # Boundary checks deliberately exclude '=' (unlike the value charset
+        # itself, which includes it for base64 padding): AWS secrets are
+        # typically written straight after a bare '=' with no space, and '='
+        # is also a legal trailing content char, so treating it as "still
+        # part of a token" here would reject the exact 'KEY=<secret>' shape
+        # this branch exists to catch.
+        "pattern": r"(?i)aws(.{0,20})?(?:['\"][0-9a-zA-Z\/+=]{40}['\"]|(?<![0-9a-zA-Z\/+])[0-9a-zA-Z\/+=]{40}(?![0-9a-zA-Z\/+]))",
     },
     {"name": "Google Cloud API Key", "pattern": r"\bAIza[0-9A-Za-z\-_]{35}\b"},
     {"name": "Google OAuth Access Token", "pattern": r"\bya29\.[0-9A-Za-z\-_]+\b"},
@@ -154,14 +173,16 @@ def _get_diff_lines(file_path: str) -> Optional[set]:
         head_lines = head_content.splitlines()
         staged_lines = staged_content.splitlines()
 
-        # Build a set of existing lines from HEAD (for comparison)
-        head_line_set = set(head_lines)
-
-        # Find newly added line numbers
+        # A positional diff, not a content-set comparison: matching by exact
+        # line text alone would treat a genuinely new line as "pre-existing"
+        # whenever some unrelated line elsewhere in the file happens to have
+        # identical text (e.g. a repeated comment or template block) --
+        # letting a real new secret hide behind a coincidental text match.
+        matcher = difflib.SequenceMatcher(None, head_lines, staged_lines, autojunk=False)
         new_line_numbers = set()
-        for i, line in enumerate(staged_lines, start=1):
-            if line not in head_line_set:
-                new_line_numbers.add(i)
+        for tag, _i1, _i2, j1, j2 in matcher.get_opcodes():
+            if tag in ("insert", "replace"):
+                new_line_numbers.update(range(j1 + 1, j2 + 1))
 
         return new_line_numbers
     except Exception:
@@ -396,6 +417,7 @@ def run_scan(
 
     all_secret_findings = []
     all_undeclared_findings = []
+    skipped_large_files = []
 
     with Progress(
         SpinnerColumn(),
@@ -416,7 +438,10 @@ def run_scan(
                 # Scan what's actually staged in the index, not the working-tree
                 # copy on disk -- they can differ (see get_staged_file_content).
                 content = git_utils.get_staged_file_content(file_path)
-                if content is None or len(content) > 1_000_000:
+                if content is None:
+                    continue
+                if len(content) > 1_000_000:
+                    skipped_large_files.append(file_path)
                     continue
 
                 # C6: Diff-aware scanning for excluded files
@@ -440,11 +465,20 @@ def run_scan(
                 )
             else:
                 if os.path.exists(file_path) and os.path.getsize(file_path) > 1_000_000:
+                    skipped_large_files.append(file_path)
                     continue
                 secrets, undeclared = _scan_single_file(file_path, schema_vars)
 
             all_secret_findings.extend(secrets)
             all_undeclared_findings.extend(undeclared)
+
+    if skipped_large_files:
+        console.print(
+            f"\n[bold yellow]⚠️  Skipped {len(skipped_large_files)} file(s) over 1MB "
+            "(not scanned -- coverage is incomplete for these):[/bold yellow]"
+        )
+        for skipped_path in skipped_large_files:
+            console.print(f"    [dim]{skipped_path}[/dim]")
 
     found_issues = False
     if all_secret_findings:
@@ -502,13 +536,37 @@ def run_scan(
     raise typer.Exit(code=1)
 
 
+_ENVSHIELD_HOOK_MARKER = "# Hook installed by EnvShield"
+
+
+def _describe_existing_hook(content: str) -> str:
+    """Best-effort description of an existing hook file, for the overwrite warning."""
+    if _ENVSHIELD_HOOK_MARKER in content:
+        return "previously installed by EnvShield -- safe to regenerate"
+    if "husky.sh" in content or ".husky" in content:
+        return "managed by Husky"
+    non_comment_lines = [
+        line for line in content.splitlines() if line.strip() and not line.strip().startswith("#")
+    ]
+    return f"NOT installed by EnvShield -- overwriting will delete {len(non_comment_lines)} existing line(s) of hook logic"
+
+
+def _warn_hooks_path_redirect(hooks_dir: str, git_root: str) -> None:
+    default_dir = os.path.join(git_root, ".git", "hooks")
+    if os.path.abspath(hooks_dir) != os.path.abspath(default_dir):
+        console.print(
+            f"[dim]ℹ️  core.hooksPath is set -- installing into {hooks_dir} instead of .git/hooks.[/dim]"
+        )
+
+
 def install_pre_commit_hook(force: bool = False, non_interactive: bool = False):
     """Installs the Git pre-commit hook."""
     git_root = git_utils.get_git_root()
     if not git_root:
         raise EnvShieldException("Not inside a Git repository. Cannot install hook.")
 
-    hooks_dir = os.path.join(git_root, ".git", "hooks")
+    hooks_dir = git_utils.get_hooks_dir()
+    _warn_hooks_path_redirect(hooks_dir, git_root)
     os.makedirs(hooks_dir, exist_ok=True)
     pre_commit_path = os.path.join(hooks_dir, "pre-commit")
 
@@ -521,6 +579,9 @@ def install_pre_commit_hook(force: bool = False, non_interactive: bool = False):
 
     try:
         if os.path.exists(pre_commit_path):
+            with open(pre_commit_path, "r") as f:
+                existing_content = f.read()
+
             if non_interactive:
                 console.print(
                     "[bold yellow]⚠️  Warning:[/] A pre-commit hook already exists. EnvShield was not installed automatically."
@@ -532,7 +593,8 @@ def install_pre_commit_hook(force: bool = False, non_interactive: bool = False):
 
             if not force:
                 overwrite = questionary.confirm(
-                    "A pre-commit hook already exists. Do you want to overwrite it?",
+                    f"A pre-commit hook already exists ({_describe_existing_hook(existing_content)}). "
+                    "Do you want to overwrite it?",
                     default=False,
                 ).ask()
                 if not overwrite:
@@ -629,7 +691,8 @@ def install_post_merge_hook(force: bool = False, non_interactive: bool = False):
     if not git_root:
         raise EnvShieldException("Not inside a Git repository. Cannot install hook.")
 
-    hooks_dir = os.path.join(git_root, ".git", "hooks")
+    hooks_dir = git_utils.get_hooks_dir()
+    _warn_hooks_path_redirect(hooks_dir, git_root)
     os.makedirs(hooks_dir, exist_ok=True)
     post_merge_path = os.path.join(hooks_dir, "post-merge")
 
@@ -637,6 +700,9 @@ def install_post_merge_hook(force: bool = False, non_interactive: bool = False):
 
     try:
         if os.path.exists(post_merge_path):
+            with open(post_merge_path, "r") as f:
+                existing_content = f.read()
+
             if non_interactive:
                 console.print(
                     "[bold yellow]⚠️  Warning:[/] A post-merge hook already exists. EnvShield was not installed automatically."
@@ -648,7 +714,8 @@ def install_post_merge_hook(force: bool = False, non_interactive: bool = False):
 
             if not force:
                 overwrite = questionary.confirm(
-                    "A post-merge hook already exists. Do you want to overwrite it?",
+                    f"A post-merge hook already exists ({_describe_existing_hook(existing_content)}). "
+                    "Do you want to overwrite it?",
                     default=False,
                 ).ask()
                 if not overwrite:

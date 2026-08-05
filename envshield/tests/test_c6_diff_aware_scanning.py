@@ -53,6 +53,26 @@ class TestGetDiffLines:
             result = scanner._get_diff_lines("test.py")
             assert result == set()
 
+    def test_new_line_detected_even_if_identical_text_exists_elsewhere_in_head(self):
+        """
+        Regression: matching by line *content* alone (a set-membership check)
+        treated a genuinely new line as "pre-existing" whenever some
+        unrelated line elsewhere in the file happened to have identical
+        text -- e.g. a repeated comment or template line -- letting a real
+        new secret hide behind a coincidental text match. The diff must be
+        positional, not content-based.
+        """
+        head_content = "# placeholder\nFOO = 'a'\n# placeholder\n"
+        # A new, 4th line is inserted whose text ("# placeholder") already
+        # exists twice in HEAD -- a content-set check would never flag it.
+        staged_content = "# placeholder\nFOO = 'a'\n# placeholder\n# placeholder\n"
+
+        with patch.object(git_utils, "get_head_file_content", return_value=head_content), patch.object(
+            git_utils, "get_staged_file_content", return_value=staged_content
+        ):
+            result = scanner._get_diff_lines("test.py")
+            assert 4 in result
+
     def test_empty_staged_returns_empty_set(self):
         """File staged but empty should return empty set."""
         with patch.object(git_utils, "get_head_file_content", return_value="content"), patch.object(

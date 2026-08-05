@@ -231,6 +231,52 @@ def test_scan_with_explicit_service_still_checks_a_single_schema_for_every_file(
         assert "HERMES_VAR" in result.stdout
 
 
+def test_scan_detects_unquoted_dotenv_style_secret(tmp_path):
+    """
+    Regression: the generic secret pattern used to require quotes around the
+    value (Python/JSON style), so it was blind to plain, unquoted
+    'KEY=value' assignments -- the conventional .env format this tool exists
+    to protect, and the format every one of these values would actually be
+    committed in.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        with open(".env", "w") as f:
+            f.write("DATABASE_PASSWORD=SuperSecretProdPassw0rd\n")
+
+        result = runner.invoke(app, ["scan"])
+
+        assert result.exit_code == 1
+        assert "DANGER: Found 1 potential secret(s)!" in result.stdout
+
+
+def test_scan_detects_unquoted_aws_secret_key(tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        with open(".env", "w") as f:
+            f.write("AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n")
+
+        result = runner.invoke(app, ["scan"])
+
+        assert result.exit_code == 1
+        assert "DANGER: Found 1 potential secret(s)!" in result.stdout
+
+
+def test_scan_reports_skipped_large_files(tmp_path):
+    """
+    Regression: files over 1MB were silently skipped with zero warning --
+    coverage was incomplete and nobody was told, so a real secret padded
+    past the size threshold would sail through unnoticed.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        with open("big.env", "w") as f:
+            f.write("PADDING=" + ("a" * 1_000_010) + "\n")
+
+        result = runner.invoke(app, ["scan"])
+
+        assert result.exit_code == 0
+        assert "Skipped 1 file(s) over 1MB" in result.stdout
+        assert "big.env" in result.stdout
+
+
 def test_scan_gracefully_handles_missing_schema_file(tmp_path):
     """
     Edge Case: Tests that the scanner finds undeclared variables and fails,

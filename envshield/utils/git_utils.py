@@ -26,6 +26,45 @@ def get_git_root() -> str | None:
         return None
 
 
+def get_hooks_dir() -> str | None:
+    """
+    Returns the directory Git will actually invoke hooks from: whatever
+    'core.hooksPath' is configured to (e.g. by Husky or a similar tool), or
+    the repository's default '.git/hooks' if that's unset.
+
+    Installing/checking hooks under '.git/hooks' unconditionally -- ignoring
+    a configured core.hooksPath -- silently installs a hook Git never runs,
+    and 'doctor' would report it as active even though it isn't.
+
+    Returns:
+        The absolute path to the hooks directory, or None if not in a Git
+        repository.
+    """
+    git_root = get_git_root()
+    if not git_root:
+        return None
+
+    try:
+        result = subprocess.run(
+            ["git", "config", "--get", "core.hooksPath"],
+            cwd=git_root,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        hooks_path = result.stdout.strip()
+        if hooks_path:
+            return (
+                hooks_path
+                if os.path.isabs(hooks_path)
+                else os.path.abspath(os.path.join(git_root, hooks_path))
+            )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+
+    return os.path.join(git_root, ".git", "hooks")
+
+
 def get_staged_files() -> list[str]:
     """
     Gets a list of all files that are currently staged for the next commit.

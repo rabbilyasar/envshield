@@ -1,5 +1,7 @@
 # envshield/core/doctor.py
 import os
+import subprocess
+import sys
 from typing import List, Optional
 
 import questionary
@@ -26,7 +28,10 @@ class HealthCheck:
         self.message = ""
 
     def run(self, fix: bool = False):
-        self.passed, self.message = self.check_func()
+        try:
+            self.passed, self.message = self.check_func()
+        except EnvShieldException as e:
+            self.passed, self.message = False, str(e)
         if not self.passed:
             console.print(f"[bold red]✗ {self.description}[/bold red]: {self.message}")
             if fix and self.fix_func:
@@ -155,9 +160,8 @@ def _check_git_hook():
     if not scanner.git_utils.get_git_root():
         return False, "Not a Git repository."
 
-    hook_path = os.path.join(
-        scanner.git_utils.get_git_root(), ".git", "hooks", "pre-commit"
-    )
+    hooks_dir = scanner.git_utils.get_hooks_dir()
+    hook_path = os.path.join(hooks_dir, "pre-commit")
     if not os.path.exists(hook_path):
         return False, "Pre-commit hook is not installed."
 
@@ -167,6 +171,22 @@ def _check_git_hook():
             return False, "Pre-commit hook is present but does not run EnvShield."
 
     return True, "Pre-commit hook is installed and active."
+
+
+def _run_init_fix() -> None:
+    """
+    Runs 'envshield init' as a fix step, via the current interpreter rather
+    than a bare 'envshield' shell lookup -- so it can't silently no-op just
+    because the console script isn't on PATH in whatever shell/venv 'doctor'
+    happened to be run from. Inherits stdio (like the previous os.system call)
+    so init's own interactive prompts still work; a non-zero exit is reported
+    instead of being swallowed.
+    """
+    result = subprocess.run([sys.executable, "-m", "envshield", "init"], check=False)
+    if result.returncode != 0:
+        raise EnvShieldException(
+            f"'envshield init' exited with code {result.returncode}."
+        )
 
 
 def run_health_check(fix: bool, service_name: Optional[str] = None):
@@ -182,7 +202,7 @@ def run_health_check(fix: bool, service_name: Optional[str] = None):
         HealthCheck(
             "Configuration Files",
             lambda: _check_config_files(service_name),
-            fix_func=lambda: os.system("envshield init"),
+            fix_func=_run_init_fix,
             fix_description="No config found. Run 'envshield init' to create them?",
         ),
         HealthCheck(

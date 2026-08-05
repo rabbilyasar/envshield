@@ -49,3 +49,24 @@ class SchemaParseError(EnvShieldException):
     def __init__(self, schema_path: str, details: str):
         self.message = f"Schema parse error in {schema_path}: {details}"
         super().__init__(self.message)
+
+
+class UnsafePathError(EnvShieldException):
+    """
+    Raised when a path taken from 'envshield.yml' (a service's schema,
+    local_file, or example_file) resolves outside the project directory.
+
+    envshield.yml is normally committed to the repo, so a malicious or
+    mistaken entry there (e.g. an absolute path, or '../../../.ssh/...')
+    could otherwise make ordinary commands like 'setup' or 'schema sync'
+    read or overwrite an arbitrary file outside the project when a teammate
+    clones the repo and runs them.
+    """
+
+    def __init__(self, label: str, path: str, project_root: str):
+        self.message = (
+            f"Refusing to use {label} '{path}': it resolves outside the project "
+            f"directory ({project_root}). Check envshield.yml for a malicious or "
+            "mistaken path."
+        )
+        super().__init__(self.message)

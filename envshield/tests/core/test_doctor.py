@@ -1,11 +1,42 @@
 # envshield/tests/core/test_doctor.py
+import sys
+
+import pytest
 from typer.testing import CliRunner
 
 from envshield.cli import app
 from envshield.config.manager import CONFIG_FILE_NAME, SCHEMA_FILE_NAME
 from envshield.core import doctor
+from envshield.core.exceptions import EnvShieldException
 
 runner = CliRunner()
+
+
+def test_run_init_fix_uses_current_interpreter_not_bare_path_lookup(mocker):
+    """
+    Regression: the 'Configuration Files' fix used to shell out to a bare
+    'envshield' command via os.system, which silently did nothing (no error
+    surfaced) if the console script wasn't on PATH in whatever shell/venv
+    'doctor' happened to be run from. It must invoke the same interpreter
+    that's already running -- guaranteed to have envshield importable.
+    """
+    mock_run = mocker.patch("envshield.core.doctor.subprocess.run")
+    mock_run.return_value.returncode = 0
+
+    doctor._run_init_fix()
+
+    mock_run.assert_called_once_with(
+        [sys.executable, "-m", "envshield", "init"], check=False
+    )
+
+
+def test_run_init_fix_surfaces_a_non_zero_exit_instead_of_swallowing_it(mocker):
+    """The previous os.system call never checked its return code at all -- a failed init looked identical to a successful one."""
+    mock_run = mocker.patch("envshield.core.doctor.subprocess.run")
+    mock_run.return_value.returncode = 1
+
+    with pytest.raises(EnvShieldException, match="exited with code 1"):
+        doctor._run_init_fix()
 
 
 def test_check_example_file_sync_detects_drift(tmp_path, monkeypatch):

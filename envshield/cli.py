@@ -556,11 +556,18 @@ def service_list():
     table.add_column("Name", style="cyan")
     table.add_column("Schema", style="white")
     table.add_column("Local File", style="white")
+    had_error = False
     for name in sorted(services.keys()):
-        paths = config_manager.get_env_paths(service_name=name)
-        schema_path = config_manager.get_service_schema_path(name)
-        table.add_row(name, schema_path or "-", paths["local_file"])
+        try:
+            paths = config_manager.get_env_paths(service_name=name)
+            schema_path = config_manager.get_service_schema_path(name)
+            table.add_row(name, schema_path or "-", paths["local_file"])
+        except EnvShieldException as e:
+            table.add_row(name, f"[red]error: {e}[/red]", "-")
+            had_error = True
     console.print(table)
+    if had_error:
+        raise typer.Exit(code=1)
 
 
 @service_app.command("add")
@@ -697,14 +704,20 @@ def service_discover(
         console.print("[yellow]Nothing selected.[/yellow]")
         return
 
+    registered_count = 0
     for c in selected:
         schema_path = os.path.join(c["dir"], config_manager.SCHEMA_FILE_NAME)
-        config_manager.add_service(
-            c["name"], schema_path, local_file=c["local_file"], example_file=c["example_file"]
-        )
+        try:
+            config_manager.add_service(
+                c["name"], schema_path, local_file=c["local_file"], example_file=c["example_file"]
+            )
+        except EnvShieldException as e:
+            console.print(f"[bold red]Error:[/bold red] Skipping '{c['name']}': {e}")
+            continue
         console.print(
             f"[bold green]✓[/bold green] Registered [bold cyan]{c['name']}[/bold cyan] → {schema_path}"
         )
+        registered_count += 1
 
         # Seed from whichever real signal was actually found: the local
         # file if one exists, else a template (blank values, but still
@@ -714,7 +727,7 @@ def service_discover(
             _seed_schema_from_file(config_file, schema_path)
             console.print(f"    seeded schema from [dim]{config_file}[/dim]")
 
-    console.print(f"\n[bold green]✨ Added {len(selected)} service(s) to envshield.yml.[/bold green]")
+    console.print(f"\n[bold green]✨ Added {registered_count} service(s) to envshield.yml.[/bold green]")
 
     # Offer to install git hooks
     hm = hooks_manager.HooksManager()

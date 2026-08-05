@@ -32,8 +32,24 @@ def update_variables_in_file(file_path: str, updates: List[dict]):
     def _render(key: str, value: str) -> str:
         # For Python files, format as: KEY = "VALUE" (repr() handles escaping
         # quotes/backslashes that plain string values may contain).
-        # For .env files, format as: KEY=VALUE
-        return f"{key} = {value!r}\n" if is_python else f"{key}={value}\n"
+        if is_python:
+            return f"{key} = {value!r}\n"
+
+        # For .env files: dotenv has no line-continuation syntax, so a literal
+        # newline/carriage-return in the value would otherwise split it into
+        # extra lines -- potentially injecting an unintended new KEY=VALUE
+        # assignment into the file. There's no unescaping on read (see
+        # parsers/_dotenv.py), so this is a one-way, safety-only transform,
+        # not a round-trip-preserving escape. Quoting whitespace/'#'/'='
+        # mirrors setup_manager._write_dotenv_local_file's existing heuristic
+        # for the same file format.
+        safe_value = value.replace("\n", "\\n").replace("\r", "\\r")
+        already_quoted = (safe_value.startswith("'") and safe_value.endswith("'")) or (
+            safe_value.startswith('"') and safe_value.endswith('"')
+        )
+        if re.search(r"[#\s=]", safe_value) and not already_quoted:
+            return f'{key}="{safe_value}"\n'
+        return f"{key}={safe_value}\n"
 
     remaining = {u["key"]: u["value"] for u in updates}
 
