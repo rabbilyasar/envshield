@@ -2,6 +2,21 @@
 
 All notable changes to this project are documented in this file.
 
+## [4.2.0] - 2026-08-06
+
+### Added
+- **Richer schema types.** A variable in `env.schema.toml` can now declare `type` (`string`, `int`, `float`, `bool`, `port`, `url`, `email`), `enum` (a list of allowed values), and `pattern` (a regex constraint) — enforced by `check`, `doctor`, and `setup`, and reflected in generated Python (`AnyUrl`, `EmailStr`, `Literal[...]`, `Field(pattern=..., ge=1, le=65535)`) and TypeScript (`z.string().url()`, `z.string().email()`, `z.enum([...])`, `.regex(...)`) config code. A variable can also declare `requiredIf = { var = "OTHER_VAR", equals = "true" }` to be required only when another variable currently has a specific value, instead of unconditionally.
+- **Deployment-manifest validation.** `envshield check` now accepts a docker-compose file or a Kubernetes manifest (Deployment/StatefulSet/DaemonSet/Job/CronJob/Pod, including multi-document files) in addition to a plain `.env` file, auto-detected by content. A new `--container` flag picks which service/container to validate when a manifest declares more than one — auto-resolved from `--service`'s name first, so it's rarely needed explicitly.
+- **Schema composition.** A schema can declare `extends = "path/to/base.schema.toml"` (or a list, for multiple bases) to inherit variables from a shared base schema — for common variables (`LOG_LEVEL`, `SENTRY_DSN`, ...) duplicated across every service in a monorepo. Chained and multiple `extends` are supported; a variable defined in more than one place is fully overridden by whichever definition is closest to the schema actually being loaded.
+- `service discover`/`service add`/`init` now auto-detect a docker-compose file (in the service's own directory, or the project root) and register it as that service's/project's deployment manifest automatically — no separate opt-in step.
+- Once a deployment manifest is registered, `envshield check` validates it automatically alongside the local `.env` file in the same invocation (when no explicit file argument is given), and `doctor` gains a "Deployment Manifest" health check that's only shown at all when one is actually registered.
+- `import` now infers a variable's `type` (`int`/`port`/`bool`/`url`/`email`) from its sample value wherever the shape is unambiguous, so a freshly-imported schema starts with real constraints instead of every variable defaulting to an unconstrained string. Never applied to a variable already classified as a secret.
+- `setup` now re-validates a variable's *existing* value (not just whether it's present) — a value hand-edited into something the schema no longer allows (an enum typo, a bad URL) is re-prompted for, while everything already correct is left untouched. Enum fields are now selected from a picker instead of typed freehand, so an invalid enum value can no longer be entered in the first place.
+- `doctor --fix` for "Local Environment Sync" now does something: it delegates to `setup`, which fills in whatever's missing, blank, or invalid.
+
+### Fixed
+- `check`'s and `doctor`'s missing/blank/invalid/extra comparisons were two separately-maintained implementations that could in principle drift out of agreement; they now share one function (`schema_manager.diff_against_schema`).
+
 ## [4.1.1] - 2026-08-06
 
 ### Fixed
