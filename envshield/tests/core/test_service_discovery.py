@@ -198,3 +198,39 @@ def test_discover_candidates_disambiguates_name_collisions(tmp_path):
     assert len(candidates) == 2
     assert "api" in names
     assert any(n != "api" for n in names)  # the second one got disambiguated
+
+
+def test_find_compose_file_prefers_service_directory_over_project_root(tmp_path):
+    (tmp_path / "api").mkdir()
+    (tmp_path / "api" / "docker-compose.yml").write_text("services:\n  api:\n    image: x\n")
+    (tmp_path / "docker-compose.yml").write_text("services:\n  root:\n    image: x\n")
+
+    found = service_discovery.find_compose_file(str(tmp_path / "api"), str(tmp_path))
+
+    assert found == os.path.normpath(str(tmp_path / "api" / "docker-compose.yml"))
+
+
+def test_find_compose_file_falls_back_to_project_root(tmp_path):
+    (tmp_path / "api").mkdir()
+    (tmp_path / "docker-compose.yml").write_text("services:\n  api:\n    image: x\n")
+
+    found = service_discovery.find_compose_file(str(tmp_path / "api"), str(tmp_path))
+
+    assert found == os.path.normpath(str(tmp_path / "docker-compose.yml"))
+
+
+def test_find_compose_file_returns_none_when_absent(tmp_path):
+    (tmp_path / "api").mkdir()
+
+    assert service_discovery.find_compose_file(str(tmp_path / "api"), str(tmp_path)) is None
+
+
+def test_discover_candidates_includes_deployment_manifest_when_found(tmp_path):
+    (tmp_path / "api").mkdir()
+    (tmp_path / "api" / ".env").write_text("KEY=1\n")
+    (tmp_path / "docker-compose.yml").write_text("services:\n  api:\n    image: x\n")
+
+    candidates = service_discovery.discover_candidates(str(tmp_path))
+
+    api = next(c for c in candidates if c["name"] == "api")
+    assert api["deployment_manifest"] == os.path.normpath(str(tmp_path / "docker-compose.yml"))

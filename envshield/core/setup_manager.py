@@ -13,7 +13,7 @@ from rich.prompt import Prompt
 
 from .importer import key_contains_secret_keyword
 from .exceptions import EnvShieldException
-from . import file_updater
+from . import file_updater, schema_types
 from ..config import manager as config_manager
 from ..parsers.factory import get_parser
 
@@ -118,18 +118,34 @@ def run_setup(output_file: Optional[str] = None, service_name: Optional[str] = N
     keys_to_prompt: List[str] = []
     all_keys = list(schema.keys()) + [k for k in seed_values if k not in schema]
 
-    for key in all_keys:
-        if final_vars.get(key):
-            continue
-        field_schema = schema.get(key, {})
-        if "defaultValue" in field_schema:
+    # Fill in every schema default first, regardless of key order, so a
+    # 'requiredIf' condition can be evaluated against a sibling's default
+    # value below even when that sibling comes later in the schema.
+    for key, field_schema in schema.items():
+        if not final_vars.get(key) and "defaultValue" in field_schema:
             final_vars[key] = field_schema["defaultValue"]
-            continue
+
+    for key in all_keys:
+        field_schema = schema.get(key, {})
+        existing = final_vars.get(key)
+        if existing:
+            # Already has a value -- only re-prompt if it's actually invalid
+            # against the schema (e.g. hand-edited to something the
+            # enum/pattern/type no longer allows). A var with no schema
+            # entry at all (an extra, already-present local var) is never
+            # second-guessed.
+            if key not in schema or not schema_types.validate_value(existing, field_schema):
+                continue
+        else:
+            if "defaultValue" in field_schema:
+                continue  # already filled above
+            if not schema_types.is_required_now(field_schema, final_vars):
+                continue  # not required right now (unmet 'requiredIf') -- don't nag for it
         keys_to_prompt.append(key)
 
-    # Step 2: Prompt for whatever's still missing
+    # Step 2: Prompt for whatever's still missing (or invalid)
     if not keys_to_prompt:
-        console.print("[green]✓ No empty variables found to configure.[/green]")
+        console.print("[green]✓ No empty or invalid variables found to configure.[/green]")
     else:
         console.print(
             "\n[bold]Please provide values for the following variables:[/bold]"
@@ -145,10 +161,37 @@ def run_setup(output_file: Optional[str] = None, service_name: Optional[str] = N
                 if "secret" in field_schema
                 else _is_secret_key(key)
             )
-            new_value = Prompt.ask(
-                f"  Please enter the value for [bold cyan]{key}[/bold cyan]",
-                password=is_secret,
-            )
+            enum_choices = schema_types.enum_values(field_schema)
+
+            if enum_choices:
+                # A picker can't produce an invalid value -- no retry loop needed.
+                existing = final_vars.get(key)
+                new_value = questionary.select(
+                    f"  Please select a value for {key}",
+                    choices=enum_choices,
+                    default=existing if existing in enum_choices else None,
+                ).ask()
+                if new_value is None:
+                    raise EnvShieldException("Setup cancelled by user.")
+            else:
+                new_value = ""
+                max_attempts = 3
+                for attempt in range(1, max_attempts + 1):
+                    new_value = Prompt.ask(
+                        f"  Please enter the value for [bold cyan]{key}[/bold cyan]",
+                        password=is_secret,
+                    )
+                    error = (
+                        schema_types.validate_value(new_value, field_schema) if new_value else None
+                    )
+                    if not error:
+                        break
+                    console.print(f"  [red]✗ {error}[/red]")
+                    if attempt == max_attempts:
+                        console.print(
+                            f"  [yellow]Keeping this value after {max_attempts} attempts -- "
+                            "fix it later with 'envshield check'.[/yellow]"
+                        )
             final_vars[key] = new_value
 
     # Step 3: Write the result

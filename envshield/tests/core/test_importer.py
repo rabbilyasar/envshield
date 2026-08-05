@@ -1,4 +1,6 @@
 # envshield/tests/core/test_importer.py
+import toml
+
 from envshield.core import importer
 
 
@@ -192,3 +194,63 @@ def test_stripe_publishable_key_is_not_flagged_by_the_secret_scanner():
 
     assert not any(re.search(p["pattern"], publishable) for p in SECRET_PATTERNS)
     assert any(re.search(p["pattern"], secret) for p in SECRET_PATTERNS)
+
+
+def test_infer_type_recognizes_int():
+    assert importer._infer_type("MAX_RETRIES", "3") == "int"
+
+
+def test_infer_type_recognizes_port_by_key_name():
+    assert importer._infer_type("API_PORT", "8080") == "port"
+    assert importer._infer_type("DB_PORT", "5432") == "port"
+
+
+def test_infer_type_recognizes_bool():
+    assert importer._infer_type("DEBUG", "true") == "bool"
+    assert importer._infer_type("DEBUG", "False") == "bool"
+
+
+def test_infer_type_recognizes_url():
+    assert importer._infer_type("API_BASE_URL", "https://api.example.com") == "url"
+
+
+def test_infer_type_recognizes_email():
+    assert importer._infer_type("ADMIN_EMAIL", "ops@example.com") == "email"
+
+
+def test_infer_type_returns_none_for_a_plain_string():
+    assert importer._infer_type("LOG_LEVEL", "info") is None
+
+
+def test_infer_type_returns_none_for_blank_value():
+    assert importer._infer_type("SOMETHING", "") is None
+
+
+def test_generate_schema_from_file_includes_inferred_types(tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "API_PORT=8080\n"
+        "DEBUG=true\n"
+        "API_BASE_URL=https://api.example.com\n"
+        "LOG_LEVEL=info\n"
+    )
+
+    schema_content = importer.generate_schema_from_file(str(env_file))
+    schema = toml.loads(schema_content)
+
+    assert schema["API_PORT"]["type"] == "port"
+    assert schema["DEBUG"]["type"] == "bool"
+    assert schema["API_BASE_URL"]["type"] == "url"
+    assert "type" not in schema["LOG_LEVEL"]
+
+
+def test_generate_schema_from_file_does_not_infer_a_type_for_secrets(tmp_path):
+    """A secret's value shape (e.g. a URL-shaped connection string) must never drive a non-secret type constraint."""
+    env_file = tmp_path / ".env"
+    env_file.write_text("DATABASE_URL=postgres://user:pass@localhost/db\n")
+
+    schema_content = importer.generate_schema_from_file(str(env_file))
+    schema = toml.loads(schema_content)
+
+    assert schema["DATABASE_URL"]["secret"] is True
+    assert "type" not in schema["DATABASE_URL"]

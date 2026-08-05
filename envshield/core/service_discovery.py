@@ -42,6 +42,29 @@ PYTHON_CONFIG_CANDIDATES = [
 # script that happens to live at one of the candidate paths.
 MIN_CONFIG_VARS = 3
 
+# Conventional docker-compose filenames, newest naming convention first
+# (plain 'compose.yaml' is the current Compose Spec name; 'docker-compose.yml'
+# is the long-standing, still far more common one in the wild).
+COMPOSE_FILENAMES = ("docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml")
+
+
+def find_compose_file(service_dir: str, project_root: str = ".") -> Optional[str]:
+    """
+    Looks for a docker-compose file that plausibly configures `service_dir`:
+    first directly inside it (a per-service compose file), then at the
+    project root (the far more common shape -- one compose file listing
+    every service). Kubernetes manifests aren't auto-detected here: unlike
+    a compose file's single well-known name, there's no equally reliable
+    convention for "which YAML file(s) under k8s/ belong to this service",
+    so that stays an explicit '--deployment-manifest' opt-in for now.
+    """
+    for base_dir in (service_dir, project_root):
+        for filename in COMPOSE_FILENAMES:
+            candidate = os.path.join(base_dir, filename)
+            if os.path.isfile(candidate):
+                return os.path.normpath(candidate)
+    return None
+
 
 def _looks_like_python_config_module(path: str) -> bool:
     parser = get_parser(path)
@@ -190,7 +213,15 @@ def discover_candidates(
     NOT enough by itself: a shared library package is exactly as likely to
     have one of those as a real service is, and has no env vars of its own.
 
-    Returns a list of dicts: {name, dir, project_type, format, local_file, example_file}.
+    Returns a list of dicts: {name, dir, project_type, format, local_file,
+    example_file, deployment_manifest}. `deployment_manifest`, when found,
+    is registered automatically -- no '--deployment-manifest' flag needed
+    for the common case of a docker-compose file at the project root or
+    inside the service's own directory (see find_compose_file). If its
+    compose file lists more than one service, `check`/`doctor` still work
+    without any extra setup as long as this service's name matches one of
+    the compose service names (see the parsers' `prefer` hint) -- otherwise
+    they'll report exactly which flag/edit resolves the ambiguity.
     """
     known_dirs_norm = {os.path.normpath(d) for d in (known_dirs or [])}
     candidates = []
@@ -222,6 +253,7 @@ def discover_candidates(
                 "format": env_style["format"],
                 "local_file": env_style["local_file"],
                 "example_file": env_style["example_file"],
+                "deployment_manifest": find_compose_file(normalized, root),
             }
         )
 

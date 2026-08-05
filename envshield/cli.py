@@ -137,7 +137,15 @@ def init(
             f"Created/updated schema: [bold cyan]{config_manager.SCHEMA_FILE_NAME}[/bold cyan]",
         )
 
-        config_content = config_manager.generate_default_config_content(project_name)
+        compose_file = service_discovery.find_compose_file(".", ".")
+        if compose_file:
+            console.print(
+                f"Found deployment manifest [bold yellow]{compose_file}[/bold yellow] -- "
+                "registering it so 'check'/'doctor' validate it automatically."
+            )
+        config_content = config_manager.generate_default_config_content(
+            project_name, deployment_manifest=compose_file
+        )
         config_manager.write_file(
             config_manager.CONFIG_FILE_NAME,
             config_content,
@@ -178,8 +186,16 @@ def check(
         "-s",
         help="If set, validate against this service's schema (for multi-service projects).",
     ),
+    container: Optional[str] = typer.Option(
+        None,
+        "--container",
+        help=(
+            "For a docker-compose or Kubernetes manifest declaring more than one "
+            "service/container, which one to validate."
+        ),
+    ),
 ):
-    """Validates a local environment file against the schema."""
+    """Validates a local environment file against the schema. Also accepts a docker-compose or Kubernetes manifest."""
     try:
         targets = service_manager.resolve_targets(service)
     except EnvShieldException as e:
@@ -199,8 +215,23 @@ def check(
         _print_service_header(targets, target)
         try:
             resolved_file = file or config_manager.get_env_paths(service_name=target)["local_file"]
-            if not schema_manager.check_schema(resolved_file, service_name=target):
+            if not schema_manager.check_schema(
+                resolved_file, service_name=target, container=container
+            ):
                 had_error = True
+
+            # An explicit file argument means the user asked for exactly
+            # that file, and nothing else -- only pile on the registered
+            # deployment manifest (if any) when we're checking the
+            # project's/service's own default local file.
+            if not file:
+                manifest = config_manager.get_deployment_manifest(target)
+                if manifest:
+                    manifest_container = manifest.get("container") or container
+                    if not schema_manager.check_schema(
+                        manifest["path"], service_name=target, container=manifest_container
+                    ):
+                        had_error = True
         except EnvShieldException as e:
             console.print(f"[bold red]Error:[/bold red] {e}")
             had_error = True
@@ -597,16 +628,34 @@ def service_add(
         "--import",
         help="If given, seed the new service's schema from this existing config file (same as running 'envshield import').",
     ),
+    deployment_manifest: Optional[str] = typer.Option(
+        None,
+        "--deployment-manifest",
+        help="A docker-compose file or Kubernetes manifest to validate automatically with 'check'/'doctor'.",
+    ),
+    manifest_container: Optional[str] = typer.Option(
+        None,
+        "--container",
+        help="Which service/container in --deployment-manifest is this service, if it isn't named the same.",
+    ),
 ):
     """Registers one service in envshield.yml by hand, creating the file if needed."""
     try:
         schema_path = schema or os.path.join(directory, config_manager.SCHEMA_FILE_NAME)
+        if not deployment_manifest:
+            deployment_manifest = service_discovery.find_compose_file(directory, ".")
+            if deployment_manifest:
+                console.print(
+                    f"[dim]Found deployment manifest {deployment_manifest} -- registering it too.[/dim]"
+                )
         config_manager.add_service(
             name,
             schema_path,
             local_file=local_file,
             example_file=example_file,
             description=description,
+            deployment_manifest=deployment_manifest,
+            container=manifest_container,
         )
         console.print(
             f"[bold green]✓[/bold green] Registered service [bold cyan]{name}[/bold cyan] → {schema_path}"
@@ -669,9 +718,12 @@ def service_discover(
     table.add_column("Directory", style="white")
     table.add_column("Format", style="magenta")
     table.add_column("Config File", style="white")
+    table.add_column("Deployment Manifest", style="white")
     for c in candidates:
         config_file_display = c["local_file"] or c["example_file"] or "(default .env)"
-        table.add_row(c["name"], c["dir"], c["format"], config_file_display)
+        table.add_row(
+            c["name"], c["dir"], c["format"], config_file_display, c["deployment_manifest"] or "-"
+        )
     console.print(table)
 
     if yes:
@@ -709,7 +761,11 @@ def service_discover(
         schema_path = os.path.join(c["dir"], config_manager.SCHEMA_FILE_NAME)
         try:
             config_manager.add_service(
-                c["name"], schema_path, local_file=c["local_file"], example_file=c["example_file"]
+                c["name"],
+                schema_path,
+                local_file=c["local_file"],
+                example_file=c["example_file"],
+                deployment_manifest=c["deployment_manifest"],
             )
         except EnvShieldException as e:
             console.print(f"[bold red]Error:[/bold red] Skipping '{c['name']}': {e}")

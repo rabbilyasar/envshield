@@ -232,3 +232,233 @@ def test_sync_schema_reports_when_python_file_already_declares_everything(
         after = f.read()
 
     assert before == after
+
+
+def test_diff_against_schema_reports_clean_result():
+    diff = schema_manager.diff_against_schema(
+        {"FOO": {"description": "x"}}, {"FOO": "bar"}
+    )
+
+    assert diff.is_clean is True
+    assert diff.summary() == ""
+
+
+def test_diff_against_schema_reports_every_category():
+    schema = {
+        "MISSING": {"description": "x"},
+        "BLANK": {"description": "x"},
+        "PORT": {"description": "x", "type": "port"},
+    }
+    local_values = {"BLANK": "", "PORT": "not-a-port", "EXTRA": "y"}
+
+    diff = schema_manager.diff_against_schema(schema, local_values)
+
+    assert diff.is_clean is False
+    assert diff.missing == {"MISSING"}
+    assert diff.blank == {"BLANK"}
+    assert "PORT" in diff.invalid
+    assert diff.extra == {"EXTRA"}
+    summary = diff.summary()
+    assert "MISSING" in summary and "BLANK" in summary and "PORT" in summary and "EXTRA" in summary
+
+
+def test_check_schema_flags_an_invalid_enum_value(mocker, tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        mocker.patch(
+            "envshield.config.manager.load_schema",
+            return_value={"LOG_LEVEL": {"enum": ["debug", "info", "warn", "error"]}},
+        )
+        with open(".env.local", "w") as f:
+            f.write("LOG_LEVEL=verbose\n")
+
+        is_in_sync = schema_manager.check_schema(".env.local")
+
+        assert is_in_sync is False
+
+
+def test_check_schema_flags_an_invalid_port_value(mocker, tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        mocker.patch(
+            "envshield.config.manager.load_schema",
+            return_value={"API_PORT": {"type": "port"}},
+        )
+        with open(".env.local", "w") as f:
+            f.write("API_PORT=999999\n")
+
+        is_in_sync = schema_manager.check_schema(".env.local")
+
+        assert is_in_sync is False
+
+
+def test_check_schema_passes_a_valid_typed_value(mocker, tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        mocker.patch(
+            "envshield.config.manager.load_schema",
+            return_value={"API_PORT": {"type": "port"}},
+        )
+        with open(".env.local", "w") as f:
+            f.write("API_PORT=8080\n")
+
+        assert schema_manager.check_schema(".env.local") is True
+
+
+def test_check_schema_required_if_not_triggered_when_condition_unmet(mocker, tmp_path):
+    """A var with 'requiredIf' must not be flagged missing when its condition doesn't hold."""
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        mocker.patch(
+            "envshield.config.manager.load_schema",
+            return_value={
+                "FEATURE_X_ENABLED": {"defaultValue": "false"},
+                "FEATURE_X_API_KEY": {
+                    "secret": True,
+                    "requiredIf": {"var": "FEATURE_X_ENABLED", "equals": "true"},
+                },
+            },
+        )
+        with open(".env.local", "w") as f:
+            f.write("FEATURE_X_ENABLED=false\n")
+
+        assert schema_manager.check_schema(".env.local") is True
+
+
+def test_check_schema_required_if_triggered_when_condition_met(mocker, tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        mocker.patch(
+            "envshield.config.manager.load_schema",
+            return_value={
+                "FEATURE_X_ENABLED": {"defaultValue": "false"},
+                "FEATURE_X_API_KEY": {
+                    "secret": True,
+                    "requiredIf": {"var": "FEATURE_X_ENABLED", "equals": "true"},
+                },
+            },
+        )
+        with open(".env.local", "w") as f:
+            f.write("FEATURE_X_ENABLED=true\n")
+
+        assert schema_manager.check_schema(".env.local") is False
+
+
+def test_check_schema_against_docker_compose_file(mocker, tmp_path):
+    """A docker-compose file can be validated the same way a plain .env file can."""
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        mocker.patch(
+            "envshield.config.manager.load_schema",
+            return_value={
+                "DATABASE_URL": {"secret": True},
+                "REDIS_URL": {"secret": False},
+            },
+        )
+        with open("docker-compose.yml", "w") as f:
+            f.write(
+                "services:\n"
+                "  api:\n"
+                "    image: myorg/api\n"
+                "    environment:\n"
+                "      - DATABASE_URL=postgres://user:pass@db/app\n"
+            )
+
+        is_in_sync = schema_manager.check_schema("docker-compose.yml")
+
+        # REDIS_URL is genuinely missing from the manifest.
+        assert is_in_sync is False
+
+
+def test_check_schema_against_docker_compose_requires_container_when_ambiguous(mocker, tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        mocker.patch("envshield.config.manager.load_schema", return_value={})
+        with open("docker-compose.yml", "w") as f:
+            f.write(
+                "services:\n"
+                "  api:\n"
+                "    image: myorg/api\n"
+                "  worker:\n"
+                "    image: myorg/worker\n"
+            )
+
+        is_in_sync = schema_manager.check_schema("docker-compose.yml")
+
+        assert is_in_sync is False
+
+
+def test_check_schema_against_docker_compose_with_explicit_container(mocker, tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        mocker.patch(
+            "envshield.config.manager.load_schema",
+            return_value={"REDIS_URL": {"secret": False}},
+        )
+        with open("docker-compose.yml", "w") as f:
+            f.write(
+                "services:\n"
+                "  api:\n"
+                "    image: myorg/api\n"
+                "    environment:\n"
+                "      - DATABASE_URL=postgres://user:pass@db/app\n"
+                "  worker:\n"
+                "    image: myorg/worker\n"
+                "    environment:\n"
+                "      - REDIS_URL=redis://cache:6379\n"
+            )
+
+        is_in_sync = schema_manager.check_schema("docker-compose.yml", container="worker")
+
+        assert is_in_sync is True
+
+
+def test_check_schema_against_kubernetes_deployment_manifest(mocker, tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        mocker.patch(
+            "envshield.config.manager.load_schema",
+            return_value={"DATABASE_URL": {"secret": True}, "LOG_LEVEL": {"secret": False}},
+        )
+        with open("deployment.yaml", "w") as f:
+            f.write(
+                "apiVersion: apps/v1\n"
+                "kind: Deployment\n"
+                "metadata:\n"
+                "  name: api\n"
+                "spec:\n"
+                "  template:\n"
+                "    spec:\n"
+                "      containers:\n"
+                "        - name: api\n"
+                "          env:\n"
+                "            - name: DATABASE_URL\n"
+                "              valueFrom:\n"
+                "                secretKeyRef:\n"
+                "                  name: db-secret\n"
+                "                  key: url\n"
+                "            - name: LOG_LEVEL\n"
+                "              value: info\n"
+            )
+
+        is_in_sync = schema_manager.check_schema("deployment.yaml")
+
+        assert is_in_sync is True
+
+
+def test_check_schema_against_kubernetes_manifest_flags_missing_var(mocker, tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        mocker.patch(
+            "envshield.config.manager.load_schema",
+            return_value={"DATABASE_URL": {"secret": True}, "LOG_LEVEL": {"secret": False}},
+        )
+        with open("deployment.yaml", "w") as f:
+            f.write(
+                "apiVersion: apps/v1\n"
+                "kind: Deployment\n"
+                "metadata:\n"
+                "  name: api\n"
+                "spec:\n"
+                "  template:\n"
+                "    spec:\n"
+                "      containers:\n"
+                "        - name: api\n"
+                "          env:\n"
+                "            - name: LOG_LEVEL\n"
+                "              value: info\n"
+            )
+
+        is_in_sync = schema_manager.check_schema("deployment.yaml")
+
+        assert is_in_sync is False

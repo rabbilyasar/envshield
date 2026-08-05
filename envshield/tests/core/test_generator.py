@@ -119,6 +119,110 @@ def test_generate_typescript_infers_types_from_default_values():
     assert "new Secret(_parsed[\"LOG_LEVEL\"])" not in content
 
 
+def test_generate_config_explicit_enum_type_python():
+    schema = {
+        "LOG_LEVEL": {
+            "description": "Verbosity.",
+            "secret": False,
+            "enum": ["debug", "info", "warn", "error"],
+        },
+    }
+
+    content = generator.generate_config(schema, lang="python")
+
+    assert "from typing import Literal" in content
+    assert "log_level: Literal['debug', 'info', 'warn', 'error'] = Field(" in content
+
+
+def test_generate_config_explicit_port_type_python():
+    schema = {"API_PORT": {"description": "Port.", "type": "port", "defaultValue": "8080"}}
+
+    content = generator.generate_config(schema, lang="python")
+
+    assert "api_port: int = Field(" in content
+    assert "8080, description='Port.', alias='API_PORT', ge=1, le=65535" in content
+
+
+def test_generate_config_explicit_url_type_python_adds_import():
+    schema = {"API_URL": {"description": "URL.", "type": "url"}}
+
+    content = generator.generate_config(schema, lang="python")
+
+    assert "from pydantic import AnyUrl" in content
+    assert "api_url: AnyUrl = Field(" in content
+
+
+def test_generate_config_explicit_email_type_python_notes_extra():
+    schema = {"ADMIN_EMAIL": {"description": "Admin.", "type": "email"}}
+
+    content = generator.generate_config(schema, lang="python")
+
+    assert "from pydantic import EmailStr" in content
+    assert "pydantic[email]" in content
+
+
+def test_generate_config_pattern_becomes_field_constraint():
+    schema = {"VERSION": {"description": "Semver.", "pattern": r"^v\d+\.\d+\.\d+$"}}
+
+    content = generator.generate_config(schema, lang="python")
+
+    assert "pattern='^v\\\\d+\\\\.\\\\d+\\\\.\\\\d+$'" in content
+
+
+def test_generate_config_required_if_becomes_optional_python():
+    schema = {
+        "FEATURE_X_API_KEY": {
+            "description": "Only needed when feature X is on.",
+            "secret": True,
+            "requiredIf": {"var": "FEATURE_X_ENABLED", "equals": "true"},
+        }
+    }
+
+    content = generator.generate_config(schema, lang="python")
+
+    assert "from typing import Optional" in content
+    assert "feature_x_api_key: Optional[SecretStr] = Field(" in content
+    assert "None, description=" in content
+
+
+def test_generate_typescript_explicit_enum_type():
+    schema = {"LOG_LEVEL": {"description": "Verbosity.", "enum": ["debug", "info"]}}
+
+    content = generator.generate_config(schema, lang="typescript")
+
+    assert '"LOG_LEVEL": z.enum(["debug", "info"])' in content
+
+
+def test_generate_typescript_explicit_port_type_with_default():
+    schema = {"API_PORT": {"description": "Port.", "type": "port", "defaultValue": "8080"}}
+
+    content = generator.generate_config(schema, lang="typescript")
+
+    assert '"API_PORT": z.coerce.number().min(1).max(65535).default(8080),' in content
+
+
+def test_generate_typescript_explicit_url_type():
+    schema = {"API_URL": {"description": "URL."}}
+    schema["API_URL"]["type"] = "url"
+
+    content = generator.generate_config(schema, lang="typescript")
+
+    assert '"API_URL": z.string().url(),' in content
+
+
+def test_generate_typescript_required_if_becomes_optional():
+    schema = {
+        "FEATURE_X_API_KEY": {
+            "description": "Only needed when feature X is on.",
+            "requiredIf": {"var": "FEATURE_X_ENABLED", "equals": "true"},
+        }
+    }
+
+    content = generator.generate_config(schema, lang="typescript")
+
+    assert '"FEATURE_X_API_KEY": z.string().optional(),' in content
+
+
 def test_generate_typescript_secret_uses_true_private_field():
     """
     Regression: the Secret<T> wrapper used TypeScript's `private` keyword,

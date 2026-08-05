@@ -155,3 +155,59 @@ def test_service_discover_reports_nothing_new(tmp_path):
 
         assert result.exit_code == 0
         assert "No new service-like directories found" in result.stdout
+
+
+def test_service_discover_auto_registers_a_found_compose_file(tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.makedirs("api")
+        with open("api/.env", "w") as f:
+            f.write("KEY=1\n")
+        with open("docker-compose.yml", "w") as f:
+            f.write("services:\n  api:\n    image: x\n")
+
+        result = runner.invoke(app, ["service", "discover", "--yes"])
+
+        assert result.exit_code == 0
+        assert config_manager.get_services()["api"]["deployment_manifest"] == "docker-compose.yml"
+        assert "docker-compose.yml" in result.stdout
+
+
+def test_service_add_auto_detects_compose_file_in_service_directory(tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.makedirs("api")
+        with open("api/docker-compose.yml", "w") as f:
+            f.write("services:\n  api:\n    image: x\n")
+
+        result = runner.invoke(app, ["service", "add", "api", "api"])
+
+        assert result.exit_code == 0
+        assert (
+            config_manager.get_services()["api"]["deployment_manifest"]
+            == "api/docker-compose.yml"
+        )
+
+
+def test_service_add_explicit_deployment_manifest_and_container(tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.makedirs("api")
+        with open("docker-compose.yml", "w") as f:
+            f.write("services:\n  backend:\n    image: x\n")
+
+        result = runner.invoke(
+            app,
+            [
+                "service",
+                "add",
+                "api",
+                "api",
+                "--deployment-manifest",
+                "docker-compose.yml",
+                "--container",
+                "backend",
+            ],
+        )
+
+        assert result.exit_code == 0
+        entry = config_manager.get_services()["api"]
+        assert entry["deployment_manifest"] == "docker-compose.yml"
+        assert entry["container"] == "backend"

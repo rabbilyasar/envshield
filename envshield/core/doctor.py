@@ -8,7 +8,7 @@ import questionary
 import typer
 from rich.console import Console
 
-from . import schema_manager, scanner
+from . import schema_manager, scanner, setup_manager
 from .exceptions import EnvShieldException
 from ..config import manager as config_manager
 from ..parsers.factory import get_parser
@@ -77,10 +77,6 @@ def _check_config_files(service_name: Optional[str] = None):
 def _check_local_env_sync(service_name: Optional[str] = None):
     try:
         schema = config_manager.load_schema(service_name=service_name)
-        schema_vars = set(schema.keys())
-        required_vars = {
-            key for key, details in schema.items() if "defaultValue" not in details
-        }
         local_file = config_manager.get_env_paths(service_name=service_name)["local_file"]
         if not os.path.exists(local_file):
             return False, f"Local env file '{local_file}' not found."
@@ -89,33 +85,37 @@ def _check_local_env_sync(service_name: Optional[str] = None):
         if not parser:
             return False, f"Cannot parse local env file '{local_file}'."
         local_values = parser.get_vars(local_file, get_values=True)
-        local_vars = set(local_values.keys())
 
-        missing = schema_vars - local_vars
-        # A required var (no schema default) present only as a blank
-        # placeholder -- e.g. `SECRETS_ENCRYPTION_KEY = ""` checked in ahead
-        # of a real per-developer secret -- is just as incomplete as one
-        # missing outright. Checking only for the key's presence let this
-        # go undetected right up until it broke at runtime.
-        blank_required = {
-            key for key in required_vars if key in local_values and not local_values[key]
-        }
-        extra = local_vars - schema_vars
-
-        if not missing and not blank_required and not extra:
+        diff = schema_manager.diff_against_schema(schema, local_values)
+        if diff.is_clean:
             return True, f"'{local_file}' is in sync with schema."
-
-        messages = []
-        if missing:
-            messages.append(f"Missing variables: {', '.join(sorted(missing))}")
-        if blank_required:
-            messages.append(f"Required but blank: {', '.join(sorted(blank_required))}")
-        if extra:
-            messages.append(f"Extra variables: {', '.join(sorted(extra))}")
-        return False, "; ".join(messages)
+        return False, diff.summary()
 
     except EnvShieldException:
         return False, "Could not load schema to perform check."
+
+
+def _check_deployment_manifest(service_name: Optional[str] = None):
+    manifest = config_manager.get_deployment_manifest(service_name)
+    if not manifest:
+        return True, "No deployment manifest registered -- nothing to check."
+
+    try:
+        schema = config_manager.load_schema(service_name=service_name)
+        parser = get_parser(
+            manifest["path"], container=manifest.get("container"), prefer=service_name
+        )
+        if not parser:
+            return False, f"Cannot parse deployment manifest '{manifest['path']}'."
+        local_values = parser.get_vars(manifest["path"], get_values=True)
+
+        diff = schema_manager.diff_against_schema(schema, local_values)
+        if diff.is_clean:
+            return True, f"'{manifest['path']}' is in sync with schema."
+        return False, diff.summary()
+
+    except (EnvShieldException, FileNotFoundError, ValueError) as e:
+        return False, f"Could not check '{manifest['path']}': {e}"
 
 
 def _check_example_file_sync(service_name: Optional[str] = None):
@@ -208,7 +208,12 @@ def run_health_check(fix: bool, service_name: Optional[str] = None):
         HealthCheck(
             "Local Environment Sync",
             lambda: _check_local_env_sync(service_name),
-            fix_func=None,
+            # Delegates to the same wizard 'setup' already runs, rather than
+            # re-implementing "prompt for whatever's missing/blank/invalid"
+            # here -- it already re-validates existing values (not just
+            # presence) and leaves everything already-correct untouched.
+            fix_func=lambda: setup_manager.run_setup(service_name=service_name),
+            fix_description="Run the setup wizard to fill in missing/invalid values?",
         ),
         HealthCheck(
             "Template Sync",
@@ -223,6 +228,18 @@ def run_health_check(fix: bool, service_name: Optional[str] = None):
             fix_description="The security hook is not installed. Install it now?",
         ),
     ]
+
+    # Only shown at all when a manifest is actually registered for this
+    # service -- a project that doesn't use one shouldn't see a check for
+    # it every single run.
+    if config_manager.get_deployment_manifest(service_name):
+        checks.append(
+            HealthCheck(
+                "Deployment Manifest",
+                lambda: _check_deployment_manifest(service_name),
+                fix_func=None,
+            )
+        )
 
     all_passed = True
     for check in checks:

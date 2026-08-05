@@ -4,7 +4,7 @@ import os
 import pytest
 
 from envshield.config import manager as config_manager
-from envshield.core.exceptions import SchemaNotFoundError, UnsafePathError
+from envshield.core.exceptions import SchemaNotFoundError, SchemaParseError, UnsafePathError
 
 
 def test_update_gitignore_creates_file_with_env_pattern(tmp_path, monkeypatch):
@@ -204,6 +204,110 @@ def test_get_env_paths_allows_local_file_override_within_project(tmp_path, monke
     assert paths["local_file"] == "athena/config/env_config.local.py"
 
 
+def test_load_schema_merges_in_a_local_extends_base(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "shared").mkdir()
+    (tmp_path / "services" / "api").mkdir(parents=True)
+    with open("shared/base.schema.toml", "w") as f:
+        f.write('[LOG_LEVEL]\ndescription="shared"\ndefaultValue="info"\n')
+    with open("services/api/env.schema.toml", "w") as f:
+        f.write(
+            'extends = "../../shared/base.schema.toml"\n\n'
+            '[DATABASE_URL]\ndescription="api-specific"\nsecret=true\n'
+        )
+    with open("envshield.yml", "w") as f:
+        f.write("services:\n  api:\n    path: services/api/env.schema.toml\n")
+
+    schema = config_manager.load_schema(service_name="api")
+
+    assert set(schema.keys()) == {"LOG_LEVEL", "DATABASE_URL"}
+    assert schema["LOG_LEVEL"]["defaultValue"] == "info"
+    assert "extends" not in schema
+
+
+def test_load_schema_child_definition_overrides_base_on_conflict(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with open("base.schema.toml", "w") as f:
+        f.write('[LOG_LEVEL]\ndescription="base"\ndefaultValue="info"\n')
+    with open("env.schema.toml", "w") as f:
+        f.write('extends = "base.schema.toml"\n\n[LOG_LEVEL]\ndescription="overridden"\ndefaultValue="debug"\n')
+
+    schema = config_manager.load_schema()
+
+    assert schema["LOG_LEVEL"]["description"] == "overridden"
+    assert schema["LOG_LEVEL"]["defaultValue"] == "debug"
+
+
+def test_load_schema_supports_chained_extends(tmp_path, monkeypatch):
+    """A extends B extends C -- variables from every level are merged."""
+    monkeypatch.chdir(tmp_path)
+    with open("grandparent.schema.toml", "w") as f:
+        f.write('[FROM_GRANDPARENT]\ndescription="x"\n')
+    with open("parent.schema.toml", "w") as f:
+        f.write('extends = "grandparent.schema.toml"\n\n[FROM_PARENT]\ndescription="x"\n')
+    with open("env.schema.toml", "w") as f:
+        f.write('extends = "parent.schema.toml"\n\n[FROM_CHILD]\ndescription="x"\n')
+
+    schema = config_manager.load_schema()
+
+    assert set(schema.keys()) == {"FROM_GRANDPARENT", "FROM_PARENT", "FROM_CHILD"}
+
+
+def test_load_schema_supports_multiple_extends_with_later_entries_winning(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with open("base_a.schema.toml", "w") as f:
+        f.write('[SHARED]\ndescription="from a"\n\n[FROM_A]\ndescription="x"\n')
+    with open("base_b.schema.toml", "w") as f:
+        f.write('[SHARED]\ndescription="from b"\n\n[FROM_B]\ndescription="x"\n')
+    with open("env.schema.toml", "w") as f:
+        f.write('extends = ["base_a.schema.toml", "base_b.schema.toml"]\n')
+
+    schema = config_manager.load_schema()
+
+    assert set(schema.keys()) == {"SHARED", "FROM_A", "FROM_B"}
+    assert schema["SHARED"]["description"] == "from b"
+
+
+def test_load_schema_detects_circular_extends(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with open("a.schema.toml", "w") as f:
+        f.write('extends = "b.schema.toml"\n')
+    with open("b.schema.toml", "w") as f:
+        f.write('extends = "a.schema.toml"\n')
+
+    with pytest.raises(SchemaParseError, match="circular"):
+        config_manager._load_schema_file("a.schema.toml")
+
+
+def test_load_schema_raises_when_extends_target_is_missing(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with open("env.schema.toml", "w") as f:
+        f.write('extends = "does-not-exist.schema.toml"\n')
+
+    with pytest.raises(SchemaNotFoundError):
+        config_manager.load_schema()
+
+
+def test_load_schema_rejects_extends_path_escaping_the_project(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with open("env.schema.toml", "w") as f:
+        f.write('extends = "../../../../etc/passwd"\n')
+
+    with pytest.raises(UnsafePathError):
+        config_manager.load_schema()
+
+
+def test_load_schema_without_extends_is_unaffected(tmp_path, monkeypatch):
+    """Sanity check: a plain schema with no 'extends' loads exactly as before."""
+    monkeypatch.chdir(tmp_path)
+    with open("env.schema.toml", "w") as f:
+        f.write('[FOO]\ndescription="x"\n')
+
+    schema = config_manager.load_schema()
+
+    assert schema == {"FOO": {"description": "x"}}
+
+
 def test_add_service_creates_envshield_yml_when_missing(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
@@ -259,6 +363,62 @@ def test_add_service_includes_optional_fields_only_when_given(tmp_path, monkeypa
         "local_file": "athena/config/env_config.local.py",
         "example_file": "athena/.env.example",
     }
+
+
+def test_add_service_registers_deployment_manifest_and_container(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "api").mkdir()
+    (tmp_path / "docker-compose.yml").write_text("services:\n  api:\n    image: x\n")
+
+    config_manager.add_service(
+        "api",
+        "api/env.schema.toml",
+        deployment_manifest="docker-compose.yml",
+        container="api-container",
+    )
+
+    entry = config_manager.get_services()["api"]
+    assert entry["deployment_manifest"] == "docker-compose.yml"
+    assert entry["container"] == "api-container"
+
+
+def test_get_deployment_manifest_returns_none_when_not_registered(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    config_manager.add_service("api", "api/env.schema.toml")
+
+    assert config_manager.get_deployment_manifest("api") is None
+
+
+def test_get_deployment_manifest_for_a_service(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "docker-compose.yml").write_text("services:\n  api:\n    image: x\n")
+    config_manager.add_service(
+        "api", "api/env.schema.toml", deployment_manifest="docker-compose.yml"
+    )
+
+    manifest = config_manager.get_deployment_manifest("api")
+
+    assert manifest == {"path": "docker-compose.yml", "container": None}
+
+
+def test_get_deployment_manifest_for_root_project(tmp_path, monkeypatch):
+    """A single-service/root project registers its manifest at the top level of envshield.yml, not under 'services'."""
+    monkeypatch.chdir(tmp_path)
+    with open("envshield.yml", "w") as f:
+        f.write("project_name: demo\ndeployment_manifest: docker-compose.yml\n")
+
+    manifest = config_manager.get_deployment_manifest()
+
+    assert manifest == {"path": "docker-compose.yml", "container": None}
+
+
+def test_get_deployment_manifest_rejects_manifest_path_escaping_project(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with open("envshield.yml", "w") as f:
+        f.write("deployment_manifest: ../../../../etc/passwd\n")
+
+    with pytest.raises(UnsafePathError):
+        config_manager.get_deployment_manifest()
 
 
 def test_add_service_overwrites_a_service_registered_under_the_same_name(

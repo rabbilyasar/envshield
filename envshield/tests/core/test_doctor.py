@@ -259,3 +259,103 @@ def test_check_example_file_sync_skips_python_format_local_file(tmp_path, monkey
 
     assert passed is True
     assert "no separate template file" in message
+
+
+def test_check_deployment_manifest_passes_when_none_registered(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    passed, message = doctor._check_deployment_manifest()
+
+    assert passed is True
+    assert "nothing to check" in message
+
+
+def test_check_deployment_manifest_flags_drift(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with open(SCHEMA_FILE_NAME, "w") as f:
+        f.write('[API_KEY]\ndescription="x"\n')
+    with open("envshield.yml", "w") as f:
+        f.write("deployment_manifest: docker-compose.yml\n")
+    with open("docker-compose.yml", "w") as f:
+        f.write("services:\n  app:\n    image: x\n")
+
+    passed, message = doctor._check_deployment_manifest()
+
+    assert passed is False
+    assert "API_KEY" in message
+
+
+def test_check_deployment_manifest_passes_when_in_sync(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with open(SCHEMA_FILE_NAME, "w") as f:
+        f.write('[API_KEY]\ndescription="x"\n')
+    with open("envshield.yml", "w") as f:
+        f.write("deployment_manifest: docker-compose.yml\n")
+    with open("docker-compose.yml", "w") as f:
+        f.write("services:\n  app:\n    environment:\n      - API_KEY=secret\n")
+
+    passed, _ = doctor._check_deployment_manifest()
+
+    assert passed is True
+
+
+def test_doctor_omits_deployment_manifest_check_when_none_registered(tmp_path):
+    """A project that doesn't use a deployment manifest shouldn't see a check for it at all."""
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[API_KEY]\ndescription="x"\ndefaultValue="x"\n')
+        with open(CONFIG_FILE_NAME, "w") as f:
+            f.write("project_name: demo\n")
+        with open(".env.example", "w") as f:
+            f.write("API_KEY=x\n")
+        with open(".env", "w") as f:
+            f.write("API_KEY=x\n")
+
+        result = runner.invoke(app, ["doctor"])
+
+        assert "Deployment Manifest" not in result.stdout
+
+
+def test_doctor_includes_deployment_manifest_check_when_registered(tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[API_KEY]\ndescription="x"\ndefaultValue="x"\n')
+        with open(CONFIG_FILE_NAME, "w") as f:
+            f.write("project_name: demo\ndeployment_manifest: docker-compose.yml\n")
+        with open(".env.example", "w") as f:
+            f.write("API_KEY=x\n")
+        with open(".env", "w") as f:
+            f.write("API_KEY=x\n")
+        with open("docker-compose.yml", "w") as f:
+            f.write("services:\n  app:\n    environment:\n      - API_KEY=x\n")
+
+        result = runner.invoke(app, ["doctor"])
+
+        assert "Deployment Manifest" in result.stdout
+
+
+def test_doctor_fix_for_local_env_sync_delegates_to_setup_wizard(mocker, tmp_path):
+    """
+    The 'Local Environment Sync' fix must reuse 'setup' rather than
+    reimplementing its own prompting -- it already knows how to re-validate
+    existing values and leave correct ones untouched.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        with open(CONFIG_FILE_NAME, "w") as f:
+            f.write("project_name: demo\n")
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[API_KEY]\ndescription="x"\n')
+        # No local .env at all -- 'Local Environment Sync' will fail.
+        mocker.patch(
+            "envshield.core.doctor._check_example_file_sync", return_value=(True, "OK")
+        )
+        mocker.patch("envshield.core.doctor._check_git_hook", return_value=(True, "OK"))
+        mock_run_setup = mocker.patch("envshield.core.setup_manager.run_setup")
+        mocker.patch(
+            "questionary.confirm",
+            return_value=mocker.Mock(ask=mocker.Mock(return_value=True)),
+        )
+
+        runner.invoke(app, ["doctor", "--fix"])
+
+        mock_run_setup.assert_called_once_with(service_name=None)

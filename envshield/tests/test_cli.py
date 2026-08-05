@@ -30,6 +30,20 @@ def test_init_command_in_git_repo(tmp_path, mocker):
         assert os.path.exists(".git/hooks/pre-commit")
 
 
+def test_init_auto_registers_a_root_level_compose_file(tmp_path, mocker):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        with open("docker-compose.yml", "w") as f:
+            f.write("services:\n  api:\n    image: x\n")
+        mocker.patch("questionary.confirm").return_value.ask.return_value = False
+
+        result = runner.invoke(app, ["init"])
+
+        assert result.exit_code == 0
+        with open(CONFIG_FILE_NAME, "r") as f:
+            content = f.read()
+        assert "deployment_manifest: docker-compose.yml" in content
+
+
 def test_init_command_in_non_git_repo(tmp_path):
     """Tests that init succeeds but doesn't install hooks if not in a git repo."""
     with runner.isolated_filesystem(temp_dir=tmp_path):
@@ -64,6 +78,51 @@ def test_check_command_with_missing_variable(tmp_path):
         assert result.exit_code == 1
         assert "Missing in Local" in result.stdout
         assert "SECRET" in result.stdout
+
+
+def test_check_auto_validates_a_registered_deployment_manifest_too(tmp_path):
+    """
+    A registered deployment manifest is checked automatically alongside the
+    default local file, in the same 'envshield check' invocation -- no need
+    to remember it's there, or to run 'check docker-compose.yml' separately.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[API_KEY]\ndescription="Test"\n[MANIFEST_ONLY]\ndescription="x"\n')
+        with open(".env", "w") as f:
+            f.write("API_KEY=12345\nMANIFEST_ONLY=x\n")
+        with open("envshield.yml", "w") as f:
+            f.write("deployment_manifest: docker-compose.yml\n")
+        with open("docker-compose.yml", "w") as f:
+            f.write("services:\n  app:\n    environment:\n      - API_KEY=12345\n")
+
+        result = runner.invoke(app, ["check"])
+
+        # The .env file is fully in sync; the compose file is missing MANIFEST_ONLY.
+        assert result.exit_code == 1
+        assert result.stdout.count("Validating") == 2
+        assert "docker-compose.yml" in result.stdout
+        assert "MANIFEST_ONLY" in result.stdout
+
+
+def test_check_with_explicit_file_does_not_also_check_the_registered_manifest(tmp_path):
+    """An explicit file argument means 'check exactly this' -- the auto-check is only the default-file convenience."""
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[API_KEY]\ndescription="Test"\n')
+        with open(".env", "w") as f:
+            f.write("API_KEY=12345\n")
+        with open(".env.other", "w") as f:
+            f.write("API_KEY=12345\n")
+        with open("envshield.yml", "w") as f:
+            f.write("deployment_manifest: docker-compose.yml\n")
+        with open("docker-compose.yml", "w") as f:
+            f.write("services:\n  app:\n    image: x\n")
+
+        result = runner.invoke(app, ["check", ".env.other"])
+
+        assert result.exit_code == 0
+        assert result.stdout.count("Validating") == 1
 
 
 def test_schema_sync_command(tmp_path):

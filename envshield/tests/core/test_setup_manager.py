@@ -296,3 +296,62 @@ def test_setup_all_services_runs_each_wizard_sequentially(mocker, tmp_path):
         with open("hermes/.env") as f:
             assert "DB_URL=hermes-db-url" in f.read()
         assert not os.path.exists(".env")
+
+
+def test_setup_re_prompts_for_an_existing_but_invalid_value(mocker, tmp_path):
+    """
+    Regression target for this change: setup previously only checked
+    *presence* ('is there any non-blank value already?'), so a value that
+    got hand-edited into something the schema no longer allows (e.g. an
+    enum typo) was silently accepted as "already configured" and never
+    re-surfaced.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[LOG_LEVEL]\ndescription="x"\nenum=["debug","info","warn","error"]\n')
+        with open(".env", "w") as f:
+            f.write("LOG_LEVEL=verbose\n")
+
+        mocker.patch("questionary.confirm").return_value.ask.return_value = True
+        mocker.patch("questionary.select").return_value.ask.return_value = "warn"
+
+        result = runner.invoke(app, ["setup"])
+
+        assert result.exit_code == 0
+        with open(".env") as f:
+            assert "LOG_LEVEL=warn" in f.read()
+
+
+def test_setup_does_not_re_prompt_for_an_existing_valid_value(mocker, tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[LOG_LEVEL]\ndescription="x"\nenum=["debug","info","warn","error"]\n')
+        with open(".env", "w") as f:
+            f.write("LOG_LEVEL=info\n")
+        mocker.patch("questionary.confirm").return_value.ask.return_value = True
+        mock_select = mocker.patch("questionary.select")
+
+        result = runner.invoke(app, ["setup"])
+
+        assert result.exit_code == 0
+        mock_select.assert_not_called()
+        with open(".env") as f:
+            assert "LOG_LEVEL=info" in f.read()
+
+
+def test_setup_uses_a_picker_for_enum_fields(mocker, tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[LOG_LEVEL]\ndescription="x"\nenum=["debug","info","warn","error"]\n')
+
+        mock_select = mocker.patch("questionary.select")
+        mock_select.return_value.ask.return_value = "debug"
+
+        result = runner.invoke(app, ["setup"])
+
+        assert result.exit_code == 0
+        mock_select.assert_called_once()
+        _, kwargs = mock_select.call_args
+        assert kwargs["choices"] == ["debug", "info", "warn", "error"]
+        with open(".env") as f:
+            assert "LOG_LEVEL=debug" in f.read()
