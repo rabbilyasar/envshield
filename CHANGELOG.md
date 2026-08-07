@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented in this file.
 
+## [4.3.0] - 2026-08-07
+
+### Added
+- **`init` now builds the schema from your real config, not just a template.** It looks for an existing `.env`, `.env.example`, or a recognizable Python config module first and runs the same real-variable analysis `import` does, classifying each as secret or not with a suggested default and inferred type. Only a genuinely fresh project with nothing to read yet falls back to the old fixed per-framework template.
+
+### Fixed
+- A malformed `envshield.yml` produced an unhandled traceback instead of a clean error — unlike a malformed `env.schema.toml`, which already got one. Added `ConfigParseError` to match.
+- `generate`, `scan`, and `import --service` each had their own inline check for an unknown `--service` name, with inconsistent (or missing) "Available: ..." listings compared to `check`/`doctor`/`setup`/`schema sync`. All six commands now resolve `--service` the same way.
+- `import` never resynced `.env.example` after writing a new/changed schema, so the tracked template could silently drift out of date. `import` now syncs it automatically when writing to the project's/service's real schema path.
+- `service discover`/`service add` auto-attached a nearby `docker-compose.yml` to a service directory without checking that the service was actually declared in it — a shared root compose file with exactly one container was silently wired up to every discovered service regardless of whether it belonged there. Auto-attachment now requires a name match; an explicit `--deployment-manifest` is unaffected.
+
 ## [4.2.0] - 2026-08-06
 
 ### Added
