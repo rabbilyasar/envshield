@@ -1,4 +1,4 @@
-"""Tests for C6: Diff-aware secret scanning in excluded files."""
+"""Tests for diff-aware secret scanning in excluded files."""
 
 from unittest.mock import patch
 

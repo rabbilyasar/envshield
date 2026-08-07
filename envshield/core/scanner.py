@@ -444,7 +444,7 @@ def run_scan(
                     skipped_large_files.append(file_path)
                     continue
 
-                # C6: Diff-aware scanning for excluded files
+                # Diff-aware scanning for excluded files
                 new_lines_only = None
                 if file_path in excluded_files:
                     new_lines = _get_diff_lines(file_path)
