@@ -653,8 +653,14 @@ def service_add(
     try:
         schema_path = schema or os.path.join(directory, config_manager.SCHEMA_FILE_NAME)
         if not deployment_manifest:
-            deployment_manifest = service_discovery.find_compose_file(directory, ".")
-            if deployment_manifest:
+            found_manifest = service_discovery.find_compose_file(directory, ".")
+            # Auto-discovery only wires it up when the manifest actually
+            # names this service -- an explicit --deployment-manifest below
+            # always overrides this, since that's the user saying so directly.
+            if found_manifest and service_discovery.compose_declares_service(
+                found_manifest, manifest_container or name
+            ):
+                deployment_manifest = found_manifest
                 console.print(
                     f"[dim]Found deployment manifest {deployment_manifest} -- registering it too.[/dim]"
                 )

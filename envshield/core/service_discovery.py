@@ -5,6 +5,8 @@
 import os
 from typing import Dict, List, Optional
 
+import yaml
+
 from . import inspector
 from .scanner import DEFAULT_EXCLUDED_DIRS
 from ..parsers.factory import get_parser
@@ -64,6 +66,30 @@ def find_compose_file(service_dir: str, project_root: str = ".") -> Optional[str
             if os.path.isfile(candidate):
                 return os.path.normpath(candidate)
     return None
+
+
+def compose_declares_service(compose_path: str, name: str) -> bool:
+    """
+    Whether `name` appears as a top-level service key in the compose file at
+    `compose_path`.
+
+    A shared root compose file is found (by find_compose_file) for every
+    directory being registered, regardless of whether that directory is
+    actually one of its containers. Auto-attaching it unconditionally would
+    silently validate an unrelated service against the wrong container's
+    variables whenever the compose file happens to declare exactly one
+    service -- that single container gets picked with no name check at all
+    (see the parsers' `prefer` logic). Requiring a name match before
+    auto-attaching turns that into "nothing attached, register it by hand
+    with --deployment-manifest" instead of a silent wrong answer.
+    """
+    try:
+        with open(compose_path, "r") as f:
+            doc = yaml.safe_load(f) or {}
+    except (OSError, yaml.YAMLError):
+        return False
+    services = doc.get("services") if isinstance(doc, dict) else None
+    return isinstance(services, dict) and name in services
 
 
 def _looks_like_python_config_module(path: str) -> bool:
@@ -217,11 +243,12 @@ def discover_candidates(
     example_file, deployment_manifest}. `deployment_manifest`, when found,
     is registered automatically -- no '--deployment-manifest' flag needed
     for the common case of a docker-compose file at the project root or
-    inside the service's own directory (see find_compose_file). If its
-    compose file lists more than one service, `check`/`doctor` still work
-    without any extra setup as long as this service's name matches one of
-    the compose service names (see the parsers' `prefer` hint) -- otherwise
-    they'll report exactly which flag/edit resolves the ambiguity.
+    inside the service's own directory (see find_compose_file) that
+    declares a service matching this directory's name (see
+    compose_declares_service). A compose file that doesn't name this
+    service isn't attached at all -- register it by hand with
+    '--deployment-manifest'/'--container' instead of risking a silent
+    validation against the wrong container.
     """
     known_dirs_norm = {os.path.normpath(d) for d in (known_dirs or [])}
     candidates = []
@@ -245,6 +272,10 @@ def discover_candidates(
             name = f"{parent}-{base_name}" if parent else f"{base_name}-{seen_names[base_name]}"
         seen_names[base_name] = seen_names.get(base_name, 0) + 1
 
+        compose_file = find_compose_file(normalized, root)
+        if compose_file and not compose_declares_service(compose_file, base_name):
+            compose_file = None
+
         candidates.append(
             {
                 "name": name,
@@ -253,7 +284,7 @@ def discover_candidates(
                 "format": env_style["format"],
                 "local_file": env_style["local_file"],
                 "example_file": env_style["example_file"],
-                "deployment_manifest": find_compose_file(normalized, root),
+                "deployment_manifest": compose_file,
             }
         )
 
