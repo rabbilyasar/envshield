@@ -6,3 +6,14 @@ secret_scanning:
     - "./envshield/tests/*"
     - "myvenv/*"
     - "exclude venv/*"
+    # README.md's own documented example output (sample scan results,
+    # illustrative fake credentials) -- not a real secret.
+    - "./README.md"
+    # .gif/ holds the shell scripts used to record the README's demo
+    # GIFs, seeded with obviously-fake Stripe test keys for the recording.
+    - "./.gif/*"
+    # These two files *are* the secret-detection patterns/heuristics --
+    # scanning code that talks about "key"/"secret" identifiers next to
+    # '=' will always self-trigger the generic-API-key pattern. Not a leak.
+    - "./envshield/core/importer.py"
+    - "./envshield/core/scanner.py"
