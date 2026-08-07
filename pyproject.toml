@@ -42,9 +42,26 @@ envshield = "envshield.cli:app"
 
 [project.optional-dependencies]
 dev = [
-    "ruff",
+    "ruff>=0.16,<0.17",
     "pytest",
     "pytest-mock",
     "bump2version",
 ]
+
+[tool.ruff]
+target-version = "py310"
+
+[tool.ruff.lint]
+# Deliberately narrow and pinned: correctness (pyflakes) + real
+# pycodestyle errors + import sorting. CI's "ruff check ." previously ran
+# with zero project config, at the mercy of ruff's own (much broader, and
+# expanding) default rule set -- that's exactly why it kept silently
+# breaking release after release. Widen this set as a deliberate choice,
+# not by letting a ruff upgrade decide for you.
+select = ["E", "F", "I"]
+# Long, deliberately-explanatory comments/docstrings are this codebase's own
+# established convention -- enforcing a line-length limit would fight that
+# style rather than catch a real problem. The formatter's own default width
+# (88) still applies to actual code, comments/docstrings just aren't capped.
+ignore = ["E501"]
 
