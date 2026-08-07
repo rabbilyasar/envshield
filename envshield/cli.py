@@ -381,13 +381,18 @@ _GENERATE_LANG_ALIASES = {
     "javascript": "typescript",
 }
 # Frameworks/ecosystems detected by `inspector` that should default to a TypeScript
-# config module instead of Python's. Anything else (python-*, go, unknown) defaults
-# to Python, which remains the tool's original/primary target language.
+# config module instead of Python's.
 _FRAMEWORK_DEFAULT_LANG = {
     "nextjs": "typescript",
     "vite": "typescript",
     "nodejs": "typescript",
 }
+# Detected types with no codegen mapping at all (python-* isn't here -- those
+# fall through to the python default below, same as an undetected project).
+# Silently guessing 'python' for one of these would be actively wrong, not
+# just unhelpful -- e.g. a Go project has nothing to do with pydantic-settings.
+# Erroring and asking for an explicit --lang beats a wrong file nobody asked for.
+_NO_DEFAULT_LANG_TYPES = {"go"}
 
 _GENERATE_HELP_TEXT = {
     "python": (
@@ -412,6 +417,11 @@ def _resolve_generate_lang(explicit_lang: Optional[str]) -> str:
         return resolved
 
     project_type = inspector.detect_project_type()
+    if project_type in _NO_DEFAULT_LANG_TYPES:
+        raise EnvShieldException(
+            f"No --lang given, and '{project_type}' has no default codegen target. "
+            "Pass --lang python or --lang typescript explicitly."
+        )
     resolved = _FRAMEWORK_DEFAULT_LANG.get(project_type, "python") if project_type else "python"
     console.print(f"[dim]No --lang given; detected '{resolved}' for this project.[/dim]")
     return resolved

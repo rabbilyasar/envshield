@@ -250,6 +250,31 @@ def test_generate_command_rejects_unsupported_lang(tmp_path):
         assert not os.path.exists("config.rs")
 
 
+def test_generate_command_on_a_go_project_requires_explicit_lang(tmp_path):
+    """
+    Regression: a detected-but-unmapped ecosystem (Go) used to silently fall
+    back to Python codegen with no error and no warning -- a Go project has
+    nothing to do with pydantic-settings, so that's a wrong file nobody
+    asked for, not a helpful default. It must now ask for --lang explicitly.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        with open("go.mod", "w") as f:
+            f.write("module example.com/testsvc\ngo 1.22\n")
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[API_KEY]\ndescription = "Test"\nsecret = true\n')
+
+        result = runner.invoke(app, ["generate"])
+
+        assert result.exit_code == 1
+        assert "no default codegen target" in result.stdout
+        assert not os.path.exists("config.py")
+
+        # --lang still works explicitly, same as any other project.
+        result = runner.invoke(app, ["generate", "--lang", "python"])
+        assert result.exit_code == 0
+        assert os.path.exists("config.py")
+
+
 def test_init_force_flag_with_confirmation(mocker, tmp_path):
     """Tests that 'init --force' prompts for confirmation and overwrites existing files."""
     with runner.isolated_filesystem(temp_dir=tmp_path):
