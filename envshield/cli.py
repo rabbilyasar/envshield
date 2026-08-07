@@ -92,7 +92,7 @@ def init(
         help="Overwrite existing EnvShield configuration files.",
     ),
 ):
-    """Initializes EnvShield with intelligent, framework-aware defaults."""
+    """Initializes EnvShield -- builds env.schema.toml from your real config if one is found, otherwise a framework-aware template."""
     console.print(
         Panel(
             "[bold cyan]Welcome to EnvShield! Setting up your secure foundation...[/bold cyan]",
@@ -130,7 +130,20 @@ def init(
             )
 
         project_name = os.path.basename(os.getcwd())
-        schema_content = config_manager.generate_default_schema_content(project_type)
+
+        # Prefer building the schema from a real, already-existing config
+        # source over a generic framework template -- a fixed template can
+        # only ever guess at your actual variables.
+        config_source = service_discovery.find_config_source(".")
+        used_real_source = bool(config_source)
+        if config_source:
+            console.print(
+                f"Found [bold yellow]{config_source}[/bold yellow] -- building your schema from its real variables."
+            )
+            schema_content = importer.generate_schema_from_file(config_source, interactive=False)
+        else:
+            schema_content = config_manager.generate_default_schema_content(project_type)
+
         config_manager.write_file(
             config_manager.SCHEMA_FILE_NAME,
             schema_content,
@@ -167,9 +180,15 @@ def init(
         raise typer.Exit()
 
     console.print("\n[bold green]✨ Setup Complete! ✨[/bold green]")
-    console.print(
-        "Your project is now protected. Define your variables in 'env.schema.toml'."
-    )
+    if used_real_source:
+        console.print(
+            "Your project is now protected. Review 'env.schema.toml' -- "
+            "it was built from your real config, but double-check the secret/type guesses."
+        )
+    else:
+        console.print(
+            "Your project is now protected. Define your variables in 'env.schema.toml'."
+        )
     console.print("\n[bold cyan]Next step:[/bold cyan]")
     console.print("  envshield setup    # Configure your local environment")
 

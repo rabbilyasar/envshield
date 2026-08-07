@@ -149,6 +149,34 @@ def _find_dotenv_template(service_dir: str) -> Optional[str]:
     return None
 
 
+def find_config_source(service_dir: str) -> Optional[str]:
+    """
+    Finds the best real config source at `service_dir` to seed a schema
+    from -- a real dotenv file, a checked-in dotenv template, or a
+    recognizable Python config module -- and returns its actual path.
+
+    Unlike detect_env_style, this always returns the real path when one is
+    found, even when it's the conventional '.env'/'.env.example' name --
+    detect_env_style omits that case because its caller only needs to know
+    when a path override is required, while this one is for callers (like
+    'init') that need a real file to read.
+    """
+    real_file = _find_real_dotenv_file(service_dir)
+    if real_file:
+        return real_file
+
+    template_file = _find_dotenv_template(service_dir)
+    if template_file:
+        return template_file
+
+    for rel_path in PYTHON_CONFIG_CANDIDATES:
+        candidate = os.path.join(service_dir, rel_path)
+        if os.path.isfile(candidate) and _looks_like_python_config_module(candidate):
+            return candidate
+
+    return None
+
+
 def detect_env_style(service_dir: str) -> Dict[str, Optional[str]]:
     """
     Looks inside `service_dir` for how it manages environment variables.
