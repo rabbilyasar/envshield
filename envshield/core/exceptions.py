@@ -51,6 +51,14 @@ class SchemaParseError(EnvShieldException):
         super().__init__(self.message)
 
 
+class ConfigParseError(EnvShieldException):
+    """Raised when the envshield.yml file cannot be parsed."""
+
+    def __init__(self, config_path: str, details: str):
+        self.message = f"Config parse error in {config_path}: {details}"
+        super().__init__(self.message)
+
+
 class UnsafePathError(EnvShieldException):
     """
     Raised when a path taken from 'envshield.yml' (a service's schema,

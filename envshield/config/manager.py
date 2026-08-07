@@ -7,6 +7,7 @@ from rich.console import Console
 
 from envshield.core.exceptions import (
     ConfigNotFoundError,
+    ConfigParseError,
     SchemaNotFoundError,
     SchemaParseError,
     UnsafePathError,
@@ -57,9 +58,10 @@ def load_config(path: Optional[str] = None) -> Dict[str, Any]:
         with open(config_path, "r") as f:
             config_data = yaml.safe_load(f)
             return config_data if config_data else {}
-    except (yaml.YAMLError, IOError) as e:
-        console.print(f"[bold red]Error:[/bold red] Failed to parse {config_path}: {e}")
-        raise
+    except yaml.YAMLError as e:
+        raise ConfigParseError(config_path, str(e))
+    except IOError as e:
+        raise ConfigParseError(config_path, str(e))
 
 
 def load_schema(service_name: Optional[str] = None) -> Dict[str, Any]:
