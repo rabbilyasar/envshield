@@ -362,3 +362,86 @@ def test_check_without_service_runs_for_all_services(mocker, tmp_path):
         assert "── athena ──" in result.stdout
         assert "── hermes ──" in result.stdout
         assert "perfectly in sync" in result.stdout
+
+
+def test_generate_scan_and_import_report_available_services_for_an_unknown_one(tmp_path):
+    """
+    Regression: 'check'/'doctor'/'setup' listed available services on an
+    unknown --service, but 'generate'/'scan'/'import' each had their own
+    inline check with no listing. All should behave the same now.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_two_service_project()
+
+        for args in (
+            ["generate", "--service", "bogus"],
+            ["scan", ".", "--service", "bogus"],
+            ["import", "athena/env.schema.toml", "--service", "bogus"],
+        ):
+            result = runner.invoke(app, args)
+            assert result.exit_code == 1, f"{args}: {result.stdout}"
+            assert "not found" in result.stdout
+            assert "athena, hermes" in result.stdout, f"{args}: {result.stdout}"
+
+
+def test_import_command_syncs_the_env_example_template(tmp_path):
+    """Regression: import used to leave .env.example stale after changing the schema it feeds."""
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        with open("settings.py", "w") as f:
+            f.write("SECRET_KEY = 'x'\nAPI_PORT = 5000\n")
+
+        result = runner.invoke(app, ["import", "settings.py"])
+
+        assert result.exit_code == 0
+        assert os.path.exists(".env.example")
+        with open(".env.example", "r") as f:
+            content = f.read()
+            assert "SECRET_KEY" in content
+            assert "API_PORT" in content
+
+
+def test_init_builds_schema_from_a_real_config_source_instead_of_the_template(tmp_path, mocker):
+    """
+    Regression: init used to always write the generic framework template even
+    when the project already had real config (e.g. config/settings.py) sitting
+    right there, forcing a separate 'envshield import ... --force' just to get
+    an accurate schema.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.system("git init -q")
+        mocker.patch("questionary.confirm").return_value.ask.return_value = False
+        with open("requirements.txt", "w") as f:
+            f.write("Flask\n")
+        os.makedirs("config")
+        with open("config/settings.py", "w") as f:
+            f.write(
+                "SECRET_KEY = 'x'\nDATABASE_URL = 'postgres://x'\n"
+                "DEBUG = True\nAPI_PORT = 5000\nLOG_LEVEL = 'info'\n"
+            )
+
+        result = runner.invoke(app, ["init"])
+
+        assert result.exit_code == 0, result.stdout
+        with open(SCHEMA_FILE_NAME, "r") as f:
+            content = f.read()
+            # The fixed python-flask template only ever has these three --
+            # DEBUG/API_PORT/LOG_LEVEL prove the real file was used instead.
+            assert "DEBUG" in content
+            assert "API_PORT" in content
+            assert "LOG_LEVEL" in content
+
+
+def test_init_falls_back_to_the_framework_template_when_no_real_config_exists(tmp_path, mocker):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.system("git init -q")
+        mocker.patch("questionary.confirm").return_value.ask.return_value = False
+        with open("requirements.txt", "w") as f:
+            f.write("Flask\n")
+
+        result = runner.invoke(app, ["init"])
+
+        assert result.exit_code == 0, result.stdout
+        with open(SCHEMA_FILE_NAME, "r") as f:
+            content = f.read()
+            assert "SECRET_KEY" in content
+            assert "FLASK_ENV" in content

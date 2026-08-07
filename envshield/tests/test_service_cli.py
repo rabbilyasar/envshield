@@ -187,6 +187,25 @@ def test_service_add_auto_detects_compose_file_in_service_directory(tmp_path):
         )
 
 
+def test_service_add_does_not_auto_attach_a_manifest_that_does_not_name_it(tmp_path):
+    """
+    Regression: a shared root compose file used to get auto-attached to
+    any service directory regardless of whether it's actually declared in
+    it -- silently validating against the wrong container. An explicit
+    --deployment-manifest still always works (see the test right below).
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.makedirs("docs")
+        with open("docker-compose.yml", "w") as f:
+            f.write("services:\n  api:\n    image: x\n")
+
+        result = runner.invoke(app, ["service", "add", "docs", "docs"])
+
+        assert result.exit_code == 0
+        assert config_manager.get_services()["docs"].get("deployment_manifest") is None
+        assert "docker-compose.yml" not in result.stdout
+
+
 def test_service_add_explicit_deployment_manifest_and_container(tmp_path):
     with runner.isolated_filesystem(temp_dir=tmp_path):
         os.makedirs("api")

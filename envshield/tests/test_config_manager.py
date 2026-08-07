@@ -4,7 +4,12 @@ import os
 import pytest
 
 from envshield.config import manager as config_manager
-from envshield.core.exceptions import SchemaNotFoundError, SchemaParseError, UnsafePathError
+from envshield.core.exceptions import (
+    ConfigParseError,
+    SchemaNotFoundError,
+    SchemaParseError,
+    UnsafePathError,
+)
 
 
 def test_update_gitignore_creates_file_with_env_pattern(tmp_path, monkeypatch):
@@ -266,6 +271,21 @@ def test_load_schema_supports_multiple_extends_with_later_entries_winning(tmp_pa
 
     assert set(schema.keys()) == {"SHARED", "FROM_A", "FROM_B"}
     assert schema["SHARED"]["description"] == "from b"
+
+
+def test_load_config_raises_clean_error_on_malformed_yaml(tmp_path, monkeypatch):
+    """
+    Regression: a malformed envshield.yml used to print a message and then
+    re-raise the raw yaml.YAMLError, which no cli.py handler catches (they
+    only catch EnvShieldException) -- producing an unhandled traceback
+    instead of the clean error every other parse failure gets.
+    """
+    monkeypatch.chdir(tmp_path)
+    with open("envshield.yml", "w") as f:
+        f.write("services: [unclosed\n")
+
+    with pytest.raises(ConfigParseError, match="envshield.yml"):
+        config_manager.load_config()
 
 
 def test_load_schema_detects_circular_extends(tmp_path, monkeypatch):

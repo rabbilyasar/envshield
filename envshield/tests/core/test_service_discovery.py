@@ -234,3 +234,55 @@ def test_discover_candidates_includes_deployment_manifest_when_found(tmp_path):
 
     api = next(c for c in candidates if c["name"] == "api")
     assert api["deployment_manifest"] == os.path.normpath(str(tmp_path / "docker-compose.yml"))
+
+
+def test_discover_candidates_does_not_attach_manifest_that_does_not_name_the_service(tmp_path):
+    """
+    Regression: find_compose_file only checks that *a* compose file exists
+    nearby, not that this service is actually declared in it. A shared root
+    compose file with exactly one container would otherwise get silently
+    attached to every unrelated directory discover finds -- and since a
+    single-container compose file is used regardless of --container/prefer,
+    that means validating an unrelated service against the wrong container's
+    variables with no error at all.
+    """
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / ".env").write_text("KEY=1\n")
+    (tmp_path / "docker-compose.yml").write_text("services:\n  api:\n    image: x\n")
+
+    candidates = service_discovery.discover_candidates(str(tmp_path))
+
+    docs = next(c for c in candidates if c["name"] == "docs")
+    assert docs["deployment_manifest"] is None
+
+
+def test_compose_declares_service(tmp_path):
+    compose = tmp_path / "docker-compose.yml"
+    compose.write_text("services:\n  api:\n    image: x\n  worker:\n    image: y\n")
+
+    assert service_discovery.compose_declares_service(str(compose), "api") is True
+    assert service_discovery.compose_declares_service(str(compose), "docs") is False
+
+
+def test_find_config_source_returns_conventional_dotenv_path(tmp_path):
+    """
+    Unlike detect_env_style (which omits the path for the conventional
+    '.env' name since its caller only needs an override signal),
+    find_config_source always returns the real path -- callers like 'init'
+    need an actual file to read from.
+    """
+    (tmp_path / ".env").write_text("KEY=1\n")
+
+    assert service_discovery.find_config_source(str(tmp_path)) == str(tmp_path / ".env")
+
+
+def test_find_config_source_finds_python_config_module(tmp_path):
+    (tmp_path / "config").mkdir()
+    settings = tmp_path / "config" / "settings.py"
+    settings.write_text("SECRET_KEY = 'x'\nDEBUG = True\nAPI_PORT = 5000\n")
+
+    assert service_discovery.find_config_source(str(tmp_path)) == str(settings)
+
+
+def test_find_config_source_returns_none_when_nothing_found(tmp_path):
+    assert service_discovery.find_config_source(str(tmp_path)) is None
