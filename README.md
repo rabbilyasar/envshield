@@ -29,12 +29,14 @@ It works the same way whether you have one repo with one `.env` file, or a monor
 - [Installation](#installation)
 - [Quick start](#quick-start)
   - [A single service](#a-single-service)
-  - [A monorepo with multiple services](#a-monorepo-with-multiple-services)
+  - [A monorepo with multiple services (monorepo)](#a-monorepo-with-multiple-services)
 - [Core concept: the schema is the contract](#core-concept-the-schema-is-the-contract)
   - [Every field a variable can have](#every-field-a-variable-can-have)
   - [Conditional requirements (`requiredIf`)](#conditional-requirements-requiredif)
-  - [Sharing variables across services (`extends`)](#sharing-variables-across-services-extends)
+  - [Sharing variables across services (monorepo, `extends`)](#sharing-variables-across-services-extends)
 - [Command reference](#command-reference)
+  - [Core commands](#core-commands)
+  - [Monorepo: managing multiple services (monorepo)](#monorepo-managing-multiple-services)
 - [Typed config code generation](#typed-config-code-generation)
 - [Validating deployment manifests](#validating-deployment-manifests)
 - [Secret scanning and git hooks](#secret-scanning-and-git-hooks)
@@ -83,22 +85,28 @@ envshield --version
 
 ### A single service
 
-The common case: one repo, one `.env` file.
+The common case: one repo, one `.env` file. This is the whole workflow — nothing else in this README is required to get full value out of EnvShield.
 
 ```bash
 cd my-project
-envshield init                    # Detects your framework, creates env.schema.toml + envshield.yml
-envshield import .env             # Or: seed the schema from an existing .env file
+envshield init                    # Detects your framework and builds env.schema.toml from your real config
 envshield setup                   # Interactive wizard: fills in .env from the schema
 envshield generate --lang python  # Generates a typed config.py (or config.ts for TypeScript)
 ```
 
+`init` looks for a real config source first — an existing `.env`, `.env.example`, or a recognizable Python config module (`config/settings.py` and similar) — and builds the schema from its actual variables, classifying each as secret or not, with a suggested default and, where the value's shape is unambiguous, an inferred type. Only a genuinely fresh project with nothing to read yet falls back to a generic framework template:
+
+```
+Found config/settings.py -- building your schema from its real variables.
+✓ Created/updated schema: env.schema.toml
+```
+
 `init` also offers to install a git pre-commit hook (secret scanning) and a post-merge hook (drift check after every `git pull`) — say yes unless you already have your own hook-management tooling (Husky, `pre-commit`, etc.), in which case EnvShield will detect it and won't clobber it (see [Secret scanning and git hooks](#secret-scanning-and-git-hooks)).
 
-If you already have a real `.env` with real values, `import` is usually the better starting point than `init`'s blank framework defaults — it reads your actual file and classifies each variable (secret or not, with a suggested default and, where the value's shape is unambiguous, a type) in seconds:
+`envshield import <file>` does the same real-variable analysis `init` runs automatically, as its own command — reach for it later, when you want to re-import after adding new variables to your code, point at a file `init` wouldn't have found on its own, or add `--interactive` to confirm each classification by hand instead of accepting the automatic guess:
 
 ```bash
-envshield import .env
+envshield import .env --interactive
 ```
 
 ```
@@ -111,7 +119,13 @@ Analyzing variables...
 - Inferred a type (int/port/bool/url/email) for 3 variable(s).
 ```
 
+---
+
+**Everything above is the complete single-service story.** Everything below this point — multiple services, schema composition, deployment manifests with more than one container — is opt-in, and only relevant once your repo actually has more than one service. Skip straight to [Core concept: the schema is the contract](#core-concept-the-schema-is-the-contract) if that's not you yet.
+
 ### A monorepo with multiple services
+
+*(Optional — skip this if you only have one service.)*
 
 If your repo has more than one service (an API, a web frontend, a worker), run `service discover` at the repo root instead of `init`:
 
@@ -245,6 +259,8 @@ With `FEATURE_X_ENABLED=false`, `FEATURE_X_API_KEY` is optional — `setup` won'
 
 ### Sharing variables across services (`extends`)
 
+*(Monorepo-only — skip this if you have one service.)*
+
 A monorepo with ten services usually has five or six variables every single one of them needs — `LOG_LEVEL`, `SENTRY_DSN`, `DATADOG_API_KEY` — and copy-pasting the same `[LOG_LEVEL]` block into ten schema files is exactly the kind of drift EnvShield exists to prevent.
 
 Factor them into a shared base schema, and have each service extend it:
@@ -281,22 +297,21 @@ Loading `services/api/env.schema.toml` now transparently gives you `LOG_LEVEL`, 
 
 ## Command reference
 
-Every command that takes `--service` also works without it: automatically, if there's only one service configured; interactively (or against every service at once, via "All services"), if there's more than one.
+### Core commands
+
+Everything a single-service project ever needs. `--service` shows up on most of these for the multi-service case (see below), but it's entirely optional until you actually have more than one service.
 
 | Command | What it does |
 |---|---|
-| `envshield init [--force/-f]` | Detects your framework, scaffolds `env.schema.toml` + `envshield.yml`, updates `.gitignore`, and offers to install git hooks. Auto-registers a root-level `docker-compose.yml` as the project's deployment manifest if it finds one. `--force` re-runs on a project that already has a config (with a confirmation before overwriting). |
-| `envshield import <file> [--output/-o PATH] [--force/-f] [--interactive] [--service NAME]` | Converts an existing `.env` file or Python config module into `env.schema.toml`, classifying each variable as secret or not, suggesting a default, and inferring a type where the value's shape is unambiguous. `--interactive` confirms each classification with you instead of applying it silently. `--output` changes where the schema is written (defaults to `env.schema.toml`, or the target service's schema path with `--service`). |
+| `envshield init [--force/-f]` | Detects your framework and builds `env.schema.toml` from a real config source if it finds one, otherwise a framework-aware template. Also scaffolds `envshield.yml`, updates `.gitignore`, and offers to install git hooks. Auto-registers a root-level `docker-compose.yml` as the project's deployment manifest if it finds one. `--force` re-runs on a project that already has a config (with a confirmation before overwriting). |
+| `envshield import <file> [--output/-o PATH] [--force/-f] [--interactive] [--service NAME]` | Runs the same real-variable analysis `init` does automatically, as its own command — for re-importing after your code gains new variables, pointing at a file `init` wouldn't have found, or adding `--interactive` to confirm each secret/type classification by hand instead of accepting the automatic guess. `--output` changes where the schema is written (defaults to `env.schema.toml`, or the target service's schema path with `--service`). |
 | `envshield check [file] [--service NAME] [--container NAME]` | Validates a local file (or, if omitted, the project's/service's default local file *and* its registered deployment manifest, if any) against the schema. `file` can be a plain `.env`, a Python config module, a docker-compose file, or a Kubernetes manifest. `--container` picks which service/container to check in a manifest that declares more than one (tried against `--service`'s name automatically first). Exits non-zero on any drift — safe to use as a CI gate. |
 | `envshield doctor [--fix] [--service NAME]` | Runs every health check at once (see below) and reports a summary. `--fix` interactively offers to fix whatever it can — re-running `init`, regenerating the template, installing the git hook, or running `setup` to fill in missing/invalid local values. Exits non-zero if anything's still broken afterward. |
 | `envshield setup [output_file] [--service NAME]` | Interactive onboarding wizard: walks through every variable that's missing, blank, or has an existing value the schema no longer allows, prompting with the variable's description, masking secret input, and offering a picker for `enum` fields. Leaves everything already correct untouched. |
-| `envshield schema sync [--service NAME]` | Regenerates `.env.example` from the schema (a dotenv project), or patches a Python-module local file in place to declare any schema variable it's missing (never rewrites it wholesale — only appends/patches the specific lines it owns). |
+| `envshield schema sync [--service NAME]` | Regenerates `.env.example` from the schema (a dotenv project), or patches a Python-module local file in place to declare any schema variable it's missing (never rewrites it wholesale — only appends/patches the specific lines it owns). `import` already calls this automatically for you when it changes a project's/service's real schema, so you'll rarely need to run it by hand except after a manual schema edit. |
 | `envshield generate [output_file] [--lang/-l python\|typescript] [--force/-f] [--service NAME]` | Compiles the schema into a typed, validated config module. `--lang` is auto-detected from your project (Next.js/Vite/Node.js → TypeScript, everything else → Python) if omitted. Defaults to writing `config.py`/`config.ts`; `--force` overwrites an existing output file. See [Typed config code generation](#typed-config-code-generation). |
 | `envshield scan [paths...] [--staged] [--config/-c PATH] [--exclude/-e PATTERN]` [--service NAME] | Scans code for hardcoded secrets and for env vars used in code (`os.getenv`, `os.environ.get`, `process.env.X`) but never declared in the schema. `--staged` scans only what's staged for the next commit (what the pre-commit hook runs); `--exclude` (repeatable) adds glob patterns to skip, on top of whatever `secret_scanning.exclude_files` is set in `envshield.yml`. See [Secret scanning and git hooks](#secret-scanning-and-git-hooks). |
 | `envshield install-hook` | Installs both git hooks by hand, without going through `init`/`setup`/`service discover`'s interactive prompt. |
-| `envshield service list` | Lists every service currently configured in `envshield.yml`, with its schema and local file paths. |
-| `envshield service add <name> <directory> [--local-file PATH] [--example-file PATH] [--description/-d TEXT] [--schema PATH] [--import FILE] [--deployment-manifest PATH] [--container NAME]` | Registers one service by hand. `--local-file` is required when the service's real config isn't a dotenv file (e.g. a Python module) — see below. `--import` seeds the new service's schema from an existing config file in one step. `--deployment-manifest` is auto-detected (a compose file in the given directory, or the project root) if not given explicitly. |
-| `envshield service discover [root] [--yes/-y]` | Scans for service-like directories not already registered, and offers to add them — see [Quick start](#a-monorepo-with-multiple-services). `--yes` skips the interactive confirmation, for CI/scripting. |
 | `envshield --version` / `-v` | Prints the installed version and exits. |
 
 **Not using a `.env` file at all?** Some projects (a Flask app whose local config is a checked-in Python module, for example) don't use dotenv at all. Point `local_file` at it instead, and EnvShield reads and writes it as source code, not as a dotenv file — appending or patching only the specific assignments it owns, never touching anything else in the file:
@@ -307,6 +322,16 @@ services:
     path: athena/env.schema.toml
     local_file: athena/config/env_config.local.py
 ```
+
+### Monorepo: managing multiple services
+
+*(Only relevant once your repo has more than one service — see [A monorepo with multiple services](#a-monorepo-with-multiple-services).)* Every core command above already accepts `--service`: automatically, if there's only one service configured; interactively (or against every service at once, via "All services"), if there's more than one.
+
+| Command | What it does |
+|---|---|
+| `envshield service list` | Lists every service currently configured in `envshield.yml`, with its schema and local file paths. |
+| `envshield service add <name> <directory> [--local-file PATH] [--example-file PATH] [--description/-d TEXT] [--schema PATH] [--import FILE] [--deployment-manifest PATH] [--container NAME]` | Registers one service by hand. `--local-file` is required when the service's real config isn't a dotenv file (e.g. a Python module) — see above. `--import` seeds the new service's schema from an existing config file in one step. `--deployment-manifest` is auto-detected (a compose file in the given directory or the project root that actually declares this service) if not given explicitly. |
+| `envshield service discover [root] [--yes/-y]` | Scans for service-like directories not already registered, and offers to add them — see [Quick start](#a-monorepo-with-multiple-services). `--yes` skips the interactive confirmation, for CI/scripting. |
 
 ---
 
