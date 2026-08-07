@@ -1,6 +1,6 @@
 # envshield/cli.py
 import os
-from typing import List, Optional
+from typing import List, Optional, cast
 
 import questionary
 import typer
@@ -434,7 +434,8 @@ def generate(
             )
             raise typer.Exit()
 
-        schema = config_manager.load_schema(service_name=service)
+        resolved_service = cast(Optional[str], service_manager.resolve_service(service))
+        schema = config_manager.load_schema(service_name=resolved_service)
         content = generator.generate_config(schema, lang=resolved_lang)
 
         with open(resolved_output, "w") as f:
@@ -481,6 +482,11 @@ def scan(
 ):
     """Scans files for hardcoded secrets and undeclared variables."""
     try:
+        if service:
+            # Validate eagerly for a consistent "Available: ..." error --
+            # run_scan's own service_name=None path means "check every
+            # configured service", so this only fires for an explicit name.
+            service_manager.resolve_service(service)
         scanner.run_scan(
             paths=paths,
             staged_only=staged,
@@ -537,11 +543,8 @@ def import_command(
     try:
         # If service is specified, use that service's schema path
         if service:
-            resolved_output = config_manager.get_service_schema_path(service)
-            if not resolved_output:
-                console.print(f"[bold red]Error:[/bold red] Service '{service}' not found.")
-                raise typer.Exit(code=1)
-            output = resolved_output
+            service_manager.resolve_service(service)
+            output = cast(str, config_manager.get_service_schema_path(service))
 
         if os.path.exists(output) and not force and not interactive:
             console.print(
