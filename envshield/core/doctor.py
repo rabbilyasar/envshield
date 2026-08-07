@@ -8,10 +8,10 @@ import questionary
 import typer
 from rich.console import Console
 
-from . import schema_manager, scanner, setup_manager
-from .exceptions import EnvShieldException
 from ..config import manager as config_manager
 from ..parsers.factory import get_parser
+from . import scanner, schema_manager, setup_manager
+from .exceptions import EnvShieldException
 
 console = Console()
 
@@ -77,7 +77,9 @@ def _check_config_files(service_name: Optional[str] = None):
 def _check_local_env_sync(service_name: Optional[str] = None):
     try:
         schema = config_manager.load_schema(service_name=service_name)
-        local_file = config_manager.get_env_paths(service_name=service_name)["local_file"]
+        local_file = config_manager.get_env_paths(service_name=service_name)[
+            "local_file"
+        ]
         if not os.path.exists(local_file):
             return False, f"Local env file '{local_file}' not found."
 
@@ -132,7 +134,10 @@ def _check_example_file_sync(service_name: Optional[str] = None):
     # separate tracked template -- it IS the contract. 'Local Environment
     # Sync' already checks it declares every schema variable.
     if local_file.endswith(".py"):
-        return True, f"'{local_file}' has no separate template file (see 'Local Environment Sync')."
+        return (
+            True,
+            f"'{local_file}' has no separate template file (see 'Local Environment Sync').",
+        )
 
     if not os.path.exists(example_file):
         return False, f"'{example_file}' file is missing."

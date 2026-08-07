@@ -178,7 +178,9 @@ def _get_diff_lines(file_path: str) -> Optional[set]:
         # whenever some unrelated line elsewhere in the file happens to have
         # identical text (e.g. a repeated comment or template block) --
         # letting a real new secret hide behind a coincidental text match.
-        matcher = difflib.SequenceMatcher(None, head_lines, staged_lines, autojunk=False)
+        matcher = difflib.SequenceMatcher(
+            None, head_lines, staged_lines, autojunk=False
+        )
         new_line_numbers = set()
         for tag, _i1, _i2, j1, j2 in matcher.get_opcodes():
             if tag in ("insert", "replace"):
@@ -191,7 +193,10 @@ def _get_diff_lines(file_path: str) -> Optional[set]:
 
 
 def _scan_single_file(
-    file_path: str, schema_vars: set, content: Optional[str] = None, new_lines_only: Optional[set] = None
+    file_path: str,
+    schema_vars: set,
+    content: Optional[str] = None,
+    new_lines_only: Optional[set] = None,
 ) -> (List[Dict], List[Dict]):
     """
     Helper to scan one file for both secrets and undeclared variables.
@@ -329,7 +334,9 @@ def _build_undeclared_var_resolver(service_name: Optional[str]):
     """
     if service_name or not config_manager.is_multi_service():
         try:
-            schema_vars = set(config_manager.load_schema(service_name=service_name).keys())
+            schema_vars = set(
+                config_manager.load_schema(service_name=service_name).keys()
+            )
             console.print("[dim]Schema loaded for compliance check.[/dim]")
         except SchemaNotFoundError:
             console.print(
@@ -450,18 +457,25 @@ def run_scan(
                     new_lines = _get_diff_lines(file_path)
                     if new_lines is None:
                         # Brand new file - scan all lines despite exclusion
-                        console.print(f"[yellow]ℹ️  Scanning new file {os.path.basename(file_path)} (despite exclusion)[/yellow]")
+                        console.print(
+                            f"[yellow]ℹ️  Scanning new file {os.path.basename(file_path)} (despite exclusion)[/yellow]"
+                        )
                         new_lines_only = None
                     elif len(new_lines) == 0:
                         # File is excluded and has no new lines - skip it
                         continue
                     else:
                         # File is excluded, but scan only newly-added lines
-                        console.print(f"[dim]ℹ️  {os.path.basename(file_path)} (excluded; diffs only: {len(new_lines)} new line(s))[/dim]")
+                        console.print(
+                            f"[dim]ℹ️  {os.path.basename(file_path)} (excluded; diffs only: {len(new_lines)} new line(s))[/dim]"
+                        )
                         new_lines_only = new_lines
 
                 secrets, undeclared = _scan_single_file(
-                    file_path, schema_vars, content=content, new_lines_only=new_lines_only
+                    file_path,
+                    schema_vars,
+                    content=content,
+                    new_lines_only=new_lines_only,
                 )
             else:
                 if os.path.exists(file_path) and os.path.getsize(file_path) > 1_000_000:
@@ -474,8 +488,7 @@ def run_scan(
 
     if skipped_large_files:
         console.print(
-            f"\n[bold yellow]⚠️  Skipped {len(skipped_large_files)} file(s) over 1MB "
-            "(not scanned -- coverage is incomplete for these):[/bold yellow]"
+            f"\n[bold yellow]⚠️  Skipped {len(skipped_large_files)} file(s) over 1MB (not scanned -- coverage is incomplete for these):[/bold yellow]"
         )
         for skipped_path in skipped_large_files:
             console.print(f"    [dim]{skipped_path}[/dim]")
@@ -546,7 +559,9 @@ def _describe_existing_hook(content: str) -> str:
     if "husky.sh" in content or ".husky" in content:
         return "managed by Husky"
     non_comment_lines = [
-        line for line in content.splitlines() if line.strip() and not line.strip().startswith("#")
+        line
+        for line in content.splitlines()
+        if line.strip() and not line.strip().startswith("#")
     ]
     return f"NOT installed by EnvShield -- overwriting will delete {len(non_comment_lines)} existing line(s) of hook logic"
 
@@ -570,12 +585,7 @@ def install_pre_commit_hook(force: bool = False, non_interactive: bool = False):
     os.makedirs(hooks_dir, exist_ok=True)
     pre_commit_path = os.path.join(hooks_dir, "pre-commit")
 
-    hook_script_content = (
-        "#!/bin/sh\n\n"
-        "# Hook installed by EnvShield\n"
-        "# This hook scans for hardcoded secrets AND undeclared environment variables.\n"
-        "envshield scan --staged\n"
-    )
+    hook_script_content = "#!/bin/sh\n\n# Hook installed by EnvShield\n# This hook scans for hardcoded secrets AND undeclared environment variables.\nenvshield scan --staged\n"
 
     try:
         if os.path.exists(pre_commit_path):
@@ -593,8 +603,7 @@ def install_pre_commit_hook(force: bool = False, non_interactive: bool = False):
 
             if not force:
                 overwrite = questionary.confirm(
-                    f"A pre-commit hook already exists ({_describe_existing_hook(existing_content)}). "
-                    "Do you want to overwrite it?",
+                    f"A pre-commit hook already exists ({_describe_existing_hook(existing_content)}). Do you want to overwrite it?",
                     default=False,
                 ).ask()
                 if not overwrite:
@@ -650,8 +659,7 @@ def _generate_post_merge_hook_content() -> str:
         # Multi-service project: generate a doctor call for each service
         services = list(config["services"].keys())
         service_checks = "\n  ".join(
-            f'envshield doctor --service {svc} 2>/dev/null'
-            for svc in services
+            f"envshield doctor --service {svc} 2>/dev/null" for svc in services
         )
         return (
             "#!/bin/sh\n\n"
@@ -714,8 +722,7 @@ def install_post_merge_hook(force: bool = False, non_interactive: bool = False):
 
             if not force:
                 overwrite = questionary.confirm(
-                    f"A post-merge hook already exists ({_describe_existing_hook(existing_content)}). "
-                    "Do you want to overwrite it?",
+                    f"A post-merge hook already exists ({_describe_existing_hook(existing_content)}). Do you want to overwrite it?",
                     default=False,
                 ).ask()
                 if not overwrite:

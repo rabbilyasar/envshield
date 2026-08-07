@@ -20,6 +20,7 @@ with no explicit type genuinely has no runtime *constraint* here, but
 codegen still benefits from guessing a friendlier type for a bare default
 like `"3"` or `"true"`.
 """
+
 import re
 from typing import Any
 from urllib.parse import urlparse

@@ -3,15 +3,7 @@ from envshield.parsers._python import PythonParser
 
 def test_python_parser_happy_path(mocker):
     """Tests that the parser correctly extracts top-level variable assignments."""
-    mock_file_content = (
-        "import os\n\n"
-        "SECRET_KEY = '123'\n"
-        "DATABASE_URL = os.getenv('DB')\n\n"
-        "class MySettings:\n"
-        "    API_KEY = 'abc' # Should be ignored\n\n"
-        "def my_func():\n"
-        "    LOCAL_VAR = True # Should be ignored\n"
-    )
+    mock_file_content = "import os\n\nSECRET_KEY = '123'\nDATABASE_URL = os.getenv('DB')\n\nclass MySettings:\n    API_KEY = 'abc' # Should be ignored\n\ndef my_func():\n    LOCAL_VAR = True # Should be ignored\n"
     mocker.patch("builtins.open", mocker.mock_open(read_data=mock_file_content))
     mocker.patch("os.path.exists", return_value=True)
 

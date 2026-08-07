@@ -72,9 +72,5 @@ class UnsafePathError(EnvShieldException):
     """
 
     def __init__(self, label: str, path: str, project_root: str):
-        self.message = (
-            f"Refusing to use {label} '{path}': it resolves outside the project "
-            f"directory ({project_root}). Check envshield.yml for a malicious or "
-            "mistaken path."
-        )
+        self.message = f"Refusing to use {label} '{path}': it resolves outside the project directory ({project_root}). Check envshield.yml for a malicious or mistaken path."
         super().__init__(self.message)

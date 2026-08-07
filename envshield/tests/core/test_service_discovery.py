@@ -113,9 +113,7 @@ def test_detect_env_style_ignores_python_file_with_too_few_vars(tmp_path):
 def test_detect_env_style_prefers_dotenv_over_python(tmp_path):
     (tmp_path / "svc" / "config").mkdir(parents=True)
     (tmp_path / "svc" / ".env").write_text("KEY=value\n")
-    (tmp_path / "svc" / "config" / "settings.py").write_text(
-        "A = 1\nB = 2\nC = 3\n"
-    )
+    (tmp_path / "svc" / "config" / "settings.py").write_text("A = 1\nB = 2\nC = 3\n")
 
     result = service_discovery.detect_env_style(str(tmp_path / "svc"))
 
@@ -202,7 +200,9 @@ def test_discover_candidates_disambiguates_name_collisions(tmp_path):
 
 def test_find_compose_file_prefers_service_directory_over_project_root(tmp_path):
     (tmp_path / "api").mkdir()
-    (tmp_path / "api" / "docker-compose.yml").write_text("services:\n  api:\n    image: x\n")
+    (tmp_path / "api" / "docker-compose.yml").write_text(
+        "services:\n  api:\n    image: x\n"
+    )
     (tmp_path / "docker-compose.yml").write_text("services:\n  root:\n    image: x\n")
 
     found = service_discovery.find_compose_file(str(tmp_path / "api"), str(tmp_path))
@@ -222,7 +222,10 @@ def test_find_compose_file_falls_back_to_project_root(tmp_path):
 def test_find_compose_file_returns_none_when_absent(tmp_path):
     (tmp_path / "api").mkdir()
 
-    assert service_discovery.find_compose_file(str(tmp_path / "api"), str(tmp_path)) is None
+    assert (
+        service_discovery.find_compose_file(str(tmp_path / "api"), str(tmp_path))
+        is None
+    )
 
 
 def test_discover_candidates_includes_deployment_manifest_when_found(tmp_path):
@@ -233,10 +236,14 @@ def test_discover_candidates_includes_deployment_manifest_when_found(tmp_path):
     candidates = service_discovery.discover_candidates(str(tmp_path))
 
     api = next(c for c in candidates if c["name"] == "api")
-    assert api["deployment_manifest"] == os.path.normpath(str(tmp_path / "docker-compose.yml"))
+    assert api["deployment_manifest"] == os.path.normpath(
+        str(tmp_path / "docker-compose.yml")
+    )
 
 
-def test_discover_candidates_does_not_attach_manifest_that_does_not_name_the_service(tmp_path):
+def test_discover_candidates_does_not_attach_manifest_that_does_not_name_the_service(
+    tmp_path,
+):
     """
     Regression: find_compose_file only checks that *a* compose file exists
     nearby, not that this service is actually declared in it. A shared root

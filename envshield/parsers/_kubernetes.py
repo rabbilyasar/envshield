@@ -94,8 +94,7 @@ class KubernetesParser(BaseParser):
             else:
                 names = ", ".join(n or "?" for n in names_in_order)
                 raise EnvShieldException(
-                    f"This manifest declares multiple containers ({names}) -- "
-                    "pass --container to pick one."
+                    f"This manifest declares multiple containers ({names}) -- pass --container to pick one."
                 )
 
         target = next((c for c in containers if c.get("name") == container_name), None)
@@ -111,7 +110,9 @@ class KubernetesParser(BaseParser):
             if not name:
                 continue
             variables[name] = (
-                str(env_entry["value"]) if "value" in env_entry else self.UNRESOLVED_VALUE
+                str(env_entry["value"])
+                if "value" in env_entry
+                else self.UNRESOLVED_VALUE
             )
 
         for env_from in target.get("envFrom") or []:

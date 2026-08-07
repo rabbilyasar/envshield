@@ -6,11 +6,7 @@ from envshield.core import importer
 
 def test_import_command_python_settings_file(tmp_path):
     """Tests that a Django/Flask-style settings.py is correctly converted into a schema."""
-    settings_content = (
-        "SECRET_KEY = 'django-insecure-abc123'\n"
-        "DEBUG = True\n"
-        "DATABASE_URL = 'postgres://user:pass@localhost/db'\n"
-    )
+    settings_content = "SECRET_KEY = 'django-insecure-abc123'\nDEBUG = True\nDATABASE_URL = 'postgres://user:pass@localhost/db'\n"
     settings_file = tmp_path / "settings.py"
     settings_file.write_text(settings_content)
 
@@ -24,11 +20,7 @@ def test_import_command_python_settings_file(tmp_path):
 
 def test_import_command_happy_path(tmp_path):
     """Tests that a standard .env file is correctly converted into a schema."""
-    env_content = (
-        "DATABASE_URL=postgres://user:pass@localhost/db\n"
-        "LOG_LEVEL=info\n"
-        "STRIPE_API_KEY=sk_live_123456789abcdefghijklmnopqrstuv\n"
-    )
+    env_content = "DATABASE_URL=postgres://user:pass@localhost/db\nLOG_LEVEL=info\nSTRIPE_API_KEY=sk_live_123456789abcdefghijklmnopqrstuv\n"
     env_file = tmp_path / ".env.prod"
     env_file.write_text(env_content)
 
@@ -154,7 +146,9 @@ def test_classify_variable_treats_next_public_prefixed_vars_as_non_secret():
     is_secret, _ = importer._classify_variable("VITE_API_KEY", "abc123")
     assert is_secret is False
 
-    is_secret, _ = importer._classify_variable("REACT_APP_AUTH_DOMAIN", "example.auth0.com")
+    is_secret, _ = importer._classify_variable(
+        "REACT_APP_AUTH_DOMAIN", "example.auth0.com"
+    )
     assert is_secret is False
 
 
@@ -229,10 +223,7 @@ def test_infer_type_returns_none_for_blank_value():
 def test_generate_schema_from_file_includes_inferred_types(tmp_path):
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "API_PORT=8080\n"
-        "DEBUG=true\n"
-        "API_BASE_URL=https://api.example.com\n"
-        "LOG_LEVEL=info\n"
+        "API_PORT=8080\nDEBUG=true\nAPI_BASE_URL=https://api.example.com\nLOG_LEVEL=info\n"
     )
 
     schema_content = importer.generate_schema_from_file(str(env_file))

@@ -2,7 +2,7 @@
 # Defines the abstract base class for all file parsers.
 
 from abc import ABC, abstractmethod
-from typing import Set, Dict, Union
+from typing import Dict, Set, Union
 
 
 class BaseParser(ABC):

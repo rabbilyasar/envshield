@@ -22,6 +22,7 @@ SCRIPTS = {
     "scan": ("record-scan.sh", "scan"),
 }
 
+
 def check_dependencies():
     """Verify asciinema and agg are installed."""
     try:
@@ -37,6 +38,7 @@ def check_dependencies():
         return False
 
     return True
+
 
 def record_gif(script_name: str, gif_name: str):
     """Record a single GIF using asciinema."""
@@ -55,14 +57,10 @@ def record_gif(script_name: str, gif_name: str):
     try:
         # Record with asciinema - use environment variables for terminal size
         env = os.environ.copy()
-        env['COLUMNS'] = '100'
-        env['LINES'] = '28'
+        env["COLUMNS"] = "100"
+        env["LINES"] = "28"
 
-        cmd = [
-            "asciinema", "rec",
-            "-c", f"bash {script_path}",
-            str(cast_path)
-        ]
+        cmd = ["asciinema", "rec", "-c", f"bash {script_path}", str(cast_path)]
         subprocess.run(cmd, env=env, check=True)
 
         # Convert to GIF with slower playback (0.7x speed = slower)
@@ -71,7 +69,8 @@ def record_gif(script_name: str, gif_name: str):
             "agg",
             str(cast_path),
             str(gif_path),
-            "--speed", "0.7"  # Slow down to 70% speed (30% slower)
+            "--speed",
+            "0.7",  # Slow down to 70% speed (30% slower)
         ]
         subprocess.run(cmd, check=True)
 
@@ -83,6 +82,7 @@ def record_gif(script_name: str, gif_name: str):
     except subprocess.CalledProcessError as e:
         print(f"❌ Error recording {gif_name}: {e}")
         return False
+
 
 def main():
     if not check_dependencies():
@@ -109,9 +109,9 @@ def main():
         results[gif_name] = success
 
     # Summary
-    print("\n" + "="*50)
+    print("\n" + "=" * 50)
     print("GIF Recording Summary:")
-    print("="*50)
+    print("=" * 50)
     for gif_name, success in results.items():
         status = "✅" if success else "❌"
         print(f"{status} {gif_name}.gif")
@@ -123,6 +123,7 @@ def main():
     else:
         print("\n⚠️  Some GIFs failed to record.")
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

@@ -71,7 +71,9 @@ def _default_literal(field_type: str, default_value: str) -> str:
     return repr(default_value)
 
 
-def _python_type_and_extras(field_type: str, details: dict[str, Any]) -> tuple[str, list[str], set[str]]:
+def _python_type_and_extras(
+    field_type: str, details: dict[str, Any]
+) -> tuple[str, list[str], set[str]]:
     """Returns (type name, extra Field()-kwargs, extra imports) for a non-secret field's declared type."""
     if field_type == "enum":
         values = schema_types.enum_values(details)
@@ -130,11 +132,7 @@ def _render_python_field(key: str, details: dict[str, Any]) -> tuple[str, set[st
         default_arg = _default_literal(field_type, str(default_value))
 
     kwargs_str = "".join(f", {kw}" for kw in extra_kwargs)
-    rendered = (
-        f"    {field}: {py_type} = Field(\n"
-        f"        {default_arg}, description={description!r}, alias={key!r}{kwargs_str}\n"
-        f"    )"
-    )
+    rendered = f"    {field}: {py_type} = Field(\n        {default_arg}, description={description!r}, alias={key!r}{kwargs_str}\n    )"
     return rendered, imports
 
 
@@ -153,12 +151,18 @@ def _generate_python(schema: dict[str, Any]) -> str:
         all_imports.update(imports)
 
     needs_email = "from pydantic import EmailStr" in all_imports
-    extra_requires = ' (and \'pydantic[email]\' if any field uses type = "email")' if needs_email else ""
+    extra_requires = (
+        " (and 'pydantic[email]' if any field uses type = \"email\")"
+        if needs_email
+        else ""
+    )
 
     ordered_imports = sorted(all_imports)
     header = _PYTHON_HEADER_TEMPLATE.format(
         extra_requires=extra_requires,
-        extra_imports=("".join(f"{imp}\n" for imp in ordered_imports) + "\n") if ordered_imports else "",
+        extra_imports=("".join(f"{imp}\n" for imp in ordered_imports) + "\n")
+        if ordered_imports
+        else "",
     )
 
     lines = [
@@ -217,7 +221,7 @@ _TS_HEADER = (
     "  toJSON(): string {\n"
     '    return "**********";\n'
     "  }\n\n"
-    "  [Symbol.for(\"nodejs.util.inspect.custom\")](): string {\n"
+    '  [Symbol.for("nodejs.util.inspect.custom")](): string {\n'
     '    return "Secret(**********)";\n'
     "  }\n"
     "}\n\n"
@@ -270,13 +274,20 @@ def _render_ts_field(key: str, details: dict[str, Any]) -> str:
     conditional = "requiredIf" in details and default_value is None
     has_pattern = bool(details.get("pattern"))
 
-    if field_type == "string" and default_value is None and not has_pattern and not conditional:
+    if (
+        field_type == "string"
+        and default_value is None
+        and not has_pattern
+        and not conditional
+    ):
         # Preserve the exact legacy shape for a plain required string with no constraints.
         zod_type = "z.string().min(1)"
     else:
         zod_type = _zod_base_type(field_type, details)
         if default_value is not None:
-            zod_type += f".default({_zod_default_literal(field_type, str(default_value))})"
+            zod_type += (
+                f".default({_zod_default_literal(field_type, str(default_value))})"
+            )
         elif conditional:
             # Same reasoning as the Python side: codegen can't evaluate a
             # 'requiredIf' condition ahead of time, so the field is optional
@@ -302,7 +313,9 @@ def _generate_typescript(schema: dict[str, Any]) -> str:
     if not schema:
         lines.append("const _schema = z.object({});")
     else:
-        field_lines = [_render_ts_field(key, details) for key, details in schema.items()]
+        field_lines = [
+            _render_ts_field(key, details) for key, details in schema.items()
+        ]
         lines.append("const _schema = z.object({\n" + "\n".join(field_lines) + "\n});")
 
     lines.extend(["", "const _parsed = _schema.parse(process.env);", ""])

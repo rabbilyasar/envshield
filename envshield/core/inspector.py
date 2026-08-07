@@ -1,9 +1,10 @@
 # envshield/core/inspector.py
 # Logic for inspecting a project to determine its type.
 import json
-import toml
 import os
-from typing import Optional, List
+from typing import List, Optional
+
+import toml
 
 
 def _find_framework_in_list(dependencies: List[str]) -> Optional[str]:

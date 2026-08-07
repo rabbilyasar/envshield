@@ -11,11 +11,11 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt
 
-from .importer import key_contains_secret_keyword
-from .exceptions import EnvShieldException
-from . import file_updater, schema_types
 from ..config import manager as config_manager
 from ..parsers.factory import get_parser
+from . import file_updater, schema_types
+from .exceptions import EnvShieldException
+from .importer import key_contains_secret_keyword
 
 console = Console()
 EXAMPLE_FILE = ".env.example"
@@ -90,8 +90,7 @@ def run_setup(output_file: Optional[str] = None, service_name: Optional[str] = N
     if not schema and not seed_values:
         if is_python_target:
             raise EnvShieldException(
-                f"'{local_file}' not found, and no schema exists to generate one from. "
-                "Run 'envshield import' or 'envshield schema sync' first."
+                f"'{local_file}' not found, and no schema exists to generate one from. Run 'envshield import' or 'envshield schema sync' first."
             )
         raise EnvShieldException(
             f"'{example_file}' not found. Please run 'envshield schema sync' first to generate it."
@@ -134,7 +133,9 @@ def run_setup(output_file: Optional[str] = None, service_name: Optional[str] = N
             # enum/pattern/type no longer allows). A var with no schema
             # entry at all (an extra, already-present local var) is never
             # second-guessed.
-            if key not in schema or not schema_types.validate_value(existing, field_schema):
+            if key not in schema or not schema_types.validate_value(
+                existing, field_schema
+            ):
                 continue
         else:
             if "defaultValue" in field_schema:
@@ -145,7 +146,9 @@ def run_setup(output_file: Optional[str] = None, service_name: Optional[str] = N
 
     # Step 2: Prompt for whatever's still missing (or invalid)
     if not keys_to_prompt:
-        console.print("[green]✓ No empty or invalid variables found to configure.[/green]")
+        console.print(
+            "[green]✓ No empty or invalid variables found to configure.[/green]"
+        )
     else:
         console.print(
             "\n[bold]Please provide values for the following variables:[/bold]"
@@ -182,15 +185,16 @@ def run_setup(output_file: Optional[str] = None, service_name: Optional[str] = N
                         password=is_secret,
                     )
                     error = (
-                        schema_types.validate_value(new_value, field_schema) if new_value else None
+                        schema_types.validate_value(new_value, field_schema)
+                        if new_value
+                        else None
                     )
                     if not error:
                         break
                     console.print(f"  [red]✗ {error}[/red]")
                     if attempt == max_attempts:
                         console.print(
-                            f"  [yellow]Keeping this value after {max_attempts} attempts -- "
-                            "fix it later with 'envshield check'.[/yellow]"
+                            f"  [yellow]Keeping this value after {max_attempts} attempts -- fix it later with 'envshield check'.[/yellow]"
                         )
             final_vars[key] = new_value
 
@@ -264,12 +268,13 @@ def _write_python_local_file(
     keys_needing_write = set(prompted_keys) | (set(final_vars.keys()) - existing_keys)
 
     if not keys_needing_write:
-        console.print(f"[green]✓ '{local_file}' already has values for every variable.[/green]")
+        console.print(
+            f"[green]✓ '{local_file}' already has values for every variable.[/green]"
+        )
         return
 
     updates = [{"key": key, "value": final_vars[key]} for key in keys_needing_write]
     file_updater.update_variables_in_file(local_file, updates)
     console.print(
-        f"\n[bold green]✓ Updated [magenta]{local_file}[/magenta] with {len(updates)} value(s): "
-        f"{', '.join(sorted(keys_needing_write))}[/bold green]"
+        f"\n[bold green]✓ Updated [magenta]{local_file}[/magenta] with {len(updates)} value(s): {', '.join(sorted(keys_needing_write))}[/bold green]"
     )

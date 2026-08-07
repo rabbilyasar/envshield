@@ -41,13 +41,7 @@ def test_parser_uses_prefer_hint_to_resolve_ambiguity(tmp_path):
     """A soft --service-name hint resolves an otherwise-ambiguous file without needing an explicit --container."""
     f = tmp_path / "docker-compose.yml"
     f.write_text(
-        "services:\n"
-        "  api:\n"
-        "    environment:\n"
-        "      - FOO=api-value\n"
-        "  worker:\n"
-        "    environment:\n"
-        "      - FOO=worker-value\n"
+        "services:\n  api:\n    environment:\n      - FOO=api-value\n  worker:\n    environment:\n      - FOO=worker-value\n"
     )
 
     variables = DockerComposeParser(prefer="worker").get_vars(str(f), get_values=True)
@@ -67,13 +61,7 @@ def test_parser_ignores_prefer_hint_that_does_not_match_any_service(tmp_path):
 def test_parser_explicit_container_wins_over_prefer_hint(tmp_path):
     f = tmp_path / "docker-compose.yml"
     f.write_text(
-        "services:\n"
-        "  api:\n"
-        "    environment:\n"
-        "      - FOO=api-value\n"
-        "  worker:\n"
-        "    environment:\n"
-        "      - FOO=worker-value\n"
+        "services:\n  api:\n    environment:\n      - FOO=api-value\n  worker:\n    environment:\n      - FOO=worker-value\n"
     )
 
     variables = DockerComposeParser(container="api", prefer="worker").get_vars(
@@ -93,15 +81,12 @@ def test_parser_raises_for_unknown_container(tmp_path):
 
 def test_parser_merges_env_file_with_environment_block(tmp_path):
     """'environment:' wins over 'env_file:' on a key conflict, matching docker-compose's own precedence."""
-    (tmp_path / ".env").write_text("DATABASE_URL=from-env-file\nREDIS_URL=redis://cache\n")
+    (tmp_path / ".env").write_text(
+        "DATABASE_URL=from-env-file\nREDIS_URL=redis://cache\n"
+    )
     f = tmp_path / "docker-compose.yml"
     f.write_text(
-        "services:\n"
-        "  api:\n"
-        "    env_file:\n"
-        "      - .env\n"
-        "    environment:\n"
-        "      - DATABASE_URL=from-environment-block\n"
+        "services:\n  api:\n    env_file:\n      - .env\n    environment:\n      - DATABASE_URL=from-environment-block\n"
     )
 
     variables = DockerComposeParser().get_vars(str(f), get_values=True)
@@ -122,7 +107,9 @@ def test_parser_treats_bare_environment_entry_as_present_not_blank(tmp_path):
 
 def test_parser_supports_mapping_style_environment(tmp_path):
     f = tmp_path / "docker-compose.yml"
-    f.write_text("services:\n  api:\n    environment:\n      FOO: bar\n      COUNT: 3\n")
+    f.write_text(
+        "services:\n  api:\n    environment:\n      FOO: bar\n      COUNT: 3\n"
+    )
 
     variables = DockerComposeParser().get_vars(str(f), get_values=True)
 

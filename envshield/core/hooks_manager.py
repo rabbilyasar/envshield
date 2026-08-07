@@ -31,7 +31,9 @@ class HooksManager:
         if not self.git_root:
             return False, False
 
-        hooks_dir = git_utils.get_hooks_dir() or os.path.join(self.git_root, ".git", "hooks")
+        hooks_dir = git_utils.get_hooks_dir() or os.path.join(
+            self.git_root, ".git", "hooks"
+        )
         pre_commit_installed = os.path.exists(os.path.join(hooks_dir, "pre-commit"))
         post_merge_installed = os.path.exists(os.path.join(hooks_dir, "post-merge"))
 
@@ -77,9 +79,7 @@ class HooksManager:
             auto_enter=False,
         ).ask()
 
-    def install_hooks_if_needed(
-        self, auto: bool = False, force: bool = False
-    ) -> None:
+    def install_hooks_if_needed(self, auto: bool = False, force: bool = False) -> None:
         """Install hooks if they're missing.
 
         Args:

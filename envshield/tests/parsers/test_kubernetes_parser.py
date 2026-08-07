@@ -8,7 +8,9 @@ from envshield.parsers._kubernetes import KubernetesParser
 
 def test_detect_deployment_format_recognizes_kubernetes(tmp_path):
     f = tmp_path / "deployment.yaml"
-    f.write_text("apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: api\nspec: {}\n")
+    f.write_text(
+        "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: api\nspec: {}\n"
+    )
 
     assert detect_deployment_format(str(f)) == "kubernetes"
 
@@ -158,15 +160,7 @@ def test_parser_uses_prefer_hint_to_resolve_ambiguity(tmp_path):
 def test_parser_handles_bare_pod_manifest(tmp_path):
     f = tmp_path / "pod.yaml"
     f.write_text(
-        "apiVersion: v1\n"
-        "kind: Pod\n"
-        "metadata:\n  name: debug-pod\n"
-        "spec:\n"
-        "  containers:\n"
-        "    - name: shell\n"
-        "      env:\n"
-        "        - name: FOO\n"
-        "          value: bar\n"
+        "apiVersion: v1\nkind: Pod\nmetadata:\n  name: debug-pod\nspec:\n  containers:\n    - name: shell\n      env:\n        - name: FOO\n          value: bar\n"
     )
 
     variables = KubernetesParser().get_vars(str(f), get_values=True)

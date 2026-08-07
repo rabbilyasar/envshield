@@ -55,13 +55,11 @@ class DockerComposeParser(BaseParser):
                 container = self.prefer
             else:
                 raise EnvShieldException(
-                    "This docker-compose file declares multiple services "
-                    f"({', '.join(sorted(services))}) -- pass --container to pick one."
+                    f"This docker-compose file declares multiple services ({', '.join(sorted(services))}) -- pass --container to pick one."
                 )
         elif container not in services:
             raise EnvShieldException(
-                f"Service '{container}' not found in this docker-compose file. "
-                f"Available: {', '.join(sorted(services))}"
+                f"Service '{container}' not found in this docker-compose file. Available: {', '.join(sorted(services))}"
             )
 
         service_def = services.get(container) or {}
@@ -85,7 +83,9 @@ class DockerComposeParser(BaseParser):
         environment = service_def.get("environment")
         if isinstance(environment, dict):
             for key, value in environment.items():
-                variables[key] = str(value) if value is not None else self.UNRESOLVED_VALUE
+                variables[key] = (
+                    str(value) if value is not None else self.UNRESOLVED_VALUE
+                )
         elif isinstance(environment, list):
             for entry in environment:
                 entry = str(entry)

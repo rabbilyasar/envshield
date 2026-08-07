@@ -10,19 +10,21 @@ from rich.table import Table
 
 from envshield import __version__
 from envshield.core import importer
+
 from .config import manager as config_manager
 from .core import (
-    schema_manager,
-    scanner,
     doctor,
-    inspector,
-    setup_manager,
-    service_manager,
-    service_discovery,
     generator,
     hooks_manager,
+    inspector,
+    scanner,
+    schema_manager,
+    service_discovery,
+    service_manager,
+    setup_manager,
 )
 from .core.exceptions import EnvShieldException
+
 
 # --- Main App Setup ---
 def _version_callback(version: bool) -> None:
@@ -55,6 +57,8 @@ def main(
 ) -> None:
     """EnvShield: Your Environment's First Line of Defense."""
     pass
+
+
 schema_app = typer.Typer(
     name="schema", help="Check and sync your environment schema.", no_args_is_help=True
 )
@@ -140,9 +144,13 @@ def init(
             console.print(
                 f"Found [bold yellow]{config_source}[/bold yellow] -- building your schema from its real variables."
             )
-            schema_content = importer.generate_schema_from_file(config_source, interactive=False)
+            schema_content = importer.generate_schema_from_file(
+                config_source, interactive=False
+            )
         else:
-            schema_content = config_manager.generate_default_schema_content(project_type)
+            schema_content = config_manager.generate_default_schema_content(
+                project_type
+            )
 
         config_manager.write_file(
             config_manager.SCHEMA_FILE_NAME,
@@ -153,8 +161,7 @@ def init(
         compose_file = service_discovery.find_compose_file(".", ".")
         if compose_file:
             console.print(
-                f"Found deployment manifest [bold yellow]{compose_file}[/bold yellow] -- "
-                "registering it so 'check'/'doctor' validate it automatically."
+                f"Found deployment manifest [bold yellow]{compose_file}[/bold yellow] -- registering it so 'check'/'doctor' validate it automatically."
             )
         config_content = config_manager.generate_default_config_content(
             project_name, deployment_manifest=compose_file
@@ -182,8 +189,7 @@ def init(
     console.print("\n[bold green]✨ Setup Complete! ✨[/bold green]")
     if used_real_source:
         console.print(
-            "Your project is now protected. Review 'env.schema.toml' -- "
-            "it was built from your real config, but double-check the secret/type guesses."
+            "Your project is now protected. Review 'env.schema.toml' -- it was built from your real config, but double-check the secret/type guesses."
         )
     else:
         console.print(
@@ -209,8 +215,7 @@ def check(
         None,
         "--container",
         help=(
-            "For a docker-compose or Kubernetes manifest declaring more than one "
-            "service/container, which one to validate."
+            "For a docker-compose or Kubernetes manifest declaring more than one service/container, which one to validate."
         ),
     ),
 ):
@@ -233,7 +238,9 @@ def check(
     for target in targets:
         _print_service_header(targets, target)
         try:
-            resolved_file = file or config_manager.get_env_paths(service_name=target)["local_file"]
+            resolved_file = (
+                file or config_manager.get_env_paths(service_name=target)["local_file"]
+            )
             if not schema_manager.check_schema(
                 resolved_file, service_name=target, container=container
             ):
@@ -248,7 +255,9 @@ def check(
                 if manifest:
                     manifest_container = manifest.get("container") or container
                     if not schema_manager.check_schema(
-                        manifest["path"], service_name=target, container=manifest_container
+                        manifest["path"],
+                        service_name=target,
+                        container=manifest_container,
                     ):
                         had_error = True
         except EnvShieldException as e:
@@ -396,12 +405,10 @@ _NO_DEFAULT_LANG_TYPES = {"go"}
 
 _GENERATE_HELP_TEXT = {
     "python": (
-        "[dim]Requires 'pydantic' and 'pydantic-settings' in your project. "
-        "Import with: from {module} import settings[/dim]"
+        "[dim]Requires 'pydantic' and 'pydantic-settings' in your project. Import with: from {module} import settings[/dim]"
     ),
     "typescript": (
-        "[dim]Requires 'zod' in your project. "
-        "Import with: import {{ env }} from './{module}'[/dim]"
+        "[dim]Requires 'zod' in your project. Import with: import {{ env }} from './{module}'[/dim]"
     ),
 }
 _GENERATE_DEFAULT_OUTPUT = {"python": "config.py", "typescript": "config.ts"}
@@ -419,11 +426,16 @@ def _resolve_generate_lang(explicit_lang: Optional[str]) -> str:
     project_type = inspector.detect_project_type()
     if project_type in _NO_DEFAULT_LANG_TYPES:
         raise EnvShieldException(
-            f"No --lang given, and '{project_type}' has no default codegen target. "
-            "Pass --lang python or --lang typescript explicitly."
+            f"No --lang given, and '{project_type}' has no default codegen target. Pass --lang python or --lang typescript explicitly."
         )
-    resolved = _FRAMEWORK_DEFAULT_LANG.get(project_type, "python") if project_type else "python"
-    console.print(f"[dim]No --lang given; detected '{resolved}' for this project.[/dim]")
+    resolved = (
+        _FRAMEWORK_DEFAULT_LANG.get(project_type, "python")
+        if project_type
+        else "python"
+    )
+    console.print(
+        f"[dim]No --lang given; detected '{resolved}' for this project.[/dim]"
+    )
     return resolved
 
 
@@ -709,8 +721,7 @@ def service_add(
         if import_from:
             if os.path.exists(schema_path):
                 console.print(
-                    f"[yellow]'{schema_path}' already exists -- not overwriting. "
-                    f"Run 'envshield import {import_from} --service {name} --force' to regenerate it.[/yellow]"
+                    f"[yellow]'{schema_path}' already exists -- not overwriting. Run 'envshield import {import_from} --service {name} --force' to regenerate it.[/yellow]"
                 )
             else:
                 _seed_schema_from_file(import_from, schema_path)
@@ -767,7 +778,11 @@ def service_discover(
     for c in candidates:
         config_file_display = c["local_file"] or c["example_file"] or "(default .env)"
         table.add_row(
-            c["name"], c["dir"], c["format"], config_file_display, c["deployment_manifest"] or "-"
+            c["name"],
+            c["dir"],
+            c["format"],
+            config_file_display,
+            c["deployment_manifest"] or "-",
         )
     console.print(table)
 
@@ -823,12 +838,16 @@ def service_discover(
         # Seed from whichever real signal was actually found: the local
         # file if one exists, else a template (blank values, but still
         # documents every var name) if that's all there was.
-        config_file = c["local_file"] or c["example_file"] or os.path.join(c["dir"], ".env")
+        config_file = (
+            c["local_file"] or c["example_file"] or os.path.join(c["dir"], ".env")
+        )
         if os.path.exists(config_file) and not os.path.exists(schema_path):
             _seed_schema_from_file(config_file, schema_path)
             console.print(f"    seeded schema from [dim]{config_file}[/dim]")
 
-    console.print(f"\n[bold green]✨ Added {registered_count} service(s) to envshield.yml.[/bold green]")
+    console.print(
+        f"\n[bold green]✨ Added {registered_count} service(s) to envshield.yml.[/bold green]"
+    )
 
     # Offer to install git hooks
     hm = hooks_manager.HooksManager()

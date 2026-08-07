@@ -350,6 +350,7 @@ Source of truth: env.schema.toml. Regenerate with: envshield generate
 
 Requires: pip install pydantic pydantic-settings
 """
+
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -362,11 +363,13 @@ class Settings(BaseSettings):
     )
 
     database_url: SecretStr = Field(
-        ..., description="PostgreSQL connection string for the API", alias="DATABASE_URL"
+        ...,
+        description="PostgreSQL connection string for the API",
+        alias="DATABASE_URL",
     )
 
     api_port: int = Field(
-        '5000', description="Port the API listens on", alias="API_PORT", ge=1, le=65535
+        "5000", description="Port the API listens on", alias="API_PORT", ge=1, le=65535
     )
 
 
@@ -376,7 +379,9 @@ settings = Settings()
 ```python
 from config import settings
 
-db = psycopg2.connect(settings.database_url.get_secret_value())  # SecretStr — masked in logs/reprs
+db = psycopg2.connect(
+    settings.database_url.get_secret_value()
+)  # SecretStr — masked in logs/reprs
 port = settings.api_port  # a real int, validated 1-65535 on startup — not a string
 ```
 

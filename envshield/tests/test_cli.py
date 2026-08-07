@@ -16,7 +16,9 @@ def test_init_command_in_git_repo(tmp_path, mocker):
         # Mock the hook installation prompt to answer "yes"
         mocker.patch("questionary.confirm").return_value.ask.return_value = True
         result = runner.invoke(app, ["init"])
-        assert result.exit_code == 0, f"Exit code: {result.exit_code}, Output: {result.stdout}"
+        assert result.exit_code == 0, (
+            f"Exit code: {result.exit_code}, Output: {result.stdout}"
+        )
         assert os.path.exists(CONFIG_FILE_NAME)
         assert os.path.exists(SCHEMA_FILE_NAME)
         assert os.path.exists(".env.example")
@@ -167,8 +169,7 @@ def test_generate_command_creates_typed_config_module(tmp_path):
     with runner.isolated_filesystem(temp_dir=tmp_path):
         with open(SCHEMA_FILE_NAME, "w") as f:
             f.write(
-                '[DATABASE_URL]\ndescription = "DB URL"\nsecret = true\n\n'
-                '[LOG_LEVEL]\ndescription = "Verbosity"\nsecret = false\ndefaultValue = "info"\n'
+                '[DATABASE_URL]\ndescription = "DB URL"\nsecret = true\n\n[LOG_LEVEL]\ndescription = "Verbosity"\nsecret = false\ndefaultValue = "info"\n'
             )
 
         result = runner.invoke(app, ["generate"])
@@ -204,8 +205,7 @@ def test_generate_command_with_explicit_typescript_lang(tmp_path):
     with runner.isolated_filesystem(temp_dir=tmp_path):
         with open(SCHEMA_FILE_NAME, "w") as f:
             f.write(
-                '[DATABASE_URL]\ndescription = "DB URL"\nsecret = true\n\n'
-                '[LOG_LEVEL]\ndescription = "Verbosity"\nsecret = false\ndefaultValue = "info"\n'
+                '[DATABASE_URL]\ndescription = "DB URL"\nsecret = true\n\n[LOG_LEVEL]\ndescription = "Verbosity"\nsecret = false\ndefaultValue = "info"\n'
             )
 
         result = runner.invoke(app, ["generate", "--lang", "typescript"])
@@ -301,11 +301,7 @@ def _write_two_service_project():
     os.makedirs("hermes")
     with open(CONFIG_FILE_NAME, "w") as f:
         f.write(
-            "services:\n"
-            "  athena:\n"
-            "    path: athena/env.schema.toml\n"
-            "  hermes:\n"
-            "    path: hermes/env.schema.toml\n"
+            "services:\n  athena:\n    path: athena/env.schema.toml\n  hermes:\n    path: hermes/env.schema.toml\n"
         )
     with open("athena/env.schema.toml", "w") as f:
         f.write('[API_KEY]\ndescription="Athena key"\nsecret=true\n')
@@ -313,7 +309,9 @@ def _write_two_service_project():
         f.write('[DB_URL]\ndescription="Hermes DB"\nsecret=true\n')
 
 
-def test_schema_sync_without_service_prompts_and_runs_for_all_services(mocker, tmp_path):
+def test_schema_sync_without_service_prompts_and_runs_for_all_services(
+    mocker, tmp_path
+):
     """
     Regression: omitting --service on a multi-service project used to
     silently sync a single root-level '.env.example', ignoring every
@@ -389,7 +387,9 @@ def test_check_without_service_runs_for_all_services(mocker, tmp_path):
         assert "perfectly in sync" in result.stdout
 
 
-def test_generate_scan_and_import_report_available_services_for_an_unknown_one(tmp_path):
+def test_generate_scan_and_import_report_available_services_for_an_unknown_one(
+    tmp_path,
+):
     """
     Regression: 'check'/'doctor'/'setup' listed available services on an
     unknown --service, but 'generate'/'scan'/'import' each had their own
@@ -425,7 +425,9 @@ def test_import_command_syncs_the_env_example_template(tmp_path):
             assert "API_PORT" in content
 
 
-def test_init_builds_schema_from_a_real_config_source_instead_of_the_template(tmp_path, mocker):
+def test_init_builds_schema_from_a_real_config_source_instead_of_the_template(
+    tmp_path, mocker
+):
     """
     Regression: init used to always write the generic framework template even
     when the project already had real config (e.g. config/settings.py) sitting
@@ -440,8 +442,7 @@ def test_init_builds_schema_from_a_real_config_source_instead_of_the_template(tm
         os.makedirs("config")
         with open("config/settings.py", "w") as f:
             f.write(
-                "SECRET_KEY = 'x'\nDATABASE_URL = 'postgres://x'\n"
-                "DEBUG = True\nAPI_PORT = 5000\nLOG_LEVEL = 'info'\n"
+                "SECRET_KEY = 'x'\nDATABASE_URL = 'postgres://x'\nDEBUG = True\nAPI_PORT = 5000\nLOG_LEVEL = 'info'\n"
             )
 
         result = runner.invoke(app, ["init"])
@@ -456,7 +457,9 @@ def test_init_builds_schema_from_a_real_config_source_instead_of_the_template(tm
             assert "LOG_LEVEL" in content
 
 
-def test_init_falls_back_to_the_framework_template_when_no_real_config_exists(tmp_path, mocker):
+def test_init_falls_back_to_the_framework_template_when_no_real_config_exists(
+    tmp_path, mocker
+):
     with runner.isolated_filesystem(temp_dir=tmp_path):
         os.system("git init -q")
         mocker.patch("questionary.confirm").return_value.ask.return_value = False

@@ -116,7 +116,7 @@ def test_generate_typescript_infers_types_from_default_values():
 
     # Non-secret fields are passed through directly, not wrapped in Secret.
     assert '"LOG_LEVEL": _parsed["LOG_LEVEL"],' in content
-    assert "new Secret(_parsed[\"LOG_LEVEL\"])" not in content
+    assert 'new Secret(_parsed["LOG_LEVEL"])' not in content
 
 
 def test_generate_config_explicit_enum_type_python():
@@ -135,7 +135,9 @@ def test_generate_config_explicit_enum_type_python():
 
 
 def test_generate_config_explicit_port_type_python():
-    schema = {"API_PORT": {"description": "Port.", "type": "port", "defaultValue": "8080"}}
+    schema = {
+        "API_PORT": {"description": "Port.", "type": "port", "defaultValue": "8080"}
+    }
 
     content = generator.generate_config(schema, lang="python")
 
@@ -194,7 +196,9 @@ def test_generate_typescript_explicit_enum_type():
 
 
 def test_generate_typescript_explicit_port_type_with_default():
-    schema = {"API_PORT": {"description": "Port.", "type": "port", "defaultValue": "8080"}}
+    schema = {
+        "API_PORT": {"description": "Port.", "type": "port", "defaultValue": "8080"}
+    }
 
     content = generator.generate_config(schema, lang="typescript")
 
@@ -232,7 +236,9 @@ def test_generate_typescript_secret_uses_true_private_field():
     EcmaScript private field (`#value`) is invisible to default object
     inspection, so it must be used instead.
     """
-    content = generator.generate_config({"API_KEY": {"secret": True}}, lang="typescript")
+    content = generator.generate_config(
+        {"API_KEY": {"secret": True}}, lang="typescript"
+    )
 
     assert "#value" in content
     assert "private _value" not in content

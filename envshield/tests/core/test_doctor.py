@@ -49,8 +49,7 @@ def test_check_example_file_sync_detects_drift(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     with open(SCHEMA_FILE_NAME, "w") as f:
         f.write(
-            '[FOO]\ndescription="x"\nsecret=false\n\n'
-            '[BAR]\ndescription="y"\nsecret=false\n'
+            '[FOO]\ndescription="x"\nsecret=false\n\n[BAR]\ndescription="y"\nsecret=false\n'
         )
     with open(".env.example", "w") as f:
         f.write("FOO=\n")  # BAR is missing
@@ -160,7 +159,9 @@ def test_doctor_fix_flow(mocker, tmp_path):
         mock_install_hook.assert_called_once()
 
 
-def test_check_config_files_looks_up_the_services_own_schema_path(tmp_path, monkeypatch):
+def test_check_config_files_looks_up_the_services_own_schema_path(
+    tmp_path, monkeypatch
+):
     """
     Regression: doctor --service used to always check for the ROOT
     'env.schema.toml', even though a multi-service project's schemas live at
@@ -221,10 +222,7 @@ def test_check_local_env_sync_flags_a_required_var_declared_but_left_blank(
     (tmp_path / "hermes").mkdir()
     with open(CONFIG_FILE_NAME, "w") as f:
         f.write(
-            "services:\n"
-            "  hermes:\n"
-            "    path: hermes/env.schema.toml\n"
-            "    local_file: hermes/env_config.local.py\n"
+            "services:\n  hermes:\n    path: hermes/env.schema.toml\n    local_file: hermes/env_config.local.py\n"
         )
     with open("hermes/env.schema.toml", "w") as f:
         f.write('[SECRETS_ENCRYPTION_KEY]\ndescription="x"\nsecret=true\n')
@@ -247,10 +245,7 @@ def test_check_example_file_sync_skips_python_format_local_file(tmp_path, monkey
     (tmp_path / "athena").mkdir(parents=True)
     with open(CONFIG_FILE_NAME, "w") as f:
         f.write(
-            "services:\n"
-            "  athena:\n"
-            "    path: athena/env.schema.toml\n"
-            "    local_file: athena/env_config.local.py\n"
+            "services:\n  athena:\n    path: athena/env.schema.toml\n    local_file: athena/env_config.local.py\n"
         )
     with open("athena/env.schema.toml", "w") as f:
         f.write('[DB_HOST]\ndescription="x"\n')

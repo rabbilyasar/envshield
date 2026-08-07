@@ -7,7 +7,10 @@ def test_resolve_field_type_defaults_to_string():
 
 
 def test_resolve_field_type_enum_wins_regardless_of_explicit_type():
-    assert schema_types.resolve_field_type({"enum": ["a", "b"], "type": "string"}) == "enum"
+    assert (
+        schema_types.resolve_field_type({"enum": ["a", "b"], "type": "string"})
+        == "enum"
+    )
 
 
 def test_resolve_field_type_uses_explicit_type():
@@ -73,13 +76,15 @@ def test_is_required_now_false_when_default_present():
 def test_is_required_now_respects_required_if_condition_met():
     field_schema = {"requiredIf": {"var": "FEATURE_X_ENABLED", "equals": "true"}}
     assert (
-        schema_types.is_required_now(field_schema, {"FEATURE_X_ENABLED": "true"}) is True
+        schema_types.is_required_now(field_schema, {"FEATURE_X_ENABLED": "true"})
+        is True
     )
 
 
 def test_is_required_now_respects_required_if_condition_not_met():
     field_schema = {"requiredIf": {"var": "FEATURE_X_ENABLED", "equals": "true"}}
     assert (
-        schema_types.is_required_now(field_schema, {"FEATURE_X_ENABLED": "false"}) is False
+        schema_types.is_required_now(field_schema, {"FEATURE_X_ENABLED": "false"})
+        is False
     )
     assert schema_types.is_required_now(field_schema, {}) is False

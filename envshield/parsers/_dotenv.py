@@ -2,7 +2,8 @@
 # A simple parser for key-value .env files.
 import os
 import re
-from typing import Set, Dict, Union
+from typing import Dict, Set, Union
+
 from ._base import BaseParser
 
 _INLINE_COMMENT_RE = re.compile(r"\s+#.*$")

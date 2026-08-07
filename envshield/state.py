@@ -1,8 +1,8 @@
 # Manages the state of the active profile for the current project.
 
+import json
 import os
 from typing import Optional
-import json
 
 # Define a hidden directory to store EnvShield's state and other internal files
 STATE_DIR = ".envshield"

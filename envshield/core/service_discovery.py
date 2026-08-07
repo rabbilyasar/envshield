@@ -7,9 +7,9 @@ from typing import Dict, List, Optional
 
 import yaml
 
+from ..parsers.factory import get_parser
 from . import inspector
 from .scanner import DEFAULT_EXCLUDED_DIRS
-from ..parsers.factory import get_parser
 
 # Directories whose immediate children are conventionally one-service-per-
 # subdirectory in a monorepo (Turborepo/Nx/Lerna-style), so their contents
@@ -47,7 +47,12 @@ MIN_CONFIG_VARS = 3
 # Conventional docker-compose filenames, newest naming convention first
 # (plain 'compose.yaml' is the current Compose Spec name; 'docker-compose.yml'
 # is the long-standing, still far more common one in the wild).
-COMPOSE_FILENAMES = ("docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml")
+COMPOSE_FILENAMES = (
+    "docker-compose.yml",
+    "docker-compose.yaml",
+    "compose.yml",
+    "compose.yaml",
+)
 
 
 def find_compose_file(service_dir: str, project_root: str = ".") -> Optional[str]:
@@ -202,7 +207,9 @@ def detect_env_style(service_dir: str) -> Dict[str, Optional[str]]:
             "format": "dotenv",
             "local_file": None,
             "example_file": (
-                None if os.path.basename(template_file) == ".env.example" else template_file
+                None
+                if os.path.basename(template_file) == ".env.example"
+                else template_file
             ),
         }
 
@@ -297,7 +304,11 @@ def discover_candidates(
             # Disambiguate a repeated basename (e.g. two "api" dirs under
             # different parents) using its parent directory's name.
             parent = os.path.basename(os.path.dirname(normalized))
-            name = f"{parent}-{base_name}" if parent else f"{base_name}-{seen_names[base_name]}"
+            name = (
+                f"{parent}-{base_name}"
+                if parent
+                else f"{base_name}-{seen_names[base_name]}"
+            )
         seen_names[base_name] = seen_names.get(base_name, 0) + 1
 
         compose_file = find_compose_file(normalized, root)

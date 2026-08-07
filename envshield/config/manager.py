@@ -98,14 +98,24 @@ def _load_toml_schema(schema_path: str) -> Dict[str, Any]:
     except toml.TomlDecodeError as e:
         error_msg = str(e)
         if "already exists" in error_msg:
-            dup_key = error_msg.split("What? ")[1].split(" ")[0] if "What? " in error_msg else "unknown"
+            dup_key = (
+                error_msg.split("What? ")[1].split(" ")[0]
+                if "What? " in error_msg
+                else "unknown"
+            )
             details = f"Duplicate key found: {dup_key}\nCheck your schema file for duplicate [{dup_key}] definitions"
         else:
-            details = error_msg.split("(line")[0].strip() if "(line" in error_msg else error_msg
+            details = (
+                error_msg.split("(line")[0].strip()
+                if "(line" in error_msg
+                else error_msg
+            )
         raise SchemaParseError(schema_path, details)
 
 
-def _load_schema_file(schema_path: str, _visited: Optional[frozenset] = None) -> Dict[str, Any]:
+def _load_schema_file(
+    schema_path: str, _visited: Optional[frozenset] = None
+) -> Dict[str, Any]:
     """
     Loads one schema file, resolving and merging any `extends` base
     schema(s) it declares (a string or list of strings, each a path
@@ -215,7 +225,9 @@ def add_service(
     if local_file:
         local_file = _ensure_within_project(local_file, f"service '{name}' local_file")
     if example_file:
-        example_file = _ensure_within_project(example_file, f"service '{name}' example_file")
+        example_file = _ensure_within_project(
+            example_file, f"service '{name}' example_file"
+        )
     if deployment_manifest:
         deployment_manifest = _ensure_within_project(
             deployment_manifest, f"service '{name}' deployment_manifest"
@@ -244,7 +256,9 @@ def add_service(
         yaml.dump(config, f, sort_keys=False, indent=2)
 
 
-def get_deployment_manifest(service_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
+def get_deployment_manifest(
+    service_name: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
     """
     Returns the registered deployment manifest for a service (docker-compose
     file or Kubernetes manifest -- see parsers/_docker_compose.py and
@@ -262,7 +276,8 @@ def get_deployment_manifest(service_name: Optional[str] = None) -> Optional[Dict
         if not isinstance(entry, dict) or "deployment_manifest" not in entry:
             return None
         path = _ensure_within_project(
-            entry["deployment_manifest"], f"service '{service_name}' deployment_manifest"
+            entry["deployment_manifest"],
+            f"service '{service_name}' deployment_manifest",
         )
         return {"path": path, "container": entry.get("container")}
 
@@ -323,7 +338,9 @@ def get_env_paths(service_name: Optional[str] = None) -> Dict[str, str]:
         if override:
             return _ensure_within_project(
                 override,
-                f"service '{service_name}' {override_key}" if service_name else override_key,
+                f"service '{service_name}' {override_key}"
+                if service_name
+                else override_key,
             )
         return (
             default_name
@@ -361,10 +378,7 @@ def generate_default_config_content(
     }
     if deployment_manifest:
         config_data["deployment_manifest"] = deployment_manifest
-    header = (
-        "# EnvShield Configuration File\n"
-        "# This file manages your project's security settings.\n\n"
-    )
+    header = "# EnvShield Configuration File\n# This file manages your project's security settings.\n\n"
     return header + yaml.dump(config_data, sort_keys=False, indent=2)
 
 

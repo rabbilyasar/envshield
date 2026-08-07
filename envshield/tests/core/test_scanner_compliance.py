@@ -65,11 +65,7 @@ def test_scan_with_both_secret_and_undeclared_variable(mocker, tmp_path):
             "envshield.config.manager.load_schema", return_value={"DECLARED_KEY": {}}
         )
 
-        python_code = (
-            "import os\n\n"
-            "SECRET = 'sk_live_123456789abcdefghijklmnopqrstuv'\n"
-            "UNDECLARED = os.environ.get('UNDECLARED_KEY')\n"
-        )
+        python_code = "import os\n\nSECRET = 'sk_live_123456789abcdefghijklmnopqrstuv'\nUNDECLARED = os.environ.get('UNDECLARED_KEY')\n"
         with open("app.py", "w") as f:
             f.write(python_code)
 
@@ -128,8 +124,7 @@ def test_scan_staged_scans_index_content_not_working_tree(tmp_path):
         result = runner.invoke(app, ["scan", "--staged"])
 
         assert result.exit_code == 1, (
-            "The staged (committed) content still has the secret, even "
-            "though the working-tree copy was cleaned up"
+            "The staged (committed) content still has the secret, even though the working-tree copy was cleaned up"
         )
         assert "DANGER" in result.stdout
 
@@ -171,11 +166,7 @@ def test_scan_without_service_resolves_schema_per_service_directory(tmp_path):
         os.makedirs("hermes")
         with open("envshield.yml", "w") as f:
             f.write(
-                "services:\n"
-                "  athena:\n"
-                "    path: athena/env.schema.toml\n"
-                "  hermes:\n"
-                "    path: hermes/env.schema.toml\n"
+                "services:\n  athena:\n    path: athena/env.schema.toml\n  hermes:\n    path: hermes/env.schema.toml\n"
             )
         with open("athena/env.schema.toml", "w") as f:
             f.write('[ATHENA_VAR]\ndescription="x"\n')
@@ -190,8 +181,7 @@ def test_scan_without_service_resolves_schema_per_service_directory(tmp_path):
             )
         with open("hermes/app.py", "w") as f:
             f.write(
-                "import os\n\n"
-                "c = os.environ.get('HERMES_VAR')\n"  # declared in hermes's own schema
+                "import os\n\nc = os.environ.get('HERMES_VAR')\n"  # declared in hermes's own schema
             )
 
         result = runner.invoke(app, ["scan"])
@@ -205,18 +195,16 @@ def test_scan_without_service_resolves_schema_per_service_directory(tmp_path):
         assert "HERMES_VAR" not in result.stdout.split("Undeclared Variable Usage")[-1]
 
 
-def test_scan_with_explicit_service_still_checks_a_single_schema_for_every_file(tmp_path):
+def test_scan_with_explicit_service_still_checks_a_single_schema_for_every_file(
+    tmp_path,
+):
     """Passing --service explicitly keeps the original single-target behavior, even on a multi-service project."""
     with runner.isolated_filesystem(temp_dir=tmp_path):
         os.makedirs("athena")
         os.makedirs("hermes")
         with open("envshield.yml", "w") as f:
             f.write(
-                "services:\n"
-                "  athena:\n"
-                "    path: athena/env.schema.toml\n"
-                "  hermes:\n"
-                "    path: hermes/env.schema.toml\n"
+                "services:\n  athena:\n    path: athena/env.schema.toml\n  hermes:\n    path: hermes/env.schema.toml\n"
             )
         with open("athena/env.schema.toml", "w") as f:
             f.write('[ATHENA_VAR]\ndescription="x"\n')

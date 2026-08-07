@@ -24,7 +24,9 @@ def test_service_add_registers_and_creates_envshield_yml(tmp_path):
         result = runner.invoke(app, ["service", "add", "athena", "athena"])
 
         assert result.exit_code == 0
-        assert config_manager.get_services()["athena"]["path"] == "athena/env.schema.toml"
+        assert (
+            config_manager.get_services()["athena"]["path"] == "athena/env.schema.toml"
+        )
 
 
 def test_service_add_seeds_schema_from_import_file(tmp_path):
@@ -118,6 +120,7 @@ def test_service_discover_finds_multiple_services(tmp_path):
 
         # Test discovery by directly testing service discovery logic
         from envshield.core.service_discovery import discover_candidates
+
         candidates = discover_candidates(".")
 
         # Should find both services
@@ -168,7 +171,10 @@ def test_service_discover_auto_registers_a_found_compose_file(tmp_path):
         result = runner.invoke(app, ["service", "discover", "--yes"])
 
         assert result.exit_code == 0
-        assert config_manager.get_services()["api"]["deployment_manifest"] == "docker-compose.yml"
+        assert (
+            config_manager.get_services()["api"]["deployment_manifest"]
+            == "docker-compose.yml"
+        )
         assert "docker-compose.yml" in result.stdout
 
 

@@ -22,10 +22,13 @@ class TestGetDiffLines:
 
     def test_no_changes_returns_empty_set(self):
         """File with no new lines should return empty set."""
-        with patch.object(
-            git_utils, "get_head_file_content", return_value="line1\nline2"
-        ), patch.object(
-            git_utils, "get_staged_file_content", return_value="line1\nline2"
+        with (
+            patch.object(
+                git_utils, "get_head_file_content", return_value="line1\nline2"
+            ),
+            patch.object(
+                git_utils, "get_staged_file_content", return_value="line1\nline2"
+            ),
         ):
             result = scanner._get_diff_lines("test.py")
             assert result == set()
@@ -35,8 +38,11 @@ class TestGetDiffLines:
         head_content = "line1\nline2\nline3"
         staged_content = "line1\nnew_line2\nline2\nline3\nnew_line4"
 
-        with patch.object(git_utils, "get_head_file_content", return_value=head_content), patch.object(
-            git_utils, "get_staged_file_content", return_value=staged_content
+        with (
+            patch.object(git_utils, "get_head_file_content", return_value=head_content),
+            patch.object(
+                git_utils, "get_staged_file_content", return_value=staged_content
+            ),
         ):
             result = scanner._get_diff_lines("test.py")
             # Line 2 is "new_line2", line 5 is "new_line4"
@@ -67,16 +73,20 @@ class TestGetDiffLines:
         # exists twice in HEAD -- a content-set check would never flag it.
         staged_content = "# placeholder\nFOO = 'a'\n# placeholder\n# placeholder\n"
 
-        with patch.object(git_utils, "get_head_file_content", return_value=head_content), patch.object(
-            git_utils, "get_staged_file_content", return_value=staged_content
+        with (
+            patch.object(git_utils, "get_head_file_content", return_value=head_content),
+            patch.object(
+                git_utils, "get_staged_file_content", return_value=staged_content
+            ),
         ):
             result = scanner._get_diff_lines("test.py")
             assert 4 in result
 
     def test_empty_staged_returns_empty_set(self):
         """File staged but empty should return empty set."""
-        with patch.object(git_utils, "get_head_file_content", return_value="content"), patch.object(
-            git_utils, "get_staged_file_content", return_value=None
+        with (
+            patch.object(git_utils, "get_head_file_content", return_value="content"),
+            patch.object(git_utils, "get_staged_file_content", return_value=None),
         ):
             result = scanner._get_diff_lines("test.py")
             assert result == set()
@@ -88,7 +98,9 @@ class TestScanSingleFileWithDiffAware:
     def test_scan_all_lines_when_new_lines_only_none(self):
         """Should scan all lines when new_lines_only is None."""
         # Using a generic secret pattern that will be caught (not a real Stripe key format)
-        content = "SECRET_KEY = 'super_secret_key_12345678901234567890'\nNORMAL_VAR = 'value'"
+        content = (
+            "SECRET_KEY = 'super_secret_key_12345678901234567890'\nNORMAL_VAR = 'value'"
+        )
         schema_vars = set()
 
         secrets, _ = scanner._scan_single_file(

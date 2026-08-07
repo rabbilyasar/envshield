@@ -61,7 +61,9 @@ def test_update_gitignore_skips_when_all_patterns_already_present(
     assert content.count(".env\n") == 1
 
 
-def test_get_env_paths_defaults_to_cwd_for_single_service_project(tmp_path, monkeypatch):
+def test_get_env_paths_defaults_to_cwd_for_single_service_project(
+    tmp_path, monkeypatch
+):
     """With no service, paths stay exactly '.env.example' / '.env' -- unchanged behaviour."""
     monkeypatch.chdir(tmp_path)
 
@@ -80,11 +82,7 @@ def test_get_env_paths_scopes_to_service_directory(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "services" / "api").mkdir(parents=True)
     with open("envshield.yml", "w") as f:
-        f.write(
-            "services:\n"
-            "  api:\n"
-            "    path: services/api/env.schema.toml\n"
-        )
+        f.write("services:\n  api:\n    path: services/api/env.schema.toml\n")
 
     paths = config_manager.get_env_paths(service_name="api")
 
@@ -104,10 +102,7 @@ def test_get_env_paths_honors_local_file_override(tmp_path, monkeypatch):
     (tmp_path / "athena" / "config").mkdir(parents=True)
     with open("envshield.yml", "w") as f:
         f.write(
-            "services:\n"
-            "  athena:\n"
-            "    path: athena/env.schema.toml\n"
-            "    local_file: athena/config/env_config.local.py\n"
+            "services:\n  athena:\n    path: athena/env.schema.toml\n    local_file: athena/config/env_config.local.py\n"
         )
 
     paths = config_manager.get_env_paths(service_name="athena")
@@ -126,7 +121,9 @@ def test_get_env_paths_raises_for_unknown_service(tmp_path, monkeypatch):
         config_manager.get_env_paths(service_name="does-not-exist")
 
 
-def test_get_env_paths_rejects_local_file_override_escaping_project(tmp_path, monkeypatch):
+def test_get_env_paths_rejects_local_file_override_escaping_project(
+    tmp_path, monkeypatch
+):
     """
     Security regression: envshield.yml is normally committed to the repo, so
     an unvalidated 'local_file'/'example_file' override there is a
@@ -139,10 +136,7 @@ def test_get_env_paths_rejects_local_file_override_escaping_project(tmp_path, mo
     (tmp_path / "api").mkdir()
     with open("envshield.yml", "w") as f:
         f.write(
-            "services:\n"
-            "  api:\n"
-            "    path: api/env.schema.toml\n"
-            "    local_file: ../../../../tmp/evil\n"
+            "services:\n  api:\n    path: api/env.schema.toml\n    local_file: ../../../../tmp/evil\n"
         )
 
     with pytest.raises(UnsafePathError):
@@ -154,17 +148,16 @@ def test_get_env_paths_rejects_absolute_local_file_override(tmp_path, monkeypatc
     (tmp_path / "api").mkdir()
     with open("envshield.yml", "w") as f:
         f.write(
-            "services:\n"
-            "  api:\n"
-            "    path: api/env.schema.toml\n"
-            "    local_file: /etc/passwd\n"
+            "services:\n  api:\n    path: api/env.schema.toml\n    local_file: /etc/passwd\n"
         )
 
     with pytest.raises(UnsafePathError):
         config_manager.get_env_paths(service_name="api")
 
 
-def test_get_service_schema_path_rejects_schema_path_escaping_project(tmp_path, monkeypatch):
+def test_get_service_schema_path_rejects_schema_path_escaping_project(
+    tmp_path, monkeypatch
+):
     monkeypatch.chdir(tmp_path)
     with open("envshield.yml", "w") as f:
         f.write("services:\n  api:\n    path: ../../outside/env.schema.toml\n")
@@ -198,10 +191,7 @@ def test_get_env_paths_allows_local_file_override_within_project(tmp_path, monke
     (tmp_path / "athena" / "config").mkdir(parents=True)
     with open("envshield.yml", "w") as f:
         f.write(
-            "services:\n"
-            "  athena:\n"
-            "    path: athena/env.schema.toml\n"
-            "    local_file: athena/config/env_config.local.py\n"
+            "services:\n  athena:\n    path: athena/env.schema.toml\n    local_file: athena/config/env_config.local.py\n"
         )
 
     paths = config_manager.get_env_paths(service_name="athena")
@@ -217,8 +207,7 @@ def test_load_schema_merges_in_a_local_extends_base(tmp_path, monkeypatch):
         f.write('[LOG_LEVEL]\ndescription="shared"\ndefaultValue="info"\n')
     with open("services/api/env.schema.toml", "w") as f:
         f.write(
-            'extends = "../../shared/base.schema.toml"\n\n'
-            '[DATABASE_URL]\ndescription="api-specific"\nsecret=true\n'
+            'extends = "../../shared/base.schema.toml"\n\n[DATABASE_URL]\ndescription="api-specific"\nsecret=true\n'
         )
     with open("envshield.yml", "w") as f:
         f.write("services:\n  api:\n    path: services/api/env.schema.toml\n")
@@ -235,7 +224,9 @@ def test_load_schema_child_definition_overrides_base_on_conflict(tmp_path, monke
     with open("base.schema.toml", "w") as f:
         f.write('[LOG_LEVEL]\ndescription="base"\ndefaultValue="info"\n')
     with open("env.schema.toml", "w") as f:
-        f.write('extends = "base.schema.toml"\n\n[LOG_LEVEL]\ndescription="overridden"\ndefaultValue="debug"\n')
+        f.write(
+            'extends = "base.schema.toml"\n\n[LOG_LEVEL]\ndescription="overridden"\ndefaultValue="debug"\n'
+        )
 
     schema = config_manager.load_schema()
 
@@ -249,7 +240,9 @@ def test_load_schema_supports_chained_extends(tmp_path, monkeypatch):
     with open("grandparent.schema.toml", "w") as f:
         f.write('[FROM_GRANDPARENT]\ndescription="x"\n')
     with open("parent.schema.toml", "w") as f:
-        f.write('extends = "grandparent.schema.toml"\n\n[FROM_PARENT]\ndescription="x"\n')
+        f.write(
+            'extends = "grandparent.schema.toml"\n\n[FROM_PARENT]\ndescription="x"\n'
+        )
     with open("env.schema.toml", "w") as f:
         f.write('extends = "parent.schema.toml"\n\n[FROM_CHILD]\ndescription="x"\n')
 
@@ -258,7 +251,9 @@ def test_load_schema_supports_chained_extends(tmp_path, monkeypatch):
     assert set(schema.keys()) == {"FROM_GRANDPARENT", "FROM_PARENT", "FROM_CHILD"}
 
 
-def test_load_schema_supports_multiple_extends_with_later_entries_winning(tmp_path, monkeypatch):
+def test_load_schema_supports_multiple_extends_with_later_entries_winning(
+    tmp_path, monkeypatch
+):
     monkeypatch.chdir(tmp_path)
     with open("base_a.schema.toml", "w") as f:
         f.write('[SHARED]\ndescription="from a"\n\n[FROM_A]\ndescription="x"\n')
@@ -344,14 +339,14 @@ def test_add_service_extends_without_touching_existing_services_or_other_keys(
     monkeypatch.chdir(tmp_path)
     with open("envshield.yml", "w") as f:
         f.write(
-            "project_name: zeus\n"
-            "services:\n"
-            "  athena:\n"
-            "    path: athena/env.schema.toml\n"
-            "    local_file: athena/config/env_config.local.py\n"
+            "project_name: zeus\nservices:\n  athena:\n    path: athena/env.schema.toml\n    local_file: athena/config/env_config.local.py\n"
         )
 
-    config_manager.add_service("hermes", "hermes/env.schema.toml", local_file="hermes/config/env_config.local.py")
+    config_manager.add_service(
+        "hermes",
+        "hermes/env.schema.toml",
+        local_file="hermes/config/env_config.local.py",
+    )
 
     config = config_manager.load_config()
     assert config["project_name"] == "zeus"
@@ -402,7 +397,9 @@ def test_add_service_registers_deployment_manifest_and_container(tmp_path, monke
     assert entry["container"] == "api-container"
 
 
-def test_get_deployment_manifest_returns_none_when_not_registered(tmp_path, monkeypatch):
+def test_get_deployment_manifest_returns_none_when_not_registered(
+    tmp_path, monkeypatch
+):
     monkeypatch.chdir(tmp_path)
     config_manager.add_service("api", "api/env.schema.toml")
 
@@ -432,7 +429,9 @@ def test_get_deployment_manifest_for_root_project(tmp_path, monkeypatch):
     assert manifest == {"path": "docker-compose.yml", "container": None}
 
 
-def test_get_deployment_manifest_rejects_manifest_path_escaping_project(tmp_path, monkeypatch):
+def test_get_deployment_manifest_rejects_manifest_path_escaping_project(
+    tmp_path, monkeypatch
+):
     monkeypatch.chdir(tmp_path)
     with open("envshield.yml", "w") as f:
         f.write("deployment_manifest: ../../../../etc/passwd\n")

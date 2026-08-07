@@ -124,10 +124,7 @@ def test_setup_command_overwrite_declined(mocker, tmp_path):
 def _write_multiservice_config(local_file="athena/config/env_config.local.py"):
     with open("envshield.yml", "w") as f:
         f.write(
-            "services:\n"
-            "  athena:\n"
-            "    path: athena/env.schema.toml\n"
-            f"    local_file: {local_file}\n"
+            f"services:\n  athena:\n    path: athena/env.schema.toml\n    local_file: {local_file}\n"
         )
 
 
@@ -164,8 +161,7 @@ def test_setup_creates_python_local_file_from_schema_when_missing(mocker, tmp_pa
         _write_multiservice_config()
         with open("athena/env.schema.toml", "w") as f:
             f.write(
-                '[DB_HOST]\ndescription="Database host"\ndefaultValue="db"\n\n'
-                '[INTREPID_KEY]\ndescription="Intrepid API key"\nsecret=true\n'
+                '[DB_HOST]\ndescription="Database host"\ndefaultValue="db"\n\n[INTREPID_KEY]\ndescription="Intrepid API key"\nsecret=true\n'
             )
 
         mock_prompt = mocker.patch(
@@ -202,13 +198,7 @@ def test_setup_patches_existing_python_local_file_in_place(mocker, tmp_path):
                 '[INTREPID_KEY]\ndescription="Intrepid API key"\nsecret=true\n\n'
                 '[NEW_FEATURE_FLAG]\ndescription="Newly added var"\ndefaultValue="no"\n'
             )
-        existing_content = (
-            "import os\n\n"
-            'DB_HOST = "db"\n'
-            'INTREPID_KEY = ""\n\n'
-            'if os.environ.get("USE_LOCAL_DB") == "yes":\n'
-            '    DB_HOST = "db"\n'
-        )
+        existing_content = 'import os\n\nDB_HOST = "db"\nINTREPID_KEY = ""\n\nif os.environ.get("USE_LOCAL_DB") == "yes":\n    DB_HOST = "db"\n'
         with open("athena/config/env_config.local.py", "w") as f:
             f.write(existing_content)
 
@@ -266,11 +256,7 @@ def test_setup_all_services_runs_each_wizard_sequentially(mocker, tmp_path):
         os.makedirs("hermes")
         with open("envshield.yml", "w") as f:
             f.write(
-                "services:\n"
-                "  athena:\n"
-                "    path: athena/env.schema.toml\n"
-                "  hermes:\n"
-                "    path: hermes/env.schema.toml\n"
+                "services:\n  athena:\n    path: athena/env.schema.toml\n  hermes:\n    path: hermes/env.schema.toml\n"
             )
         with open("athena/env.schema.toml", "w") as f:
             f.write('[API_KEY]\ndescription="Athena key"\nsecret=true\n')
@@ -308,7 +294,9 @@ def test_setup_re_prompts_for_an_existing_but_invalid_value(mocker, tmp_path):
     """
     with runner.isolated_filesystem(temp_dir=tmp_path):
         with open(SCHEMA_FILE_NAME, "w") as f:
-            f.write('[LOG_LEVEL]\ndescription="x"\nenum=["debug","info","warn","error"]\n')
+            f.write(
+                '[LOG_LEVEL]\ndescription="x"\nenum=["debug","info","warn","error"]\n'
+            )
         with open(".env", "w") as f:
             f.write("LOG_LEVEL=verbose\n")
 
@@ -325,7 +313,9 @@ def test_setup_re_prompts_for_an_existing_but_invalid_value(mocker, tmp_path):
 def test_setup_does_not_re_prompt_for_an_existing_valid_value(mocker, tmp_path):
     with runner.isolated_filesystem(temp_dir=tmp_path):
         with open(SCHEMA_FILE_NAME, "w") as f:
-            f.write('[LOG_LEVEL]\ndescription="x"\nenum=["debug","info","warn","error"]\n')
+            f.write(
+                '[LOG_LEVEL]\ndescription="x"\nenum=["debug","info","warn","error"]\n'
+            )
         with open(".env", "w") as f:
             f.write("LOG_LEVEL=info\n")
         mocker.patch("questionary.confirm").return_value.ask.return_value = True
@@ -342,7 +332,9 @@ def test_setup_does_not_re_prompt_for_an_existing_valid_value(mocker, tmp_path):
 def test_setup_uses_a_picker_for_enum_fields(mocker, tmp_path):
     with runner.isolated_filesystem(temp_dir=tmp_path):
         with open(SCHEMA_FILE_NAME, "w") as f:
-            f.write('[LOG_LEVEL]\ndescription="x"\nenum=["debug","info","warn","error"]\n')
+            f.write(
+                '[LOG_LEVEL]\ndescription="x"\nenum=["debug","info","warn","error"]\n'
+            )
 
         mock_select = mocker.patch("questionary.select")
         mock_select.return_value.ask.return_value = "debug"
