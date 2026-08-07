@@ -568,6 +568,13 @@ def import_command(
         console.print(
             f"\nSuccessfully generated schema at [bold cyan]{output}[/bold cyan]"
         )
+
+        # Keep the tracked template (.env.example) in sync with the schema
+        # we just (re)wrote -- only when `output` is the project's/service's
+        # real configured schema path, not some arbitrary --output destination
+        # there's no template mapping for.
+        if service or output == config_manager.SCHEMA_FILE_NAME:
+            schema_manager.sync_schema(service_name=service)
     except EnvShieldException as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(code=1)
