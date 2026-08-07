@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented in this file.
 
+## [4.4.0] - 2026-08-07
+
+### Added
+- **`--json` on `check`, `doctor`, and `scan`.** Suppresses every Rich table/panel/progress-bar and prints exactly one JSON object to stdout instead, with exit codes unchanged (non-zero on any issue) — a drop-in for a CI gate, a dashboard, or an agent loop that needs to branch on the result instead of parsing colored text. Runs every configured service automatically (instead of the interactive "Which service?" picker) when multiple services exist and `--service` isn't given. `doctor` rejects `--json` combined with `--fix`, since an interactive confirm prompt has no place in a machine-readable mode. See [Machine-readable output](README.md#machine-readable-output---json).
+
+### Fixed
+- `generate` silently fell back to Python codegen for any detected project type with no TypeScript mapping — including Go, which has nothing to do with `pydantic-settings`. A detected ecosystem with no codegen target now errors and asks for `--lang` explicitly instead of guessing.
+- CI's `ruff check .`/`ruff format --check .` ran with zero project configuration, at the mercy of whatever rule set and default line-formatting ruff's own (much broader, and steadily expanding) defaults happened to enable on that run's installed version — the actual reason CI's lint step had been silently red on every push since 2026-08-04, including the 4.2.0 and 4.3.0 releases. Pinned an explicit, deliberate rule selection and ruff version range, and applied a first-ever repo-wide `ruff format` pass (style only, no behavior change).
+- envshield's own CI self-scan (`envshield scan . --config .github/envshield.ci.yml`) never actually ran either, for the same reason (a later step in the same job, aborted before reaching it). Running it for the first time surfaced real gaps in the exclude list — README's own documented example output, the `.gif/` demo-recording scripts, and envshield's own secret-detection source code (which will always self-trigger the generic-API-key pattern on its own implementation) are now excluded; none were real leaks.
+
 ## [4.3.0] - 2026-08-07
 
 ### Added
