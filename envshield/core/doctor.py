@@ -194,15 +194,12 @@ def _run_init_fix() -> None:
         )
 
 
-def run_health_check(fix: bool, service_name: Optional[str] = None):
+def _build_checks(service_name: Optional[str] = None) -> List[HealthCheck]:
     """
-    Runs a suite of health checks on the project's EnvShield setup.
-
-    If `service_name` is provided, checks that specific service's setup.
-    Otherwise, checks the root setup.
+    The list of health checks to run, shared by run_health_check (Rich
+    rendering + --fix) and run_health_check_json (--json) so they can never
+    quietly diverge on which checks exist.
     """
-    console.print("\n[bold cyan]🛡️  Running EnvShield Health Check...[/bold cyan]")
-
     checks: List[HealthCheck] = [
         HealthCheck(
             "Configuration Files",
@@ -246,6 +243,20 @@ def run_health_check(fix: bool, service_name: Optional[str] = None):
             )
         )
 
+    return checks
+
+
+def run_health_check(fix: bool, service_name: Optional[str] = None):
+    """
+    Runs a suite of health checks on the project's EnvShield setup.
+
+    If `service_name` is provided, checks that specific service's setup.
+    Otherwise, checks the root setup.
+    """
+    console.print("\n[bold cyan]🛡️  Running EnvShield Health Check...[/bold cyan]")
+
+    checks = _build_checks(service_name)
+
     all_passed = True
     for check in checks:
         check.run(fix=fix)
@@ -262,3 +273,25 @@ def run_health_check(fix: bool, service_name: Optional[str] = None):
             "[bold yellow]Health check complete. Some issues were found.[/bold yellow]"
         )
         raise typer.Exit(code=1)
+
+
+def run_health_check_json(service_name: Optional[str] = None) -> dict:
+    """
+    Same checks as run_health_check, collected as a plain, JSON-serializable
+    dict instead of Rich output -- for '--json'. Never offers --fix: an
+    interactive confirm prompt makes no sense in a machine-readable mode.
+    """
+    results = []
+    all_passed = True
+    for check in _build_checks(service_name):
+        try:
+            passed, message = check.check_func()
+        except EnvShieldException as e:
+            passed, message = False, str(e)
+        if not passed:
+            all_passed = False
+        results.append(
+            {"name": check.description, "passed": passed, "message": message}
+        )
+
+    return {"service": service_name, "passed": all_passed, "checks": results}

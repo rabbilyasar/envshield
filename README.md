@@ -37,6 +37,7 @@ It works the same way whether you have one repo with one `.env` file, or a monor
 - [Command reference](#command-reference)
   - [Core commands](#core-commands)
   - [Monorepo: managing multiple services (monorepo)](#monorepo-managing-multiple-services)
+- [Machine-readable output (`--json`)](#machine-readable-output---json)
 - [Typed config code generation](#typed-config-code-generation)
 - [Validating deployment manifests](#validating-deployment-manifests)
 - [Secret scanning and git hooks](#secret-scanning-and-git-hooks)
@@ -305,12 +306,12 @@ Everything a single-service project ever needs. `--service` shows up on most of 
 |---|---|
 | `envshield init [--force/-f]` | Detects your framework and builds `env.schema.toml` from a real config source if it finds one, otherwise a framework-aware template. Also scaffolds `envshield.yml`, updates `.gitignore`, and offers to install git hooks. Auto-registers a root-level `docker-compose.yml` as the project's deployment manifest if it finds one. `--force` re-runs on a project that already has a config (with a confirmation before overwriting). |
 | `envshield import <file> [--output/-o PATH] [--force/-f] [--interactive] [--service NAME]` | Runs the same real-variable analysis `init` does automatically, as its own command — for re-importing after your code gains new variables, pointing at a file `init` wouldn't have found, or adding `--interactive` to confirm each secret/type classification by hand instead of accepting the automatic guess. `--output` changes where the schema is written (defaults to `env.schema.toml`, or the target service's schema path with `--service`). |
-| `envshield check [file] [--service NAME] [--container NAME]` | Validates a local file (or, if omitted, the project's/service's default local file *and* its registered deployment manifest, if any) against the schema. `file` can be a plain `.env`, a Python config module, a docker-compose file, or a Kubernetes manifest. `--container` picks which service/container to check in a manifest that declares more than one (tried against `--service`'s name automatically first). Exits non-zero on any drift — safe to use as a CI gate. |
-| `envshield doctor [--fix] [--service NAME]` | Runs every health check at once (see below) and reports a summary. `--fix` interactively offers to fix whatever it can — re-running `init`, regenerating the template, installing the git hook, or running `setup` to fill in missing/invalid local values. Exits non-zero if anything's still broken afterward. |
+| `envshield check [file] [--service NAME] [--container NAME] [--json]` | Validates a local file (or, if omitted, the project's/service's default local file *and* its registered deployment manifest, if any) against the schema. `file` can be a plain `.env`, a Python config module, a docker-compose file, or a Kubernetes manifest. `--container` picks which service/container to check in a manifest that declares more than one (tried against `--service`'s name automatically first). Exits non-zero on any drift — safe to use as a CI gate. `--json` prints a machine-readable result instead (see below) and never falls into an interactive service picker. |
+| `envshield doctor [--fix] [--service NAME] [--json]` | Runs every health check at once (see below) and reports a summary. `--fix` interactively offers to fix whatever it can — re-running `init`, regenerating the template, installing the git hook, or running `setup` to fill in missing/invalid local values. Exits non-zero if anything's still broken afterward. `--json` is incompatible with `--fix` (an interactive confirm prompt makes no sense in a machine-readable mode). |
 | `envshield setup [output_file] [--service NAME]` | Interactive onboarding wizard: walks through every variable that's missing, blank, or has an existing value the schema no longer allows, prompting with the variable's description, masking secret input, and offering a picker for `enum` fields. Leaves everything already correct untouched. |
 | `envshield schema sync [--service NAME]` | Regenerates `.env.example` from the schema (a dotenv project), or patches a Python-module local file in place to declare any schema variable it's missing (never rewrites it wholesale — only appends/patches the specific lines it owns). `import` already calls this automatically for you when it changes a project's/service's real schema, so you'll rarely need to run it by hand except after a manual schema edit. |
 | `envshield generate [output_file] [--lang/-l python\|typescript] [--force/-f] [--service NAME]` | Compiles the schema into a typed, validated config module. `--lang` is auto-detected from your project (Next.js/Vite/Node.js → TypeScript; Python/Django/Flask, or nothing detected → Python) if omitted. A detected ecosystem with no codegen target at all (currently: Go) errors and asks for `--lang` explicitly, rather than silently guessing Python. Defaults to writing `config.py`/`config.ts`; `--force` overwrites an existing output file. See [Typed config code generation](#typed-config-code-generation). |
-| `envshield scan [paths...] [--staged] [--config/-c PATH] [--exclude/-e PATTERN]` [--service NAME] | Scans code for hardcoded secrets and for env vars used in code (`os.getenv`, `os.environ.get`, `process.env.X`) but never declared in the schema. `--staged` scans only what's staged for the next commit (what the pre-commit hook runs); `--exclude` (repeatable) adds glob patterns to skip, on top of whatever `secret_scanning.exclude_files` is set in `envshield.yml`. See [Secret scanning and git hooks](#secret-scanning-and-git-hooks). |
+| `envshield scan [paths...] [--staged] [--config/-c PATH] [--exclude/-e PATTERN] [--service NAME] [--json]` | Scans code for hardcoded secrets and for env vars used in code (`os.getenv`, `os.environ.get`, `process.env.X`) but never declared in the schema. `--staged` scans only what's staged for the next commit (what the pre-commit hook runs); `--exclude` (repeatable) adds glob patterns to skip, on top of whatever `secret_scanning.exclude_files` is set in `envshield.yml`. See [Secret scanning and git hooks](#secret-scanning-and-git-hooks). |
 | `envshield install-hook` | Installs both git hooks by hand, without going through `init`/`setup`/`service discover`'s interactive prompt. |
 | `envshield --version` / `-v` | Prints the installed version and exits. |
 
@@ -332,6 +333,63 @@ services:
 | `envshield service list` | Lists every service currently configured in `envshield.yml`, with its schema and local file paths. |
 | `envshield service add <name> <directory> [--local-file PATH] [--example-file PATH] [--description/-d TEXT] [--schema PATH] [--import FILE] [--deployment-manifest PATH] [--container NAME]` | Registers one service by hand. `--local-file` is required when the service's real config isn't a dotenv file (e.g. a Python module) — see above. `--import` seeds the new service's schema from an existing config file in one step. `--deployment-manifest` is auto-detected (a compose file in the given directory or the project root that actually declares this service) if not given explicitly. |
 | `envshield service discover [root] [--yes/-y]` | Scans for service-like directories not already registered, and offers to add them — see [Quick start](#a-monorepo-with-multiple-services). `--yes` skips the interactive confirmation, for CI/scripting. |
+
+---
+
+## Machine-readable output (`--json`)
+
+`check`, `doctor`, and `scan` all accept `--json`: every Rich table/panel/progress-bar is suppressed, and exactly one JSON object is printed to stdout instead. Exit codes are unchanged (non-zero on any issue), so `--json` is a drop-in for CI gates, dashboards, or an agent loop that needs to branch on the result instead of parsing colored text. If multiple services are configured and `--service` isn't given, `--json` runs every service automatically rather than falling into the interactive "Which service?" picker.
+
+```bash
+envshield check --json
+```
+
+```json
+{
+  "success": false,
+  "results": [
+    {
+      "file": ".env",
+      "service": null,
+      "clean": false,
+      "missing": [],
+      "blank": ["SECRETS_ENCRYPTION_KEY"],
+      "invalid": {},
+      "extra": []
+    }
+  ]
+}
+```
+
+`doctor --json` returns the same per-service shape, with each service's individual health checks instead of a variable diff (`--fix` is rejected together with `--json` — an interactive confirm prompt has no place in a machine-readable mode):
+
+```json
+{
+  "success": true,
+  "results": [
+    {
+      "service": "hermes",
+      "passed": true,
+      "checks": [
+        {"name": "Configuration Files", "passed": true, "message": "Found and accessible."}
+      ]
+    }
+  ]
+}
+```
+
+`scan --json` returns one flat object (scan doesn't fan out per-service the way check/doctor do — it scans a set of files against whichever schema each one belongs to in a single pass):
+
+```json
+{
+  "clean": false,
+  "secrets": [
+    {"file_path": "./config.py", "line_num": 12, "secret_type": "Generic API Key", "line_content": "..."}
+  ],
+  "undeclared_variables": [],
+  "skipped_files": []
+}
+```
 
 ---
 

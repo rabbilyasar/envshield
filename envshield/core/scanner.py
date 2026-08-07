@@ -4,7 +4,7 @@ import fnmatch
 import os
 import re
 import stat
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import questionary
 import typer
@@ -379,7 +379,7 @@ def _build_undeclared_var_resolver(service_name: Optional[str]):
     return _resolve
 
 
-def run_scan(
+def _scan_files(
     paths: Optional[List[str]],
     staged_only: bool,
     config_path: Optional[str],
@@ -387,7 +387,12 @@ def run_scan(
     service_name: Optional[str] = None,
 ):
     """
-    The main function to orchestrate the scanning process.
+    Does the actual file collection and scanning, returning the raw
+    (secret_findings, undeclared_findings, skipped_large_files) lists.
+
+    Extracted from run_scan so both the Rich-rendering path and the
+    '--json' path (see scan_result) share one implementation instead of
+    two copies that could quietly drift apart.
 
     If `service_name` is provided, scans for variables against that service's schema.
     Otherwise, on a multi-service project, each file is checked against
@@ -486,6 +491,27 @@ def run_scan(
             all_secret_findings.extend(secrets)
             all_undeclared_findings.extend(undeclared)
 
+    return all_secret_findings, all_undeclared_findings, skipped_large_files
+
+
+def run_scan(
+    paths: Optional[List[str]],
+    staged_only: bool,
+    config_path: Optional[str],
+    exclude_patterns: Optional[List[str]],
+    service_name: Optional[str] = None,
+):
+    """
+    The main function to orchestrate the scanning process.
+
+    If `service_name` is provided, scans for variables against that service's schema.
+    Otherwise, on a multi-service project, each file is checked against
+    whichever service's schema its directory belongs to.
+    """
+    all_secret_findings, all_undeclared_findings, skipped_large_files = _scan_files(
+        paths, staged_only, config_path, exclude_patterns, service_name
+    )
+
     if skipped_large_files:
         console.print(
             f"\n[bold yellow]⚠️  Skipped {len(skipped_large_files)} file(s) over 1MB (not scanned -- coverage is incomplete for these):[/bold yellow]"
@@ -547,6 +573,35 @@ def run_scan(
         )
 
     raise typer.Exit(code=1)
+
+
+def scan_result(
+    paths: Optional[List[str]],
+    staged_only: bool,
+    config_path: Optional[str],
+    exclude_patterns: Optional[List[str]],
+    service_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Same scan as run_scan, but silences every Rich print/progress-bar (so
+    stdout stays pure JSON) and returns a plain, JSON-serializable dict
+    instead of rendering tables and raising typer.Exit -- for '--json'.
+    """
+    was_quiet = console.quiet
+    console.quiet = True
+    try:
+        secrets, undeclared, skipped = _scan_files(
+            paths, staged_only, config_path, exclude_patterns, service_name
+        )
+    finally:
+        console.quiet = was_quiet
+
+    return {
+        "clean": not (secrets or undeclared),
+        "secrets": secrets,
+        "undeclared_variables": undeclared,
+        "skipped_files": skipped,
+    }
 
 
 _ENVSHIELD_HOOK_MARKER = "# Hook installed by EnvShield"

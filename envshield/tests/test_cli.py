@@ -1,4 +1,5 @@
 # envshield/tests/test_cli.py
+import json
 import os
 
 from typer.testing import CliRunner
@@ -473,3 +474,127 @@ def test_init_falls_back_to_the_framework_template_when_no_real_config_exists(
             content = f.read()
             assert "SECRET_KEY" in content
             assert "FLASK_ENV" in content
+
+
+def test_check_json_reports_clean_state(tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[API_KEY]\ndescription = "Test"\nsecret = true\n')
+        with open(".env", "w") as f:
+            f.write("API_KEY=abc123\n")
+
+        result = runner.invoke(app, ["check", "--json"])
+
+        assert result.exit_code == 0, result.stdout
+        payload = json.loads(result.stdout)
+        assert payload == {
+            "success": True,
+            "results": [
+                {
+                    "file": ".env",
+                    "service": None,
+                    "clean": True,
+                    "missing": [],
+                    "blank": [],
+                    "invalid": {},
+                    "extra": [],
+                }
+            ],
+        }
+
+
+def test_check_json_reports_drift_and_exits_nonzero(tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[API_KEY]\ndescription = "Test"\nsecret = true\n')
+        with open(".env", "w") as f:
+            f.write("API_KEY=\nEXTRA_VAR=x\n")
+
+        result = runner.invoke(app, ["check", "--json"])
+
+        assert result.exit_code == 1
+        payload = json.loads(result.stdout)
+        assert payload["success"] is False
+        assert payload["results"][0]["blank"] == ["API_KEY"]
+        assert payload["results"][0]["extra"] == ["EXTRA_VAR"]
+        # No Rich table/markup leaked into the JSON stream.
+        assert "[bold" not in result.stdout
+
+
+def test_check_json_with_multiple_services_runs_all_without_prompting(tmp_path):
+    """Regression: --json must never fall into the interactive 'Which service?' picker."""
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_two_service_project()
+        with open("athena/.env", "w") as f:
+            f.write("API_KEY=abc\n")
+        with open("hermes/.env", "w") as f:
+            f.write("DB_URL=postgres://x\n")
+
+        result = runner.invoke(app, ["check", "--json"])
+
+        assert result.exit_code == 0, result.stdout
+        payload = json.loads(result.stdout)
+        services = {r["service"] for r in payload["results"]}
+        assert services == {"athena", "hermes"}
+
+
+def test_doctor_json_reports_structured_checks(tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.system("git init -q")
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[API_KEY]\ndescription = "Test"\nsecret = true\n')
+        with open(CONFIG_FILE_NAME, "w") as f:
+            f.write("project_name: test\n")
+        with open(".env", "w") as f:
+            f.write("API_KEY=abc123\n")
+        with open(".env.example", "w") as f:
+            f.write("API_KEY=\n")
+
+        result = runner.invoke(app, ["doctor", "--json"])
+
+        payload = json.loads(result.stdout)
+        assert payload["results"][0]["service"] is None
+        names = {c["name"] for c in payload["results"][0]["checks"]}
+        assert "Configuration Files" in names
+        assert "Local Environment Sync" in names
+        assert "[bold" not in result.stdout
+
+
+def test_doctor_json_and_fix_together_is_rejected(tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        result = runner.invoke(app, ["doctor", "--json", "--fix"])
+
+        assert result.exit_code == 1
+        assert "cannot be used together" in result.stdout
+
+
+def test_scan_json_reports_findings(tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        with open("leak.py", "w") as f:
+            f.write('STRIPE_SECRET = "sk_live_123456789abcdefghijk"\n')
+
+        result = runner.invoke(app, ["scan", ".", "--json"])
+
+        assert result.exit_code == 1
+        payload = json.loads(result.stdout)
+        assert payload["clean"] is False
+        assert len(payload["secrets"]) == 1
+        assert payload["secrets"][0]["secret_type"] == "Generic API Key"
+        assert "[bold" not in result.stdout
+
+
+def test_scan_json_reports_clean_state(tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        with open("clean.py", "w") as f:
+            f.write("x = 1\n")
+
+        result = runner.invoke(app, ["scan", ".", "--json"])
+
+        assert result.exit_code == 0
+        payload = json.loads(result.stdout)
+        assert payload == {
+            "clean": True,
+            "secrets": [],
+            "undeclared_variables": [],
+            "skipped_files": [],
+        }

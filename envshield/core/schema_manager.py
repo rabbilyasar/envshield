@@ -175,6 +175,56 @@ def check_schema(
     return False
 
 
+def check_result(
+    file_path: str,
+    service_name: Optional[str] = None,
+    container: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Same validation as check_schema, but returns a plain, JSON-serializable
+    dict instead of printing a Rich table -- for '--json'. Kept as its own
+    function rather than a flag on check_schema, so the existing
+    Rich-rendering path (and its return-value contract) is never at risk of
+    a behavior change from this one.
+    """
+    try:
+        schema = config_manager.load_schema(service_name=service_name)
+        parser = get_parser(file_path, container=container, prefer=service_name)
+        if not parser:
+            return {
+                "file": file_path,
+                "service": service_name,
+                "clean": False,
+                "error": f"No parser found for file type '{file_path}'.",
+            }
+        local_values = parser.get_vars(file_path, get_values=True)
+    except FileNotFoundError:
+        return {
+            "file": file_path,
+            "service": service_name,
+            "clean": False,
+            "error": f"File not found: '{file_path}'.",
+        }
+    except (ValueError, EnvShieldException) as e:
+        return {
+            "file": file_path,
+            "service": service_name,
+            "clean": False,
+            "error": str(e),
+        }
+
+    diff = diff_against_schema(schema, local_values)
+    return {
+        "file": file_path,
+        "service": service_name,
+        "clean": diff.is_clean,
+        "missing": sorted(diff.missing),
+        "blank": sorted(diff.blank),
+        "invalid": dict(diff.invalid),
+        "extra": sorted(diff.extra),
+    }
+
+
 def sync_schema(service_name: Optional[str] = None):
     """
     Keeps a service's tracked environment template in sync with its schema.

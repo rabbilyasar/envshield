@@ -1,4 +1,5 @@
 # envshield/cli.py
+import json
 import os
 from typing import List, Optional, cast
 
@@ -218,30 +219,55 @@ def check(
             "For a docker-compose or Kubernetes manifest declaring more than one service/container, which one to validate."
         ),
     ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Print machine-readable JSON instead of a table; suppresses all other output.",
+    ),
 ):
     """Validates a local environment file against the schema. Also accepts a docker-compose or Kubernetes manifest."""
     try:
-        targets = service_manager.resolve_targets(service)
+        # --json is for CI/scripting -- never block on the interactive
+        # "Which service?" picker; run every configured service instead.
+        if json_output and not service:
+            targets = cast(
+                List[Optional[str]], service_manager.get_available_services() or [None]
+            )
+        else:
+            targets = service_manager.resolve_targets(service)
     except EnvShieldException as e:
-        console.print(f"[bold red]Error:[/bold red] {e}")
+        if json_output:
+            print(json.dumps({"success": False, "error": str(e)}, indent=2))
+        else:
+            console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(code=1)
 
     # An explicit file only makes sense for a single target -- it can't
     # apply to every service's own local file at once.
     if len(targets) > 1 and file:
-        console.print(
-            "[yellow]Ignoring the explicit file argument -- each service's own local file is checked when validating multiple services.[/yellow]"
-        )
+        if not json_output:
+            console.print(
+                "[yellow]Ignoring the explicit file argument -- each service's own local file is checked when validating multiple services.[/yellow]"
+            )
         file = None
 
     had_error = False
+    results = []
     for target in targets:
-        _print_service_header(targets, target)
+        if not json_output:
+            _print_service_header(targets, target)
         try:
             resolved_file = (
                 file or config_manager.get_env_paths(service_name=target)["local_file"]
             )
-            if not schema_manager.check_schema(
+            if json_output:
+                result = schema_manager.check_result(
+                    resolved_file, service_name=target, container=container
+                )
+                results.append(result)
+                if not result["clean"]:
+                    had_error = True
+            elif not schema_manager.check_schema(
                 resolved_file, service_name=target, container=container
             ):
                 had_error = True
@@ -254,15 +280,30 @@ def check(
                 manifest = config_manager.get_deployment_manifest(target)
                 if manifest:
                     manifest_container = manifest.get("container") or container
-                    if not schema_manager.check_schema(
+                    if json_output:
+                        result = schema_manager.check_result(
+                            manifest["path"],
+                            service_name=target,
+                            container=manifest_container,
+                        )
+                        results.append(result)
+                        if not result["clean"]:
+                            had_error = True
+                    elif not schema_manager.check_schema(
                         manifest["path"],
                         service_name=target,
                         container=manifest_container,
                     ):
                         had_error = True
         except EnvShieldException as e:
-            console.print(f"[bold red]Error:[/bold red] {e}")
+            if json_output:
+                results.append({"service": target, "clean": False, "error": str(e)})
+            else:
+                console.print(f"[bold red]Error:[/bold red] {e}")
             had_error = True
+
+    if json_output:
+        print(json.dumps({"success": not had_error, "results": results}, indent=2))
 
     if had_error:
         raise typer.Exit(code=1)
@@ -281,25 +322,60 @@ def doctor_command(
         "-s",
         help="If set, check health of this service (for multi-service projects).",
     ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Print machine-readable JSON instead of a report; suppresses all other output. Incompatible with --fix.",
+    ),
 ):
     """Runs a full health check on your project's EnvShield setup."""
+    if json_output and fix:
+        console.print(
+            "[bold red]Error:[/bold red] --json and --fix cannot be used together."
+        )
+        raise typer.Exit(code=1)
+
     try:
-        targets = service_manager.resolve_targets(service)
+        # --json is for CI/scripting -- never block on the interactive
+        # "Which service?" picker; run every configured service instead.
+        if json_output and not service:
+            targets = cast(
+                List[Optional[str]], service_manager.get_available_services() or [None]
+            )
+        else:
+            targets = service_manager.resolve_targets(service)
     except EnvShieldException as e:
-        console.print(f"[bold red]Error:[/bold red] {e}")
+        if json_output:
+            print(json.dumps({"success": False, "error": str(e)}, indent=2))
+        else:
+            console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(code=1)
 
     had_error = False
+    results = []
     for target in targets:
-        _print_service_header(targets, target)
+        if not json_output:
+            _print_service_header(targets, target)
         try:
-            doctor.run_health_check(fix=fix, service_name=target)
+            if json_output:
+                result = doctor.run_health_check_json(service_name=target)
+                results.append(result)
+                if not result["passed"]:
+                    had_error = True
+            else:
+                doctor.run_health_check(fix=fix, service_name=target)
         except typer.Exit as e:
             if e.exit_code:
                 had_error = True
         except EnvShieldException as e:
-            console.print(f"[bold red]Error:[/bold red] {e}")
+            if json_output:
+                results.append({"service": target, "passed": False, "error": str(e)})
+            else:
+                console.print(f"[bold red]Error:[/bold red] {e}")
             had_error = True
+
+    if json_output:
+        print(json.dumps({"success": not had_error, "results": results}, indent=2))
 
     if had_error:
         raise typer.Exit(code=1)
@@ -520,6 +596,11 @@ def scan(
         "-s",
         help="If set, scan against this service's schema (for multi-service projects).",
     ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Print machine-readable JSON instead of tables; suppresses all other output.",
+    ),
 ):
     """Scans files for hardcoded secrets and undeclared variables."""
     try:
@@ -528,15 +609,31 @@ def scan(
             # run_scan's own service_name=None path means "check every
             # configured service", so this only fires for an explicit name.
             service_manager.resolve_service(service)
-        scanner.run_scan(
-            paths=paths,
-            staged_only=staged,
-            config_path=config,
-            exclude_patterns=exclude,
-            service_name=service,
-        )
+
+        if json_output:
+            result = scanner.scan_result(
+                paths=paths,
+                staged_only=staged,
+                config_path=config,
+                exclude_patterns=exclude,
+                service_name=service,
+            )
+            print(json.dumps(result, indent=2))
+            if not result["clean"]:
+                raise typer.Exit(code=1)
+        else:
+            scanner.run_scan(
+                paths=paths,
+                staged_only=staged,
+                config_path=config,
+                exclude_patterns=exclude,
+                service_name=service,
+            )
     except EnvShieldException as e:
-        console.print(f"[bold red]Error:[/bold red] {e}")
+        if json_output:
+            print(json.dumps({"clean": False, "error": str(e)}, indent=2))
+        else:
+            console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(code=1)
 
 
