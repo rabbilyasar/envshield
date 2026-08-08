@@ -4,10 +4,21 @@ import os
 from typer.testing import CliRunner
 
 from envshield.cli import app
+from envshield.config import manager as config_manager
 from envshield.config.manager import SCHEMA_FILE_NAME
 from envshield.core import setup_manager
 
 runner = CliRunner()
+
+
+def _write_root_service_config(name="app", schema_path=SCHEMA_FILE_NAME):
+    """
+    Registers one service at the project root -- envshield.yml always has
+    at least one entry, single-service or not (see
+    config_manager.generate_default_config_content), so every 'setup'
+    invocation in this file needs a real registration to resolve against.
+    """
+    config_manager.add_service(name, schema_path)
 
 
 def test_setup_uses_schema_secret_flag_over_heuristic(mocker, tmp_path):
@@ -19,6 +30,7 @@ def test_setup_uses_schema_secret_flag_over_heuristic(mocker, tmp_path):
     keyword heuristic (it contains "auth"), but the schema says otherwise.
     """
     with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_root_service_config()
         with open(SCHEMA_FILE_NAME, "w") as f:
             f.write('[AUTH_MODE]\ndescription="Login mode."\nsecret=false\n')
         with open(setup_manager.EXAMPLE_FILE, "w") as f:
@@ -39,6 +51,7 @@ def test_setup_displays_schema_description_when_prompting(mocker, tmp_path):
     """The schema's description -- its whole documentation value-add -- must
     actually reach the person being onboarded, not just live in the TOML."""
     with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_root_service_config()
         with open(SCHEMA_FILE_NAME, "w") as f:
             f.write(
                 '[API_KEY]\ndescription="Third-party API key for widgets."\nsecret=true\n'
@@ -57,6 +70,7 @@ def test_setup_displays_schema_description_when_prompting(mocker, tmp_path):
 def test_setup_command_happy_path(mocker, tmp_path):
     """Tests the setup command with a mix of default and empty variables."""
     with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_root_service_config()
         example_content = "LOG_LEVEL=info\nDATABASE_URL=\nSECRET_KEY=\n"
         with open(setup_manager.EXAMPLE_FILE, "w") as f:
             f.write(example_content)
@@ -90,8 +104,10 @@ def test_setup_command_happy_path(mocker, tmp_path):
 
 
 def test_setup_command_no_example_file(tmp_path):
-    """Tests that the command fails gracefully if .env.example is missing."""
+    """Tests that the command fails gracefully if there's no schema and no template to work from."""
     with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_root_service_config()  # schema path registered, but the file itself is never created
+
         result = runner.invoke(app, ["setup"])
 
         assert result.exit_code == 1
@@ -101,6 +117,7 @@ def test_setup_command_no_example_file(tmp_path):
 def test_setup_command_overwrite_declined(mocker, tmp_path):
     """Tests that the command exits if the user declines to overwrite an existing .env file."""
     with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_root_service_config()
         with open(setup_manager.EXAMPLE_FILE, "w") as f:
             f.write("KEY=VALUE\n")
         with open(".env", "w") as f:
@@ -121,10 +138,10 @@ def test_setup_command_overwrite_declined(mocker, tmp_path):
             assert content == "OLD_KEY=OLD_VALUE"
 
 
-def _write_multiservice_config(local_file="athena/config/env_config.local.py"):
+def _write_multiservice_config(local_file="alpha/config/env_config.local.py"):
     with open("envshield.yml", "w") as f:
         f.write(
-            f"services:\n  athena:\n    path: athena/env.schema.toml\n    local_file: {local_file}\n"
+            f"services:\n  alpha:\n    schema: alpha/env.schema.toml\n    local_file: {local_file}\n"
         )
 
 
@@ -133,7 +150,7 @@ def test_setup_scopes_dotenv_target_to_service_directory(mocker, tmp_path):
     with runner.isolated_filesystem(temp_dir=tmp_path):
         os.makedirs("services/api")
         with open("envshield.yml", "w") as f:
-            f.write("services:\n  api:\n    path: services/api/env.schema.toml\n")
+            f.write("services:\n  api:\n    schema: services/api/env.schema.toml\n")
         with open("services/api/env.schema.toml", "w") as f:
             f.write('[API_KEY]\ndescription="Key"\nsecret=true\n')
         with open("services/api/.env.example", "w") as f:
@@ -151,15 +168,15 @@ def test_setup_scopes_dotenv_target_to_service_directory(mocker, tmp_path):
 
 def test_setup_creates_python_local_file_from_schema_when_missing(mocker, tmp_path):
     """
-    For a service whose local config is a Python module (e.g. zeus's
+    For a service whose local config is a Python module (e.g. acme's
     env_config.local.py) with no file yet, setup creates one straight from
     the schema -- prompting for anything without a default, writing plain
     Python assignments for the rest.
     """
     with runner.isolated_filesystem(temp_dir=tmp_path):
-        os.makedirs("athena/config")
+        os.makedirs("alpha/config")
         _write_multiservice_config()
-        with open("athena/env.schema.toml", "w") as f:
+        with open("alpha/env.schema.toml", "w") as f:
             f.write(
                 '[DB_HOST]\ndescription="Database host"\ndefaultValue="db"\n\n[INTREPID_KEY]\ndescription="Intrepid API key"\nsecret=true\n'
             )
@@ -168,14 +185,14 @@ def test_setup_creates_python_local_file_from_schema_when_missing(mocker, tmp_pa
             "envshield.core.setup_manager.Prompt.ask", return_value="real-key-value"
         )
 
-        result = runner.invoke(app, ["setup", "--service", "athena"])
+        result = runner.invoke(app, ["setup", "--service", "alpha"])
 
         assert result.exit_code == 0
         # Only the var with no schema default should have been prompted for.
         mock_prompt.assert_called_once()
         assert "INTREPID_KEY" in mock_prompt.call_args[0][0]
 
-        with open("athena/config/env_config.local.py") as f:
+        with open("alpha/config/env_config.local.py") as f:
             content = f.read()
         assert "DB_HOST = 'db'" in content
         assert "INTREPID_KEY = 'real-key-value'" in content
@@ -190,16 +207,16 @@ def test_setup_patches_existing_python_local_file_in_place(mocker, tmp_path):
     looks like an intentional placeholder) is left alone.
     """
     with runner.isolated_filesystem(temp_dir=tmp_path):
-        os.makedirs("athena/config")
+        os.makedirs("alpha/config")
         _write_multiservice_config()
-        with open("athena/env.schema.toml", "w") as f:
+        with open("alpha/env.schema.toml", "w") as f:
             f.write(
                 '[DB_HOST]\ndescription="Database host"\ndefaultValue="db"\n\n'
                 '[INTREPID_KEY]\ndescription="Intrepid API key"\nsecret=true\n\n'
                 '[NEW_FEATURE_FLAG]\ndescription="Newly added var"\ndefaultValue="no"\n'
             )
         existing_content = 'import os\n\nDB_HOST = "db"\nINTREPID_KEY = ""\n\nif os.environ.get("USE_LOCAL_DB") == "yes":\n    DB_HOST = "db"\n'
-        with open("athena/config/env_config.local.py", "w") as f:
+        with open("alpha/config/env_config.local.py", "w") as f:
             f.write(existing_content)
 
         mock_prompt = mocker.patch(
@@ -208,13 +225,13 @@ def test_setup_patches_existing_python_local_file_in_place(mocker, tmp_path):
         # No overwrite confirmation should ever be needed for a Python target.
         mock_confirm = mocker.patch("questionary.confirm")
 
-        result = runner.invoke(app, ["setup", "--service", "athena"])
+        result = runner.invoke(app, ["setup", "--service", "alpha"])
 
         assert result.exit_code == 0
         mock_confirm.assert_not_called()
         mock_prompt.assert_called_once()  # only INTREPID_KEY has no default and was still blank
 
-        with open("athena/config/env_config.local.py") as f:
+        with open("alpha/config/env_config.local.py") as f:
             content = f.read()
 
         assert "INTREPID_KEY = 'a-real-secret'" in content
@@ -227,20 +244,20 @@ def test_setup_patches_existing_python_local_file_in_place(mocker, tmp_path):
 
 def test_setup_python_target_noop_when_everything_already_set(mocker, tmp_path):
     with runner.isolated_filesystem(temp_dir=tmp_path):
-        os.makedirs("athena/config")
+        os.makedirs("alpha/config")
         _write_multiservice_config()
-        with open("athena/env.schema.toml", "w") as f:
+        with open("alpha/env.schema.toml", "w") as f:
             f.write('[DB_HOST]\ndescription="x"\ndefaultValue="db"\n')
-        with open("athena/config/env_config.local.py", "w") as f:
+        with open("alpha/config/env_config.local.py", "w") as f:
             f.write('DB_HOST = "already-set"\n')
 
         mock_prompt = mocker.patch("envshield.core.setup_manager.Prompt.ask")
 
-        result = runner.invoke(app, ["setup", "--service", "athena"])
+        result = runner.invoke(app, ["setup", "--service", "alpha"])
 
         assert result.exit_code == 0
         mock_prompt.assert_not_called()
-        with open("athena/config/env_config.local.py") as f:
+        with open("alpha/config/env_config.local.py") as f:
             assert f.read() == 'DB_HOST = "already-set"\n'
 
 
@@ -252,35 +269,35 @@ def test_setup_all_services_runs_each_wizard_sequentially(mocker, tmp_path):
     own wizard in turn, in the same run.
     """
     with runner.isolated_filesystem(temp_dir=tmp_path):
-        os.makedirs("athena")
-        os.makedirs("hermes")
+        os.makedirs("alpha")
+        os.makedirs("beta")
         with open("envshield.yml", "w") as f:
             f.write(
-                "services:\n  athena:\n    path: athena/env.schema.toml\n  hermes:\n    path: hermes/env.schema.toml\n"
+                "services:\n  alpha:\n    schema: alpha/env.schema.toml\n  beta:\n    schema: beta/env.schema.toml\n"
             )
-        with open("athena/env.schema.toml", "w") as f:
-            f.write('[API_KEY]\ndescription="Athena key"\nsecret=true\n')
-        with open("hermes/env.schema.toml", "w") as f:
-            f.write('[DB_URL]\ndescription="Hermes DB"\nsecret=true\n')
+        with open("alpha/env.schema.toml", "w") as f:
+            f.write('[API_KEY]\ndescription="Alpha key"\nsecret=true\n')
+        with open("beta/env.schema.toml", "w") as f:
+            f.write('[DB_URL]\ndescription="Beta DB"\nsecret=true\n')
 
         mocker.patch(
             "questionary.select"
         ).return_value.ask.return_value = "All services"
         mock_prompt = mocker.patch(
             "envshield.core.setup_manager.Prompt.ask",
-            side_effect=["athena-key-value", "hermes-db-url"],
+            side_effect=["alpha-key-value", "beta-db-url"],
         )
 
         result = runner.invoke(app, ["setup"])
 
         assert result.exit_code == 0
         assert mock_prompt.call_count == 2
-        assert "── athena ──" in result.stdout
-        assert "── hermes ──" in result.stdout
-        with open("athena/.env") as f:
-            assert "API_KEY=athena-key-value" in f.read()
-        with open("hermes/.env") as f:
-            assert "DB_URL=hermes-db-url" in f.read()
+        assert "── alpha ──" in result.stdout
+        assert "── beta ──" in result.stdout
+        with open("alpha/.env") as f:
+            assert "API_KEY=alpha-key-value" in f.read()
+        with open("beta/.env") as f:
+            assert "DB_URL=beta-db-url" in f.read()
         assert not os.path.exists(".env")
 
 
@@ -293,6 +310,7 @@ def test_setup_re_prompts_for_an_existing_but_invalid_value(mocker, tmp_path):
     re-surfaced.
     """
     with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_root_service_config()
         with open(SCHEMA_FILE_NAME, "w") as f:
             f.write(
                 '[LOG_LEVEL]\ndescription="x"\nenum=["debug","info","warn","error"]\n'
@@ -312,6 +330,7 @@ def test_setup_re_prompts_for_an_existing_but_invalid_value(mocker, tmp_path):
 
 def test_setup_does_not_re_prompt_for_an_existing_valid_value(mocker, tmp_path):
     with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_root_service_config()
         with open(SCHEMA_FILE_NAME, "w") as f:
             f.write(
                 '[LOG_LEVEL]\ndescription="x"\nenum=["debug","info","warn","error"]\n'
@@ -331,6 +350,7 @@ def test_setup_does_not_re_prompt_for_an_existing_valid_value(mocker, tmp_path):
 
 def test_setup_uses_a_picker_for_enum_fields(mocker, tmp_path):
     with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_root_service_config()
         with open(SCHEMA_FILE_NAME, "w") as f:
             f.write(
                 '[LOG_LEVEL]\ndescription="x"\nenum=["debug","info","warn","error"]\n'

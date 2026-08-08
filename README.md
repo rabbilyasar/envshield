@@ -319,9 +319,9 @@ Everything a single-service project ever needs. `--service` shows up on most of 
 
 ```yaml
 services:
-  athena:
-    path: athena/env.schema.toml
-    local_file: athena/config/env_config.local.py
+  alpha:
+    schema: alpha/env.schema.toml
+    local_file: alpha/config/env_config.local.py
 ```
 
 ### Monorepo: managing multiple services
@@ -332,6 +332,7 @@ services:
 |---|---|
 | `envshield service list` | Lists every service currently configured in `envshield.yml`, with its schema and local file paths. |
 | `envshield service add <name> <directory> [--local-file PATH] [--example-file PATH] [--description/-d TEXT] [--schema PATH] [--import FILE] [--deployment-manifest PATH] [--container NAME]` | Registers one service by hand. `--local-file` is required when the service's real config isn't a dotenv file (e.g. a Python module) — see above. `--import` seeds the new service's schema from an existing config file in one step. `--deployment-manifest` is auto-detected (a compose file in the given directory or the project root that actually declares this service) if not given explicitly. |
+| `envshield service remove <name>` | De-registers one service from `envshield.yml` (and drops it from any deployment manifest's container mapping). Never deletes the service's own files — schema, local env file, etc. — only the registration. |
 | `envshield service discover [root] [--yes/-y]` | Scans for service-like directories not already registered, and offers to add them — see [Quick start](#a-monorepo-with-multiple-services). `--yes` skips the interactive confirmation, for CI/scripting. |
 
 ---
@@ -368,7 +369,7 @@ envshield check --json
   "success": true,
   "results": [
     {
-      "service": "hermes",
+      "service": "beta",
       "passed": true,
       "checks": [
         {"name": "Configuration Files", "passed": true, "message": "Found and accessible."}

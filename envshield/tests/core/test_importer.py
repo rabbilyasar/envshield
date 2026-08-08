@@ -112,9 +112,9 @@ def test_classify_variable_suggests_default_for_any_nonsecret_value_with_content
     variables aren't on that list -- suggested zero defaults even for
     obviously safe, stable values like a local dev DB name or cache port.
     """
-    is_secret, default = importer._classify_variable("DB_NAME", "athena")
+    is_secret, default = importer._classify_variable("DB_NAME", "alpha")
     assert is_secret is False
-    assert default == "athena"
+    assert default == "alpha"
 
     is_secret, default = importer._classify_variable("CACHE_PORT", "6379")
     assert is_secret is False

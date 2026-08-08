@@ -35,7 +35,7 @@ def _read_seed_values(example_file: str, local_file: str) -> Dict[str, str]:
     """
     Determines each variable's starting value: whatever the project's local
     file already has (if it exists -- e.g. a new dev re-running setup, or a
-    Python module like zeus's `env_config.local.py` that's checked into git
+    Python module like acme's `env_config.local.py` that's checked into git
     with working values already), falling back to the tracked template
     (`.env.example`) when the local file doesn't exist yet at all.
     """
@@ -52,18 +52,17 @@ def _read_seed_values(example_file: str, local_file: str) -> Dict[str, str]:
     return {}
 
 
-def run_setup(output_file: Optional[str] = None, service_name: Optional[str] = None):
+def run_setup(service_name: str, output_file: Optional[str] = None):
     """
     Guides a new developer through creating (or completing) their local
-    environment config, driven by the project's schema.
+    environment config, driven by the service's schema.
 
     Args:
         output_file: Explicit path to write to. If omitted, resolves to the
-            project's (or service's) local file -- '.env' by default, or
-            whatever 'local_file' is set to for this service in envshield.yml
-            (see config_manager.get_env_paths).
-        service_name: If provided, sets up this service's config (for
-            multi-service projects).
+            service's local file -- '.env' by default, or whatever
+            'local_file' is set to for this service in envshield.yml (see
+            config_manager.get_env_paths).
+        service_name: Which registered service to set up.
     """
     paths = config_manager.get_env_paths(service_name=service_name)
     example_file = paths["example_file"]

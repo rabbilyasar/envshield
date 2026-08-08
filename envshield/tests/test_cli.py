@@ -5,9 +5,20 @@ import os
 from typer.testing import CliRunner
 
 from envshield.cli import app
+from envshield.config import manager as config_manager
 from envshield.config.manager import CONFIG_FILE_NAME, SCHEMA_FILE_NAME
 
 runner = CliRunner()
+
+
+def _write_root_service(name="app", schema_path=SCHEMA_FILE_NAME):
+    """
+    Registers one service at the project root -- envshield.yml always has
+    at least one entry, single-service or not (see
+    config_manager.generate_default_config_content), so every command that
+    resolves a target needs a real registration in this file's fixtures.
+    """
+    config_manager.add_service(name, schema_path)
 
 
 def test_init_command_in_git_repo(tmp_path, mocker):
@@ -34,17 +45,24 @@ def test_init_command_in_git_repo(tmp_path, mocker):
 
 
 def test_init_auto_registers_a_root_level_compose_file(tmp_path, mocker):
+    """
+    init's derived service name is the project directory's own basename --
+    the compose file has to actually declare a container by that name for
+    auto-registration to fire (see compose_declares_service), so this
+    fixture names its one container after whatever that basename turns out
+    to be, instead of an arbitrary unrelated name.
+    """
     with runner.isolated_filesystem(temp_dir=tmp_path):
+        service_name = os.path.basename(os.getcwd())
         with open("docker-compose.yml", "w") as f:
-            f.write("services:\n  api:\n    image: x\n")
+            f.write(f"services:\n  {service_name}:\n    image: x\n")
         mocker.patch("questionary.confirm").return_value.ask.return_value = False
 
         result = runner.invoke(app, ["init"])
 
         assert result.exit_code == 0
-        with open(CONFIG_FILE_NAME, "r") as f:
-            content = f.read()
-        assert "deployment_manifest: docker-compose.yml" in content
+        manifests = config_manager.get_deployment_manifests(service_name)
+        assert manifests == [{"path": "docker-compose.yml", "container": service_name}]
 
 
 def test_init_command_in_non_git_repo(tmp_path):
@@ -61,6 +79,7 @@ def test_init_command_in_non_git_repo(tmp_path):
 def test_check_command_happy_path(tmp_path):
     """Tests the check command when the .env file is in sync."""
     with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_root_service()
         with open(SCHEMA_FILE_NAME, "w") as f:
             f.write('[API_KEY]\ndescription="Test"\n')
         with open(".env", "w") as f:
@@ -73,6 +92,7 @@ def test_check_command_happy_path(tmp_path):
 def test_check_command_with_missing_variable(tmp_path):
     """Tests the check command when the .env file has a missing variable."""
     with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_root_service()
         with open(SCHEMA_FILE_NAME, "w") as f:
             f.write('[API_KEY]\ndescription="Test"\n[SECRET]\ndescription="Secret"')
         with open(".env", "w") as f:
@@ -90,12 +110,12 @@ def test_check_auto_validates_a_registered_deployment_manifest_too(tmp_path):
     to remember it's there, or to run 'check docker-compose.yml' separately.
     """
     with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_root_service()
+        config_manager.add_manifest("docker-compose.yml", {"app": "app"})
         with open(SCHEMA_FILE_NAME, "w") as f:
             f.write('[API_KEY]\ndescription="Test"\n[MANIFEST_ONLY]\ndescription="x"\n')
         with open(".env", "w") as f:
             f.write("API_KEY=12345\nMANIFEST_ONLY=x\n")
-        with open("envshield.yml", "w") as f:
-            f.write("deployment_manifest: docker-compose.yml\n")
         with open("docker-compose.yml", "w") as f:
             f.write("services:\n  app:\n    environment:\n      - API_KEY=12345\n")
 
@@ -111,14 +131,14 @@ def test_check_auto_validates_a_registered_deployment_manifest_too(tmp_path):
 def test_check_with_explicit_file_does_not_also_check_the_registered_manifest(tmp_path):
     """An explicit file argument means 'check exactly this' -- the auto-check is only the default-file convenience."""
     with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_root_service()
+        config_manager.add_manifest("docker-compose.yml", {"app": "app"})
         with open(SCHEMA_FILE_NAME, "w") as f:
             f.write('[API_KEY]\ndescription="Test"\n')
         with open(".env", "w") as f:
             f.write("API_KEY=12345\n")
         with open(".env.other", "w") as f:
             f.write("API_KEY=12345\n")
-        with open("envshield.yml", "w") as f:
-            f.write("deployment_manifest: docker-compose.yml\n")
         with open("docker-compose.yml", "w") as f:
             f.write("services:\n  app:\n    image: x\n")
 
@@ -131,6 +151,7 @@ def test_check_with_explicit_file_does_not_also_check_the_registered_manifest(tm
 def test_schema_sync_command(tmp_path):
     """Tests that schema sync correctly generates a .env.example file."""
     with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_root_service()
         schema_content = '[API_KEY]\ndescription="My test key"\ndefaultValue="abc"'
         with open(SCHEMA_FILE_NAME, "w") as f:
             f.write(schema_content)
@@ -298,16 +319,16 @@ def test_init_force_flag_with_confirmation(mocker, tmp_path):
 
 
 def _write_two_service_project():
-    os.makedirs("athena")
-    os.makedirs("hermes")
+    os.makedirs("alpha")
+    os.makedirs("beta")
     with open(CONFIG_FILE_NAME, "w") as f:
         f.write(
-            "services:\n  athena:\n    path: athena/env.schema.toml\n  hermes:\n    path: hermes/env.schema.toml\n"
+            "services:\n  alpha:\n    schema: alpha/env.schema.toml\n  beta:\n    schema: beta/env.schema.toml\n"
         )
-    with open("athena/env.schema.toml", "w") as f:
-        f.write('[API_KEY]\ndescription="Athena key"\nsecret=true\n')
-    with open("hermes/env.schema.toml", "w") as f:
-        f.write('[DB_URL]\ndescription="Hermes DB"\nsecret=true\n')
+    with open("alpha/env.schema.toml", "w") as f:
+        f.write('[API_KEY]\ndescription="Alpha key"\nsecret=true\n')
+    with open("beta/env.schema.toml", "w") as f:
+        f.write('[DB_URL]\ndescription="Beta DB"\nsecret=true\n')
 
 
 def test_schema_sync_without_service_prompts_and_runs_for_all_services(
@@ -328,20 +349,20 @@ def test_schema_sync_without_service_prompts_and_runs_for_all_services(
         result = runner.invoke(app, ["schema", "sync"])
 
         assert result.exit_code == 0
-        assert "── athena ──" in result.stdout
-        assert "── hermes ──" in result.stdout
-        assert os.path.exists("athena/.env.example")
-        assert os.path.exists("hermes/.env.example")
+        assert "── alpha ──" in result.stdout
+        assert "── beta ──" in result.stdout
+        assert os.path.exists("alpha/.env.example")
+        assert os.path.exists("beta/.env.example")
         assert not os.path.exists(".env.example")
 
 
 def test_schema_sync_without_service_auto_selects_the_only_service(mocker, tmp_path):
     """With only one service configured, there's nothing to choose -- it's used automatically, no prompt."""
     with runner.isolated_filesystem(temp_dir=tmp_path):
-        os.makedirs("athena")
+        os.makedirs("alpha")
         with open(CONFIG_FILE_NAME, "w") as f:
-            f.write("services:\n  athena:\n    path: athena/env.schema.toml\n")
-        with open("athena/env.schema.toml", "w") as f:
+            f.write("services:\n  alpha:\n    schema: alpha/env.schema.toml\n")
+        with open("alpha/env.schema.toml", "w") as f:
             f.write('[API_KEY]\ndescription="x"\nsecret=true\n')
         mock_select = mocker.patch("questionary.select")
 
@@ -349,15 +370,15 @@ def test_schema_sync_without_service_auto_selects_the_only_service(mocker, tmp_p
 
         assert result.exit_code == 0
         mock_select.assert_not_called()
-        assert os.path.exists("athena/.env.example")
+        assert os.path.exists("alpha/.env.example")
 
 
 def test_doctor_without_service_runs_for_all_services(mocker, tmp_path):
     with runner.isolated_filesystem(temp_dir=tmp_path):
         _write_two_service_project()
-        with open("athena/.env", "w") as f:
+        with open("alpha/.env", "w") as f:
             f.write("API_KEY=abc\n")
-        with open("hermes/.env", "w") as f:
+        with open("beta/.env", "w") as f:
             f.write("DB_URL=postgres://x\n")
         mocker.patch(
             "questionary.select"
@@ -365,16 +386,16 @@ def test_doctor_without_service_runs_for_all_services(mocker, tmp_path):
 
         result = runner.invoke(app, ["doctor"])
 
-        assert "── athena ──" in result.stdout
-        assert "── hermes ──" in result.stdout
+        assert "── alpha ──" in result.stdout
+        assert "── beta ──" in result.stdout
 
 
 def test_check_without_service_runs_for_all_services(mocker, tmp_path):
     with runner.isolated_filesystem(temp_dir=tmp_path):
         _write_two_service_project()
-        with open("athena/.env", "w") as f:
+        with open("alpha/.env", "w") as f:
             f.write("API_KEY=abc\n")
-        with open("hermes/.env", "w") as f:
+        with open("beta/.env", "w") as f:
             f.write("DB_URL=postgres://x\n")
         mocker.patch(
             "questionary.select"
@@ -383,8 +404,8 @@ def test_check_without_service_runs_for_all_services(mocker, tmp_path):
         result = runner.invoke(app, ["check"])
 
         assert result.exit_code == 0
-        assert "── athena ──" in result.stdout
-        assert "── hermes ──" in result.stdout
+        assert "── alpha ──" in result.stdout
+        assert "── beta ──" in result.stdout
         assert "perfectly in sync" in result.stdout
 
 
@@ -402,12 +423,12 @@ def test_generate_scan_and_import_report_available_services_for_an_unknown_one(
         for args in (
             ["generate", "--service", "bogus"],
             ["scan", ".", "--service", "bogus"],
-            ["import", "athena/env.schema.toml", "--service", "bogus"],
+            ["import", "alpha/env.schema.toml", "--service", "bogus"],
         ):
             result = runner.invoke(app, args)
             assert result.exit_code == 1, f"{args}: {result.stdout}"
             assert "not found" in result.stdout
-            assert "athena, hermes" in result.stdout, f"{args}: {result.stdout}"
+            assert "alpha, beta" in result.stdout, f"{args}: {result.stdout}"
 
 
 def test_import_command_syncs_the_env_example_template(tmp_path):
@@ -478,6 +499,7 @@ def test_init_falls_back_to_the_framework_template_when_no_real_config_exists(
 
 def test_check_json_reports_clean_state(tmp_path):
     with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_root_service()
         with open(SCHEMA_FILE_NAME, "w") as f:
             f.write('[API_KEY]\ndescription = "Test"\nsecret = true\n')
         with open(".env", "w") as f:
@@ -492,7 +514,7 @@ def test_check_json_reports_clean_state(tmp_path):
             "results": [
                 {
                     "file": ".env",
-                    "service": None,
+                    "service": "app",
                     "clean": True,
                     "missing": [],
                     "blank": [],
@@ -505,6 +527,7 @@ def test_check_json_reports_clean_state(tmp_path):
 
 def test_check_json_reports_drift_and_exits_nonzero(tmp_path):
     with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_root_service()
         with open(SCHEMA_FILE_NAME, "w") as f:
             f.write('[API_KEY]\ndescription = "Test"\nsecret = true\n')
         with open(".env", "w") as f:
@@ -525,9 +548,9 @@ def test_check_json_with_multiple_services_runs_all_without_prompting(tmp_path):
     """Regression: --json must never fall into the interactive 'Which service?' picker."""
     with runner.isolated_filesystem(temp_dir=tmp_path):
         _write_two_service_project()
-        with open("athena/.env", "w") as f:
+        with open("alpha/.env", "w") as f:
             f.write("API_KEY=abc\n")
-        with open("hermes/.env", "w") as f:
+        with open("beta/.env", "w") as f:
             f.write("DB_URL=postgres://x\n")
 
         result = runner.invoke(app, ["check", "--json"])
@@ -535,16 +558,17 @@ def test_check_json_with_multiple_services_runs_all_without_prompting(tmp_path):
         assert result.exit_code == 0, result.stdout
         payload = json.loads(result.stdout)
         services = {r["service"] for r in payload["results"]}
-        assert services == {"athena", "hermes"}
+        assert services == {"alpha", "beta"}
 
 
 def test_doctor_json_reports_structured_checks(tmp_path):
     with runner.isolated_filesystem(temp_dir=tmp_path):
         os.system("git init -q")
+        _write_root_service()
+        with open("envshield.yml", "a") as f:
+            f.write("project_name: test\n")
         with open(SCHEMA_FILE_NAME, "w") as f:
             f.write('[API_KEY]\ndescription = "Test"\nsecret = true\n')
-        with open(CONFIG_FILE_NAME, "w") as f:
-            f.write("project_name: test\n")
         with open(".env", "w") as f:
             f.write("API_KEY=abc123\n")
         with open(".env.example", "w") as f:
@@ -553,7 +577,7 @@ def test_doctor_json_reports_structured_checks(tmp_path):
         result = runner.invoke(app, ["doctor", "--json"])
 
         payload = json.loads(result.stdout)
-        assert payload["results"][0]["service"] is None
+        assert payload["results"][0]["service"] == "app"
         names = {c["name"] for c in payload["results"][0]["checks"]}
         assert "Configuration Files" in names
         assert "Local Environment Sync" in names

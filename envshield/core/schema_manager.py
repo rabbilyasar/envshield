@@ -101,15 +101,12 @@ def diff_against_schema(
 
 def check_schema(
     file_path: str,
-    service_name: Optional[str] = None,
+    service_name: str,
     container: Optional[str] = None,
 ) -> bool:
     """
-    Validates a local environment file against the env.schema.toml,
-    intelligently handling variables with default values.
-
-    If `service_name` is provided, validates against that service's schema.
-    Otherwise, validates against the root schema.
+    Validates a local environment file against that service's
+    env.schema.toml, intelligently handling variables with default values.
 
     `file_path` can also be a docker-compose or Kubernetes manifest -- see
     parsers/_docker_compose.py and parsers/_kubernetes.py. `container`
@@ -177,7 +174,7 @@ def check_schema(
 
 def check_result(
     file_path: str,
-    service_name: Optional[str] = None,
+    service_name: str,
     container: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
@@ -225,23 +222,21 @@ def check_result(
     }
 
 
-def sync_schema(service_name: Optional[str] = None):
+def sync_schema(service_name: str):
     """
-    Keeps a service's tracked environment template in sync with its schema.
+    Keeps a service's tracked environment template in sync with its schema
+    (resolved to that service's own directory -- see
+    config_manager.get_env_paths).
 
     Dotenv projects (the default) get '.env.example' fully regenerated from
     the schema -- it's a pure generated artifact, safe to overwrite wholesale.
 
     Projects whose local config is a Python module (`local_file` ends in
-    '.py' -- e.g. zeus's `env_config.local.py`) have no such artifact: that
+    '.py' -- e.g. acme's `env_config.local.py`) have no such artifact: that
     file IS the hand-maintained contract, often with logic beyond simple
     assignments. So instead of overwriting it, this only appends whatever
     schema variables are missing from it; existing lines, values, and
     surrounding code are left untouched.
-
-    If `service_name` is provided, syncs that service's schema and template
-    (resolved to that service's own directory, see config_manager.get_env_paths).
-    Otherwise, syncs the root project's schema and '.env.example'.
     """
     schema = config_manager.load_schema(service_name=service_name)
     paths = config_manager.get_env_paths(service_name=service_name)

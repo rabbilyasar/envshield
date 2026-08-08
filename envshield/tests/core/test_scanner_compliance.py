@@ -4,6 +4,7 @@ import os
 from typer.testing import CliRunner
 
 from envshield.cli import app
+from envshield.config import manager as config_manager
 from envshield.config.manager import SCHEMA_FILE_NAME
 
 runner = CliRunner()
@@ -37,6 +38,7 @@ def test_scan_with_undeclared_variable(mocker, tmp_path):
 def test_scan_with_only_declared_variables(mocker, tmp_path):
     """Tests that the scan command passes when all variables are declared in the schema."""
     with runner.isolated_filesystem(temp_dir=tmp_path):
+        config_manager.add_service("app", SCHEMA_FILE_NAME)
         with open(SCHEMA_FILE_NAME, "w") as f:
             f.write('[DECLARED_KEY]\ndescription="This one is okay"\n')
         mocker.patch(
@@ -162,37 +164,37 @@ def test_scan_without_service_resolves_schema_per_service_directory(tmp_path):
     service's own schema.
     """
     with runner.isolated_filesystem(temp_dir=tmp_path):
-        os.makedirs("athena")
-        os.makedirs("hermes")
+        os.makedirs("alpha")
+        os.makedirs("beta")
         with open("envshield.yml", "w") as f:
             f.write(
-                "services:\n  athena:\n    path: athena/env.schema.toml\n  hermes:\n    path: hermes/env.schema.toml\n"
+                "services:\n  alpha:\n    schema: alpha/env.schema.toml\n  beta:\n    schema: beta/env.schema.toml\n"
             )
-        with open("athena/env.schema.toml", "w") as f:
-            f.write('[ATHENA_VAR]\ndescription="x"\n')
-        with open("hermes/env.schema.toml", "w") as f:
-            f.write('[HERMES_VAR]\ndescription="x"\n')
+        with open("alpha/env.schema.toml", "w") as f:
+            f.write('[ALPHA_VAR]\ndescription="x"\n')
+        with open("beta/env.schema.toml", "w") as f:
+            f.write('[BETA_VAR]\ndescription="x"\n')
 
-        with open("athena/app.py", "w") as f:
+        with open("alpha/app.py", "w") as f:
             f.write(
                 "import os\n\n"
-                "a = os.environ.get('ATHENA_VAR')\n"  # declared in athena's own schema
-                "b = os.environ.get('ATHENA_UNDECLARED')\n"  # genuinely undeclared
+                "a = os.environ.get('ALPHA_VAR')\n"  # declared in alpha's own schema
+                "b = os.environ.get('ALPHA_UNDECLARED')\n"  # genuinely undeclared
             )
-        with open("hermes/app.py", "w") as f:
+        with open("beta/app.py", "w") as f:
             f.write(
-                "import os\n\nc = os.environ.get('HERMES_VAR')\n"  # declared in hermes's own schema
+                "import os\n\nc = os.environ.get('BETA_VAR')\n"  # declared in beta's own schema
             )
 
         result = runner.invoke(app, ["scan"])
 
         assert result.exit_code == 1
         assert "Found 1 undeclared variable(s)!" in result.stdout
-        assert "ATHENA_UNDECLARED" in result.stdout
+        assert "ALPHA_UNDECLARED" in result.stdout
         # Declared-in-its-own-service vars must not be flagged just because
         # they aren't in the *other* service's schema.
-        assert "ATHENA_VAR" not in result.stdout.split("Undeclared Variable Usage")[-1]
-        assert "HERMES_VAR" not in result.stdout.split("Undeclared Variable Usage")[-1]
+        assert "ALPHA_VAR" not in result.stdout.split("Undeclared Variable Usage")[-1]
+        assert "BETA_VAR" not in result.stdout.split("Undeclared Variable Usage")[-1]
 
 
 def test_scan_with_explicit_service_still_checks_a_single_schema_for_every_file(
@@ -200,23 +202,23 @@ def test_scan_with_explicit_service_still_checks_a_single_schema_for_every_file(
 ):
     """Passing --service explicitly keeps the original single-target behavior, even on a multi-service project."""
     with runner.isolated_filesystem(temp_dir=tmp_path):
-        os.makedirs("athena")
-        os.makedirs("hermes")
+        os.makedirs("alpha")
+        os.makedirs("beta")
         with open("envshield.yml", "w") as f:
             f.write(
-                "services:\n  athena:\n    path: athena/env.schema.toml\n  hermes:\n    path: hermes/env.schema.toml\n"
+                "services:\n  alpha:\n    schema: alpha/env.schema.toml\n  beta:\n    schema: beta/env.schema.toml\n"
             )
-        with open("athena/env.schema.toml", "w") as f:
-            f.write('[ATHENA_VAR]\ndescription="x"\n')
-        with open("hermes/env.schema.toml", "w") as f:
-            f.write('[HERMES_VAR]\ndescription="x"\n')
-        with open("hermes/app.py", "w") as f:
-            f.write("import os\n\nc = os.environ.get('HERMES_VAR')\n")
+        with open("alpha/env.schema.toml", "w") as f:
+            f.write('[ALPHA_VAR]\ndescription="x"\n')
+        with open("beta/env.schema.toml", "w") as f:
+            f.write('[BETA_VAR]\ndescription="x"\n')
+        with open("beta/app.py", "w") as f:
+            f.write("import os\n\nc = os.environ.get('BETA_VAR')\n")
 
-        result = runner.invoke(app, ["scan", "hermes", "--service", "athena"])
+        result = runner.invoke(app, ["scan", "beta", "--service", "alpha"])
 
         assert result.exit_code == 1
-        assert "HERMES_VAR" in result.stdout
+        assert "BETA_VAR" in result.stdout
 
 
 def test_scan_detects_unquoted_dotenv_style_secret(tmp_path):
@@ -268,7 +270,8 @@ def test_scan_reports_skipped_large_files(tmp_path):
 def test_scan_gracefully_handles_missing_schema_file(tmp_path):
     """
     Edge Case: Tests that the scanner finds undeclared variables and fails,
-    even if the schema is missing.
+    even if the project hasn't been initialized (no envshield.yml, so no
+    schema to check against) at all.
     """
     with runner.isolated_filesystem(temp_dir=tmp_path):
         python_code = "import os\n\nAPI_KEY = os.environ.get('SOME_KEY')\n"
@@ -281,6 +284,6 @@ def test_scan_gracefully_handles_missing_schema_file(tmp_path):
         assert result.exit_code == 1, (
             "Scan should fail if undeclared variables are found"
         )
-        assert "Warning: Schema not found" in result.stdout
+        assert "Warning: No services configured" in result.stdout
         assert "Found 1 undeclared variable(s)!" in result.stdout
         assert "SOME_KEY" in result.stdout

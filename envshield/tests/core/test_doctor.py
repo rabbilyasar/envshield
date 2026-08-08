@@ -5,11 +5,17 @@ import pytest
 from typer.testing import CliRunner
 
 from envshield.cli import app
+from envshield.config import manager as config_manager
 from envshield.config.manager import CONFIG_FILE_NAME, SCHEMA_FILE_NAME
 from envshield.core import doctor
 from envshield.core.exceptions import EnvShieldException
 
 runner = CliRunner()
+
+
+def _write_root_service(name="app", schema_path=SCHEMA_FILE_NAME):
+    """Registers one service at the project root -- envshield.yml always has at least one entry (see config_manager.generate_default_config_content)."""
+    config_manager.add_service(name, schema_path)
 
 
 def test_run_init_fix_uses_current_interpreter_not_bare_path_lookup(mocker):
@@ -47,6 +53,7 @@ def test_check_example_file_sync_detects_drift(tmp_path, monkeypatch):
     doctor exists to catch.
     """
     monkeypatch.chdir(tmp_path)
+    _write_root_service()
     with open(SCHEMA_FILE_NAME, "w") as f:
         f.write(
             '[FOO]\ndescription="x"\nsecret=false\n\n[BAR]\ndescription="y"\nsecret=false\n'
@@ -54,7 +61,7 @@ def test_check_example_file_sync_detects_drift(tmp_path, monkeypatch):
     with open(".env.example", "w") as f:
         f.write("FOO=\n")  # BAR is missing
 
-    passed, message = doctor._check_example_file_sync()
+    passed, message = doctor._check_example_file_sync(service_name="app")
 
     assert passed is False
     assert "BAR" in message
@@ -62,12 +69,13 @@ def test_check_example_file_sync_detects_drift(tmp_path, monkeypatch):
 
 def test_check_example_file_sync_passes_when_in_sync(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    _write_root_service()
     with open(SCHEMA_FILE_NAME, "w") as f:
         f.write('[FOO]\ndescription="x"\nsecret=false\n')
     with open(".env.example", "w") as f:
         f.write("FOO=\n")
 
-    passed, message = doctor._check_example_file_sync()
+    passed, message = doctor._check_example_file_sync(service_name="app")
 
     assert passed is True
 
@@ -75,6 +83,7 @@ def test_check_example_file_sync_passes_when_in_sync(tmp_path, monkeypatch):
 def test_doctor_all_ok(mocker, tmp_path):
     """Tests the doctor command when all checks pass."""
     with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_root_service()
         mocker.patch(
             "envshield.core.doctor._check_config_files", return_value=(True, "OK")
         )
@@ -95,6 +104,7 @@ def test_doctor_all_ok(mocker, tmp_path):
 def test_doctor_with_issues(mocker, tmp_path):
     """Tests the doctor command when checks fail."""
     with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_root_service()
         mocker.patch(
             "envshield.core.doctor._check_config_files",
             return_value=(False, "Config missing"),
@@ -121,8 +131,7 @@ def test_doctor_fix_flow(mocker, tmp_path):
     """Tests the interactive --fix flag for a single, isolated issue."""
     with runner.isolated_filesystem(temp_dir=tmp_path):
         # 1. Create a valid config so that only the hook check fails.
-        with open(CONFIG_FILE_NAME, "w") as f:
-            f.write("project_name: test\nschema: env.schema.toml")
+        _write_root_service()
         with open(SCHEMA_FILE_NAME, "w") as f:
             f.write("[API_KEY]\n")
 
@@ -171,7 +180,7 @@ def test_check_config_files_looks_up_the_services_own_schema_path(
     monkeypatch.chdir(tmp_path)
     (tmp_path / "services" / "api").mkdir(parents=True)
     with open(CONFIG_FILE_NAME, "w") as f:
-        f.write("services:\n  api:\n    path: services/api/env.schema.toml\n")
+        f.write("services:\n  api:\n    schema: services/api/env.schema.toml\n")
     with open("services/api/env.schema.toml", "w") as f:
         f.write("[API_KEY]\n")
 
@@ -183,7 +192,7 @@ def test_check_config_files_looks_up_the_services_own_schema_path(
 def test_check_config_files_reports_missing_service_schema(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     with open(CONFIG_FILE_NAME, "w") as f:
-        f.write("services:\n  api:\n    path: services/api/env.schema.toml\n")
+        f.write("services:\n  api:\n    schema: services/api/env.schema.toml\n")
 
     passed, message = doctor._check_config_files(service_name="api")
 
@@ -196,7 +205,7 @@ def test_check_local_env_sync_scopes_to_service_directory(tmp_path, monkeypatch)
     monkeypatch.chdir(tmp_path)
     (tmp_path / "services" / "api").mkdir(parents=True)
     with open(CONFIG_FILE_NAME, "w") as f:
-        f.write("services:\n  api:\n    path: services/api/env.schema.toml\n")
+        f.write("services:\n  api:\n    schema: services/api/env.schema.toml\n")
     with open("services/api/env.schema.toml", "w") as f:
         f.write('[API_KEY]\ndescription="x"\n')
     with open("services/api/.env", "w") as f:
@@ -219,17 +228,17 @@ def test_check_local_env_sync_flags_a_required_var_declared_but_left_blank(
     hit a runtime error instead of 'doctor' catching it first.
     """
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "hermes").mkdir()
+    (tmp_path / "beta").mkdir()
     with open(CONFIG_FILE_NAME, "w") as f:
         f.write(
-            "services:\n  hermes:\n    path: hermes/env.schema.toml\n    local_file: hermes/env_config.local.py\n"
+            "services:\n  beta:\n    schema: beta/env.schema.toml\n    local_file: beta/env_config.local.py\n"
         )
-    with open("hermes/env.schema.toml", "w") as f:
+    with open("beta/env.schema.toml", "w") as f:
         f.write('[SECRETS_ENCRYPTION_KEY]\ndescription="x"\nsecret=true\n')
-    with open("hermes/env_config.local.py", "w") as f:
+    with open("beta/env_config.local.py", "w") as f:
         f.write('SECRETS_ENCRYPTION_KEY = ""\n')
 
-    passed, message = doctor._check_local_env_sync(service_name="hermes")
+    passed, message = doctor._check_local_env_sync(service_name="beta")
 
     assert passed is False
     assert "SECRETS_ENCRYPTION_KEY" in message
@@ -242,15 +251,15 @@ def test_check_example_file_sync_skips_python_format_local_file(tmp_path, monkey
     informational message instead of reporting a missing template.
     """
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "athena").mkdir(parents=True)
+    (tmp_path / "alpha").mkdir(parents=True)
     with open(CONFIG_FILE_NAME, "w") as f:
         f.write(
-            "services:\n  athena:\n    path: athena/env.schema.toml\n    local_file: athena/env_config.local.py\n"
+            "services:\n  alpha:\n    schema: alpha/env.schema.toml\n    local_file: alpha/env_config.local.py\n"
         )
-    with open("athena/env.schema.toml", "w") as f:
+    with open("alpha/env.schema.toml", "w") as f:
         f.write('[DB_HOST]\ndescription="x"\n')
 
-    passed, message = doctor._check_example_file_sync(service_name="athena")
+    passed, message = doctor._check_example_file_sync(service_name="alpha")
 
     assert passed is True
     assert "no separate template file" in message
@@ -258,8 +267,9 @@ def test_check_example_file_sync_skips_python_format_local_file(tmp_path, monkey
 
 def test_check_deployment_manifest_passes_when_none_registered(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    _write_root_service()
 
-    passed, message = doctor._check_deployment_manifest()
+    passed, message = doctor._check_deployment_manifest(service_name="app")
 
     assert passed is True
     assert "nothing to check" in message
@@ -267,14 +277,14 @@ def test_check_deployment_manifest_passes_when_none_registered(tmp_path, monkeyp
 
 def test_check_deployment_manifest_flags_drift(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    _write_root_service()
+    config_manager.add_manifest("docker-compose.yml", {"app": "app"})
     with open(SCHEMA_FILE_NAME, "w") as f:
         f.write('[API_KEY]\ndescription="x"\n')
-    with open("envshield.yml", "w") as f:
-        f.write("deployment_manifest: docker-compose.yml\n")
     with open("docker-compose.yml", "w") as f:
         f.write("services:\n  app:\n    image: x\n")
 
-    passed, message = doctor._check_deployment_manifest()
+    passed, message = doctor._check_deployment_manifest(service_name="app")
 
     assert passed is False
     assert "API_KEY" in message
@@ -282,14 +292,14 @@ def test_check_deployment_manifest_flags_drift(tmp_path, monkeypatch):
 
 def test_check_deployment_manifest_passes_when_in_sync(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    _write_root_service()
+    config_manager.add_manifest("docker-compose.yml", {"app": "app"})
     with open(SCHEMA_FILE_NAME, "w") as f:
         f.write('[API_KEY]\ndescription="x"\n')
-    with open("envshield.yml", "w") as f:
-        f.write("deployment_manifest: docker-compose.yml\n")
     with open("docker-compose.yml", "w") as f:
         f.write("services:\n  app:\n    environment:\n      - API_KEY=secret\n")
 
-    passed, _ = doctor._check_deployment_manifest()
+    passed, _ = doctor._check_deployment_manifest(service_name="app")
 
     assert passed is True
 
@@ -297,10 +307,9 @@ def test_check_deployment_manifest_passes_when_in_sync(tmp_path, monkeypatch):
 def test_doctor_omits_deployment_manifest_check_when_none_registered(tmp_path):
     """A project that doesn't use a deployment manifest shouldn't see a check for it at all."""
     with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_root_service()
         with open(SCHEMA_FILE_NAME, "w") as f:
             f.write('[API_KEY]\ndescription="x"\ndefaultValue="x"\n')
-        with open(CONFIG_FILE_NAME, "w") as f:
-            f.write("project_name: demo\n")
         with open(".env.example", "w") as f:
             f.write("API_KEY=x\n")
         with open(".env", "w") as f:
@@ -313,10 +322,10 @@ def test_doctor_omits_deployment_manifest_check_when_none_registered(tmp_path):
 
 def test_doctor_includes_deployment_manifest_check_when_registered(tmp_path):
     with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_root_service()
+        config_manager.add_manifest("docker-compose.yml", {"app": "app"})
         with open(SCHEMA_FILE_NAME, "w") as f:
             f.write('[API_KEY]\ndescription="x"\ndefaultValue="x"\n')
-        with open(CONFIG_FILE_NAME, "w") as f:
-            f.write("project_name: demo\ndeployment_manifest: docker-compose.yml\n")
         with open(".env.example", "w") as f:
             f.write("API_KEY=x\n")
         with open(".env", "w") as f:
@@ -336,8 +345,7 @@ def test_doctor_fix_for_local_env_sync_delegates_to_setup_wizard(mocker, tmp_pat
     existing values and leave correct ones untouched.
     """
     with runner.isolated_filesystem(temp_dir=tmp_path):
-        with open(CONFIG_FILE_NAME, "w") as f:
-            f.write("project_name: demo\n")
+        _write_root_service()
         with open(SCHEMA_FILE_NAME, "w") as f:
             f.write('[API_KEY]\ndescription="x"\n')
         # No local .env at all -- 'Local Environment Sync' will fail.
@@ -353,4 +361,4 @@ def test_doctor_fix_for_local_env_sync_delegates_to_setup_wizard(mocker, tmp_pat
 
         runner.invoke(app, ["doctor", "--fix"])
 
-        mock_run_setup.assert_called_once_with(service_name=None)
+        mock_run_setup.assert_called_once_with(service_name="app")

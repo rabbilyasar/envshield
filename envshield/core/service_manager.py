@@ -22,7 +22,7 @@ def get_available_services() -> List[str]:
 
 def resolve_service(
     service_name: Optional[str] = None, allow_multiple: bool = False
-) -> Union[Optional[str], List[str]]:
+) -> Union[str, List[str]]:
     """
     Resolves which service(s) a command should operate on.
 
@@ -31,17 +31,24 @@ def resolve_service(
     If None and multiple services are configured, interactively prompts the
     user to pick one (or, if `allow_multiple`, all of them at once).
 
+    envshield.yml always has at least one registered service once a project
+    has been initialized -- a single-service project is just the one-entry
+    case of the same `services` map a five-service project has (see
+    config_manager.generate_default_config_content) -- so there's no more
+    "no services configured" state to silently fall back to; that's just an
+    uninitialized project now, and it's raised as such.
+
     Returns:
         - A single service name (str)
         - A list of every configured service name (if `allow_multiple=True`
           and the user picks "All services")
-        - None if no services are configured (single-service/root project)
     """
     available = get_available_services()
 
-    # Single-service project: no selection needed
     if not available:
-        return None
+        raise EnvShieldException(
+            "No services configured yet. Run 'envshield init' first."
+        )
 
     # User explicitly specified a service
     if service_name:
@@ -71,15 +78,14 @@ def resolve_service(
     return selected
 
 
-def resolve_targets(service_name: Optional[str] = None) -> List[Optional[str]]:
+def resolve_targets(service_name: Optional[str] = None) -> List[str]:
     """
     Resolves --service into the list of service_name targets a command should
-    run against. A single-service/root project, an explicit service, or one
-    auto-selected because it's the only one configured all yield a single
-    target; picking "All services" (see resolve_service) yields every
-    configured service. Always returns a list, so callers can loop
-    unconditionally instead of branching on the return type of
-    `resolve_service`.
+    run against. An explicit service, or one auto-selected because it's the
+    only one configured, yields a single target; picking "All services" (see
+    resolve_service) yields every configured service. Always returns a list,
+    so callers can loop unconditionally instead of branching on the return
+    type of `resolve_service`.
     """
     resolved = resolve_service(service_name, allow_multiple=True)
     return resolved if isinstance(resolved, list) else [resolved]

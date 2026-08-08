@@ -9,16 +9,23 @@ def _write_two_services(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with open("envshield.yml", "w") as f:
         f.write(
-            "services:\n  athena:\n    path: athena/env.schema.toml\n  hermes:\n    path: hermes/env.schema.toml\n"
+            "services:\n  alpha:\n    schema: alpha/env.schema.toml\n  beta:\n    schema: beta/env.schema.toml\n"
         )
 
 
-def test_resolve_service_returns_none_for_single_service_project(tmp_path, monkeypatch):
-    """No envshield.yml services declared at all -- unchanged, root-scoped behaviour."""
+def test_resolve_service_raises_when_nothing_is_configured_yet(tmp_path, monkeypatch):
+    """
+    No envshield.yml services declared at all -- an uninitialized project,
+    not a valid "root" target to silently fall back to (envshield.yml
+    always has at least one entry once a project's been initialized; see
+    config_manager.generate_default_config_content).
+    """
     monkeypatch.chdir(tmp_path)
 
-    assert service_manager.resolve_service() is None
-    assert service_manager.resolve_targets() == [None]
+    with pytest.raises(EnvShieldException, match="Run 'envshield init' first"):
+        service_manager.resolve_service()
+    with pytest.raises(EnvShieldException, match="Run 'envshield init' first"):
+        service_manager.resolve_targets()
 
 
 def test_resolve_service_auto_selects_the_only_configured_service(
@@ -26,10 +33,10 @@ def test_resolve_service_auto_selects_the_only_configured_service(
 ):
     monkeypatch.chdir(tmp_path)
     with open("envshield.yml", "w") as f:
-        f.write("services:\n  athena:\n    path: athena/env.schema.toml\n")
+        f.write("services:\n  alpha:\n    schema: alpha/env.schema.toml\n")
 
-    assert service_manager.resolve_service() == "athena"
-    assert service_manager.resolve_targets() == ["athena"]
+    assert service_manager.resolve_service() == "alpha"
+    assert service_manager.resolve_targets() == ["alpha"]
 
 
 def test_resolve_service_returns_explicit_service_without_prompting(
@@ -38,7 +45,7 @@ def test_resolve_service_returns_explicit_service_without_prompting(
     _write_two_services(monkeypatch, tmp_path)
     mock_select = mocker.patch("questionary.select")
 
-    assert service_manager.resolve_service("hermes") == "hermes"
+    assert service_manager.resolve_service("beta") == "beta"
     mock_select.assert_not_called()
 
 
@@ -60,13 +67,13 @@ def test_resolve_service_prompts_when_multiple_and_none_given(
     """
     _write_two_services(monkeypatch, tmp_path)
     mock_select = mocker.patch("questionary.select")
-    mock_select.return_value.ask.return_value = "hermes"
+    mock_select.return_value.ask.return_value = "beta"
 
     result = service_manager.resolve_service()
 
-    assert result == "hermes"
+    assert result == "beta"
     _, kwargs = mock_select.call_args
-    assert "athena" in kwargs["choices"]
+    assert "alpha" in kwargs["choices"]
 
 
 def test_resolve_service_all_services_choice_returns_every_service(
@@ -79,8 +86,8 @@ def test_resolve_service_all_services_choice_returns_every_service(
 
     result = service_manager.resolve_service(allow_multiple=True)
 
-    assert result == ["athena", "hermes"]
-    assert service_manager.resolve_targets() == ["athena", "hermes"]
+    assert result == ["alpha", "beta"]
+    assert service_manager.resolve_targets() == ["alpha", "beta"]
 
 
 def test_resolve_service_does_not_offer_all_when_disallowed(
@@ -88,7 +95,7 @@ def test_resolve_service_does_not_offer_all_when_disallowed(
 ):
     _write_two_services(monkeypatch, tmp_path)
     mock_select = mocker.patch("questionary.select")
-    mock_select.return_value.ask.return_value = "athena"
+    mock_select.return_value.ask.return_value = "alpha"
 
     service_manager.resolve_service(allow_multiple=False)
 

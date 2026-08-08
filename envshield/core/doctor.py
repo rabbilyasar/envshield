@@ -2,7 +2,7 @@
 import os
 import subprocess
 import sys
-from typing import List, Optional
+from typing import List
 
 import questionary
 import typer
@@ -48,16 +48,12 @@ class HealthCheck:
             console.print(f"[bold green]✓ {self.description}[/bold green]")
 
 
-def _check_config_files(service_name: Optional[str] = None):
+def _check_config_files(service_name: str):
     config_exists = os.path.exists(config_manager.CONFIG_FILE_NAME)
 
-    if service_name:
-        schema_path = config_manager.get_service_schema_path(service_name)
-        schema_exists = bool(schema_path) and os.path.exists(schema_path)
-        schema_label = schema_path or f"schema for service '{service_name}'"
-    else:
-        schema_exists = os.path.exists(config_manager.SCHEMA_FILE_NAME)
-        schema_label = config_manager.SCHEMA_FILE_NAME
+    schema_path = config_manager.get_service_schema_path(service_name)
+    schema_exists = bool(schema_path) and os.path.exists(schema_path)
+    schema_label = schema_path or f"schema for service '{service_name}'"
 
     if not config_exists and not schema_exists:
         return (
@@ -74,7 +70,7 @@ def _check_config_files(service_name: Optional[str] = None):
     return True, "Found and accessible."
 
 
-def _check_local_env_sync(service_name: Optional[str] = None):
+def _check_local_env_sync(service_name: str):
     try:
         schema = config_manager.load_schema(service_name=service_name)
         local_file = config_manager.get_env_paths(service_name=service_name)[
@@ -97,30 +93,47 @@ def _check_local_env_sync(service_name: Optional[str] = None):
         return False, "Could not load schema to perform check."
 
 
-def _check_deployment_manifest(service_name: Optional[str] = None):
-    manifest = config_manager.get_deployment_manifest(service_name)
-    if not manifest:
+def _check_deployment_manifest(service_name: str):
+    manifests = config_manager.get_deployment_manifests(service_name)
+    if not manifests:
         return True, "No deployment manifest registered -- nothing to check."
 
     try:
         schema = config_manager.load_schema(service_name=service_name)
-        parser = get_parser(
-            manifest["path"], container=manifest.get("container"), prefer=service_name
-        )
-        if not parser:
-            return False, f"Cannot parse deployment manifest '{manifest['path']}'."
-        local_values = parser.get_vars(manifest["path"], get_values=True)
+    except EnvShieldException:
+        return False, "Could not load schema to perform check."
 
-        diff = schema_manager.diff_against_schema(schema, local_values)
-        if diff.is_clean:
-            return True, f"'{manifest['path']}' is in sync with schema."
-        return False, diff.summary()
+    all_clean = True
+    messages = []
+    for manifest in manifests:
+        try:
+            parser = get_parser(
+                manifest["path"],
+                container=manifest.get("container"),
+                prefer=service_name,
+            )
+            if not parser:
+                all_clean = False
+                messages.append(
+                    f"Cannot parse deployment manifest '{manifest['path']}'."
+                )
+                continue
+            local_values = parser.get_vars(manifest["path"], get_values=True)
 
-    except (EnvShieldException, FileNotFoundError, ValueError) as e:
-        return False, f"Could not check '{manifest['path']}': {e}"
+            diff = schema_manager.diff_against_schema(schema, local_values)
+            if diff.is_clean:
+                messages.append(f"'{manifest['path']}' is in sync with schema.")
+            else:
+                all_clean = False
+                messages.append(f"'{manifest['path']}': {diff.summary()}")
+        except (EnvShieldException, FileNotFoundError, ValueError) as e:
+            all_clean = False
+            messages.append(f"Could not check '{manifest['path']}': {e}")
+
+    return all_clean, "; ".join(messages)
 
 
-def _check_example_file_sync(service_name: Optional[str] = None):
+def _check_example_file_sync(service_name: str):
     try:
         schema = config_manager.load_schema(service_name=service_name)
     except EnvShieldException:
@@ -130,7 +143,7 @@ def _check_example_file_sync(service_name: Optional[str] = None):
     local_file = paths["local_file"]
     example_file = paths["example_file"]
 
-    # A Python-module local file (e.g. zeus's env_config.local.py) has no
+    # A Python-module local file (e.g. acme's env_config.local.py) has no
     # separate tracked template -- it IS the contract. 'Local Environment
     # Sync' already checks it declares every schema variable.
     if local_file.endswith(".py"):
@@ -194,7 +207,7 @@ def _run_init_fix() -> None:
         )
 
 
-def _build_checks(service_name: Optional[str] = None) -> List[HealthCheck]:
+def _build_checks(service_name: str) -> List[HealthCheck]:
     """
     The list of health checks to run, shared by run_health_check (Rich
     rendering + --fix) and run_health_check_json (--json) so they can never
@@ -234,7 +247,7 @@ def _build_checks(service_name: Optional[str] = None) -> List[HealthCheck]:
     # Only shown at all when a manifest is actually registered for this
     # service -- a project that doesn't use one shouldn't see a check for
     # it every single run.
-    if config_manager.get_deployment_manifest(service_name):
+    if config_manager.get_deployment_manifests(service_name):
         checks.append(
             HealthCheck(
                 "Deployment Manifest",
@@ -246,13 +259,8 @@ def _build_checks(service_name: Optional[str] = None) -> List[HealthCheck]:
     return checks
 
 
-def run_health_check(fix: bool, service_name: Optional[str] = None):
-    """
-    Runs a suite of health checks on the project's EnvShield setup.
-
-    If `service_name` is provided, checks that specific service's setup.
-    Otherwise, checks the root setup.
-    """
+def run_health_check(fix: bool, service_name: str):
+    """Runs a suite of health checks on one service's EnvShield setup."""
     console.print("\n[bold cyan]🛡️  Running EnvShield Health Check...[/bold cyan]")
 
     checks = _build_checks(service_name)
@@ -275,7 +283,7 @@ def run_health_check(fix: bool, service_name: Optional[str] = None):
         raise typer.Exit(code=1)
 
 
-def run_health_check_json(service_name: Optional[str] = None) -> dict:
+def run_health_check_json(service_name: str) -> dict:
     """
     Same checks as run_health_check, collected as a plain, JSON-serializable
     dict instead of Rich output -- for '--json'. Never offers --fix: an

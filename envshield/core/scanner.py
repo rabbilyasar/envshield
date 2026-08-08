@@ -318,21 +318,23 @@ def _build_undeclared_var_resolver(service_name: Optional[str]):
     set it should be checked against for undeclared-variable detection --
     or None if there's no schema at all to check against.
 
-    An explicit `service_name` (or a single-service/root project) checks
-    every file against that one schema -- unchanged, single-target
-    behavior.
+    An explicit `service_name` checks every file against that one schema --
+    unchanged, single-target behavior.
 
-    Otherwise, for a multi-service project scanned without --service, each
-    configured service's own schema is matched against files under that
-    service's own directory (the directory its schema lives in) -- a file
-    under 'athena/' is checked against athena's schema, not hermes's.
-    Files outside every service's directory fall back to the root schema,
-    if one exists. Without this, running the pre-commit hook's plain
-    `envshield scan --staged` (no --service) on a multi-service project
-    would look for a root 'env.schema.toml' that was never there, and
-    silently skip the undeclared-variable check for every service.
+    Otherwise, each configured service's own schema is matched against
+    files under that service's own directory (the directory its schema
+    lives in) -- a file under 'alpha/' is checked against alpha's schema,
+    not beta's. A single-service project's one (and only) service has a
+    directory of '.' (its schema lives at the project root), which matches
+    every file -- there's no separate "root schema" concept to fall back to
+    anymore: envshield.yml always has at least one registered service (see
+    generate_default_config_content), single-service or not, so every
+    schema is a service's schema. Without the directory matching below,
+    running the pre-commit hook's plain `envshield scan --staged` (no
+    --service) on a multi-service project would have no way to tell which
+    service's schema applies to which file.
     """
-    if service_name or not config_manager.is_multi_service():
+    if service_name:
         try:
             schema_vars = set(
                 config_manager.load_schema(service_name=service_name).keys()
@@ -353,17 +355,14 @@ def _build_undeclared_var_resolver(service_name: Optional[str]):
         except SchemaNotFoundError:
             continue
         service_dirs.append((service_dir, schema_vars))
-    # Longest directory first, so a nested service dir wins over a shorter sibling.
+    # Longest directory first, so a nested service dir wins over a shorter
+    # sibling -- and so a single-service project's '.' entry only ever acts
+    # as the last-resort catch-all it should be, not a premature match.
     service_dirs.sort(key=lambda item: len(item[0]), reverse=True)
 
-    try:
-        root_vars = set(config_manager.load_schema().keys())
-    except SchemaNotFoundError:
-        root_vars = set()
-
-    if not service_dirs and not root_vars:
+    if not service_dirs:
         console.print(
-            "[yellow]Warning: No schema found for any configured service. Skipping undeclared variable check.[/yellow]"
+            "[yellow]Warning: No services configured. Skipping undeclared variable check.[/yellow]"
         )
         return None
 
@@ -372,9 +371,13 @@ def _build_undeclared_var_resolver(service_name: Optional[str]):
     def _resolve(file_path: str) -> set:
         normalized = _normalize_for_dir_match(file_path)
         for service_dir, schema_vars in service_dirs:
-            if normalized == service_dir or normalized.startswith(service_dir + os.sep):
+            if (
+                service_dir == "."
+                or normalized == service_dir
+                or normalized.startswith(service_dir + os.sep)
+            ):
                 return schema_vars
-        return root_vars
+        return set()
 
     return _resolve
 
@@ -691,21 +694,17 @@ def _generate_post_merge_hook_content() -> str:
     """
     Generates the bash script content for the post-merge hook.
     Smart: only runs if schema files actually changed.
-    Dynamically detects single-service vs multi-service projects.
     """
     config = config_manager.load_config()
 
-    # Schema files that might have changed
-    schema_files = []
-    if config.get("services"):
-        # Multi-service: collect all service schema paths
-        for service_name, service_config in config["services"].items():
-            schema_path = service_config.get("path")
-            if schema_path:
-                schema_files.append(schema_path)
-    else:
-        # Single-service: use root schema
-        schema_files = ["env.schema.toml"]
+    # Every registered service's schema path -- envshield.yml always has at
+    # least one, single-service or not, so there's no separate root-schema
+    # case to fall back to.
+    schema_files = [
+        service_config["schema"]
+        for service_config in config.get("services", {}).values()
+        if isinstance(service_config, dict) and service_config.get("schema")
+    ]
 
     # Build the hook script with schema change detection
     schema_check = " ".join(f'"{f}"' for f in schema_files)

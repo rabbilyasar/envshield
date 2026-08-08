@@ -81,7 +81,7 @@ def _seed_schema_from_file(config_file: str, schema_path: str) -> None:
         f.write(content)
 
 
-def _print_service_header(targets: List[Optional[str]], target: Optional[str]) -> None:
+def _print_service_header(targets: List[str], target: str) -> None:
     """Labels each service's output when a command is running against more than one."""
     if len(targets) > 1:
         console.print(f"\n[bold underline]── {target} ──[/bold underline]")
@@ -135,6 +135,12 @@ def init(
             )
 
         project_name = os.path.basename(os.getcwd())
+        # envshield.yml always registers at least one named service, even
+        # here for a brand-new single-service project -- there's no
+        # separate "rootless" shape. Growing into a second service later is
+        # then just appending another entry to the same `services` map,
+        # not a structural migration (see config_manager.add_service).
+        service_name = project_name
 
         # Prefer building the schema from a real, already-existing config
         # source over a generic framework template -- a fixed template can
@@ -160,12 +166,16 @@ def init(
         )
 
         compose_file = service_discovery.find_compose_file(".", ".")
-        if compose_file:
+        if compose_file and service_discovery.compose_declares_service(
+            compose_file, service_name
+        ):
             console.print(
                 f"Found deployment manifest [bold yellow]{compose_file}[/bold yellow] -- registering it so 'check'/'doctor' validate it automatically."
             )
+        else:
+            compose_file = None
         config_content = config_manager.generate_default_config_content(
-            project_name, deployment_manifest=compose_file
+            project_name, service_name, deployment_manifest=compose_file
         )
         config_manager.write_file(
             config_manager.CONFIG_FILE_NAME,
@@ -174,7 +184,7 @@ def init(
         )
 
         config_manager.update_gitignore()
-        schema_manager.sync_schema()
+        schema_manager.sync_schema(service_name=service_name)
 
         # Offer to install git hooks
         hm = hooks_manager.HooksManager()
@@ -273,12 +283,13 @@ def check(
                 had_error = True
 
             # An explicit file argument means the user asked for exactly
-            # that file, and nothing else -- only pile on the registered
-            # deployment manifest (if any) when we're checking the
-            # project's/service's own default local file.
+            # that file, and nothing else -- only pile on registered
+            # deployment manifests when we're checking the service's own
+            # default local file. A service can be named in more than one
+            # manifest (a local compose file and a production Kubernetes
+            # manifest, say), so every match gets validated, not just one.
             if not file:
-                manifest = config_manager.get_deployment_manifest(target)
-                if manifest:
+                for manifest in config_manager.get_deployment_manifests(target):
                     manifest_container = manifest.get("container") or container
                     if json_output:
                         result = schema_manager.check_result(
@@ -412,7 +423,7 @@ def setup(
     try:
         for target in targets:
             _print_service_header(targets, target)
-            setup_manager.run_setup(output_file, service_name=target)
+            setup_manager.run_setup(service_name=target, output_file=output_file)
 
         # After successful setup, offer to install git hooks
         hm = hooks_manager.HooksManager()
@@ -551,8 +562,15 @@ def generate(
             )
             raise typer.Exit()
 
-        resolved_service = cast(Optional[str], service_manager.resolve_service(service))
-        schema = config_manager.load_schema(service_name=resolved_service)
+        if service or service_manager.get_available_services():
+            resolved_service = cast(str, service_manager.resolve_service(service))
+            schema = config_manager.load_schema(service_name=resolved_service)
+        else:
+            # Nothing registered yet -- generate doesn't touch a service's
+            # local files, so there's nothing registration would actually
+            # buy here. Read the schema directly rather than forcing
+            # 'envshield init'/'service add' just to run this command.
+            schema = config_manager.load_bare_schema()
         content = generator.generate_config(schema, lang=resolved_lang)
 
         with open(resolved_output, "w") as f:
@@ -679,10 +697,28 @@ def import_command(
 ):
     """Generates an env.schema.toml from an existing .env file."""
     try:
-        # If service is specified, use that service's schema path
         if service:
             service_manager.resolve_service(service)
             output = cast(str, config_manager.get_service_schema_path(service))
+        elif output == config_manager.SCHEMA_FILE_NAME:
+            if service_manager.get_available_services():
+                # No explicit --service or --output, but something is
+                # already registered: target whichever service is
+                # currently the (only, or interactively chosen) one --
+                # same default-targeting every other command uses, rather
+                # than writing to a literal path that's only coincidentally
+                # correct for a single, unnested service.
+                service = cast(str, service_manager.resolve_service(None))
+                output = cast(str, config_manager.get_service_schema_path(service))
+            else:
+                # Totally fresh project, nothing registered yet: bootstrap
+                # it the same way 'init' does (one service, named after the
+                # project directory) rather than writing a schema to a
+                # location nothing in envshield.yml knows about -- that's
+                # what lets the auto-sync below keep .env.example honest
+                # from this very first import, not just from the next one.
+                service = os.path.basename(os.getcwd())
+                config_manager.add_service(service, output)
 
         if os.path.exists(output) and not force and not interactive:
             console.print(
@@ -708,10 +744,10 @@ def import_command(
         )
 
         # Keep the tracked template (.env.example) in sync with the schema
-        # we just (re)wrote -- only when `output` is the project's/service's
-        # real configured schema path, not some arbitrary --output destination
-        # there's no template mapping for.
-        if service or output == config_manager.SCHEMA_FILE_NAME:
+        # we just (re)wrote -- only when we resolved a real service above,
+        # not for an arbitrary --output destination there's no template
+        # mapping for.
+        if service:
             schema_manager.sync_schema(service_name=service)
     except EnvShieldException as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
@@ -727,7 +763,7 @@ def service_list():
     services = config_manager.get_services()
     if not services:
         console.print(
-            "[yellow]No services configured -- this is a single-service/root project.[/yellow]"
+            "[yellow]No services configured yet. Run 'envshield init' first.[/yellow]"
         )
         return
 
@@ -808,12 +844,14 @@ def service_add(
             local_file=local_file,
             example_file=example_file,
             description=description,
-            deployment_manifest=deployment_manifest,
-            container=manifest_container,
         )
         console.print(
             f"[bold green]✓[/bold green] Registered service [bold cyan]{name}[/bold cyan] → {schema_path}"
         )
+        if deployment_manifest:
+            config_manager.add_manifest(
+                deployment_manifest, {manifest_container or name: name}
+            )
 
         if import_from:
             if os.path.exists(schema_path):
@@ -828,6 +866,25 @@ def service_add(
     except EnvShieldException as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(code=1)
+
+
+@service_app.command("remove")
+def service_remove(
+    name: str = typer.Argument(..., help="Name of the service to de-register."),
+):
+    """
+    De-registers one service from envshield.yml, and drops it from any
+    deployment manifest's container mapping. Never deletes the service's
+    own files (schema, local env file, etc.) -- only the registration.
+    """
+    try:
+        config_manager.remove_service(name)
+    except EnvShieldException as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
+        raise typer.Exit(code=1)
+    console.print(
+        f"[bold green]✓[/bold green] Removed service [bold cyan]{name}[/bold cyan] from envshield.yml."
+    )
 
 
 @service_app.command("discover")
@@ -922,8 +979,11 @@ def service_discover(
                 schema_path,
                 local_file=c["local_file"],
                 example_file=c["example_file"],
-                deployment_manifest=c["deployment_manifest"],
             )
+            if c["deployment_manifest"]:
+                config_manager.add_manifest(
+                    c["deployment_manifest"], {c["name"]: c["name"]}
+                )
         except EnvShieldException as e:
             console.print(f"[bold red]Error:[/bold red] Skipping '{c['name']}': {e}")
             continue

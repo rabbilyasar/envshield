@@ -3,6 +3,8 @@ import os
 
 from typer.testing import CliRunner
 
+from envshield.config import manager as config_manager
+from envshield.config.manager import SCHEMA_FILE_NAME
 from envshield.core import schema_manager
 
 runner = CliRunner()
@@ -21,7 +23,7 @@ def test_check_schema_in_sync(mocker, tmp_path):
 
         mock_console = mocker.patch("envshield.core.schema_manager.console")
 
-        is_in_sync = schema_manager.check_schema(".env.local")
+        is_in_sync = schema_manager.check_schema(".env.local", service_name="app")
 
         assert is_in_sync is True
         mock_console.print.assert_any_call(
@@ -42,7 +44,7 @@ def test_check_schema_out_of_sync(mocker, tmp_path):
 
         mock_console = mocker.patch("envshield.core.schema_manager.console")
 
-        is_in_sync = schema_manager.check_schema(".env.local")
+        is_in_sync = schema_manager.check_schema(".env.local", service_name="app")
 
         assert is_in_sync is False
         assert mock_console.print.call_count > 2
@@ -65,7 +67,9 @@ def test_check_schema_flags_a_required_var_declared_but_left_blank(mocker, tmp_p
         with open("env_config.local.py", "w") as f:
             f.write('SECRETS_ENCRYPTION_KEY = ""\n')
 
-        is_in_sync = schema_manager.check_schema("env_config.local.py")
+        is_in_sync = schema_manager.check_schema(
+            "env_config.local.py", service_name="app"
+        )
 
         assert is_in_sync is False
 
@@ -80,7 +84,7 @@ def test_check_schema_does_not_flag_a_blank_var_that_has_a_default(mocker, tmp_p
         with open(".env.local", "w") as f:
             f.write("LOG_LEVEL=\n")
 
-        is_in_sync = schema_manager.check_schema(".env.local")
+        is_in_sync = schema_manager.check_schema(".env.local", service_name="app")
 
         assert is_in_sync is True
 
@@ -93,10 +97,11 @@ def test_sync_schema_generates_perfect_file(mocker, tmp_path):
             "LOG_LEVEL": {"description": "Log verbosity", "defaultValue": "info"},
         }
         mocker.patch("envshield.config.manager.load_schema", return_value=schema_data)
+        config_manager.add_service("app", SCHEMA_FILE_NAME)
 
         output_file = os.path.join(td, ".env.example")
 
-        schema_manager.sync_schema()
+        schema_manager.sync_schema(service_name="app")
 
         assert os.path.exists(output_file)
         with open(output_file, "r") as f:
@@ -114,7 +119,7 @@ def test_sync_schema_scopes_env_example_to_service_directory(tmp_path, monkeypat
     monkeypatch.chdir(tmp_path)
     (tmp_path / "services" / "api").mkdir(parents=True)
     with open("envshield.yml", "w") as f:
-        f.write("services:\n  api:\n    path: services/api/env.schema.toml\n")
+        f.write("services:\n  api:\n    schema: services/api/env.schema.toml\n")
     with open("services/api/env.schema.toml", "w") as f:
         f.write('[API_KEY]\ndescription="Third-party key"\nsecret=true\n')
 
@@ -132,19 +137,19 @@ def test_sync_schema_creates_python_local_file_when_missing(tmp_path, monkeypatc
     a fresh module generated from the schema, in Python assignment syntax.
     """
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "athena" / "config").mkdir(parents=True)
+    (tmp_path / "alpha" / "config").mkdir(parents=True)
     with open("envshield.yml", "w") as f:
         f.write(
-            "services:\n  athena:\n    path: athena/env.schema.toml\n    local_file: athena/config/env_config.local.py\n"
+            "services:\n  alpha:\n    schema: alpha/env.schema.toml\n    local_file: alpha/config/env_config.local.py\n"
         )
-    with open("athena/env.schema.toml", "w") as f:
+    with open("alpha/env.schema.toml", "w") as f:
         f.write(
             '[DB_HOST]\ndescription="Database host"\ndefaultValue="db"\n\n[API_ADMIN_TOKEN]\ndescription="Admin token"\nsecret=true\n'
         )
 
-    schema_manager.sync_schema(service_name="athena")
+    schema_manager.sync_schema(service_name="alpha")
 
-    with open("athena/config/env_config.local.py") as f:
+    with open("alpha/config/env_config.local.py") as f:
         content = f.read()
     assert "DB_HOST = 'db'" in content
     assert "API_ADMIN_TOKEN = ''" in content
@@ -162,24 +167,24 @@ def test_sync_schema_appends_missing_vars_to_existing_python_file_without_touchi
     happens to be blank -- is left completely alone.
     """
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "athena" / "config").mkdir(parents=True)
+    (tmp_path / "alpha" / "config").mkdir(parents=True)
     with open("envshield.yml", "w") as f:
         f.write(
-            "services:\n  athena:\n    path: athena/env.schema.toml\n    local_file: athena/config/env_config.local.py\n"
+            "services:\n  alpha:\n    schema: alpha/env.schema.toml\n    local_file: alpha/config/env_config.local.py\n"
         )
-    with open("athena/env.schema.toml", "w") as f:
+    with open("alpha/env.schema.toml", "w") as f:
         f.write(
             '[DB_HOST]\ndescription="Database host"\ndefaultValue="db"\n\n'
             '[INTREPID_KEY]\ndescription="Intrepid API key"\nsecret=true\n\n'
             '[NEW_FEATURE_FLAG]\ndescription="Newly added var"\ndefaultValue="no"\n'
         )
     existing_content = 'import os\n\nDB_HOST = "db"\nINTREPID_KEY = ""\n\nif os.environ.get("USE_LOCAL_DB") == "yes":\n    DB_HOST = "db"\n'
-    with open("athena/config/env_config.local.py", "w") as f:
+    with open("alpha/config/env_config.local.py", "w") as f:
         f.write(existing_content)
 
-    schema_manager.sync_schema(service_name="athena")
+    schema_manager.sync_schema(service_name="alpha")
 
-    with open("athena/config/env_config.local.py") as f:
+    with open("alpha/config/env_config.local.py") as f:
         content = f.read()
 
     # Existing lines and logic are byte-for-byte untouched...
@@ -192,20 +197,20 @@ def test_sync_schema_reports_when_python_file_already_declares_everything(
     tmp_path, monkeypatch
 ):
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "athena").mkdir(parents=True)
+    (tmp_path / "alpha").mkdir(parents=True)
     with open("envshield.yml", "w") as f:
         f.write(
-            "services:\n  athena:\n    path: athena/env.schema.toml\n    local_file: athena/env_config.local.py\n"
+            "services:\n  alpha:\n    schema: alpha/env.schema.toml\n    local_file: alpha/env_config.local.py\n"
         )
-    with open("athena/env.schema.toml", "w") as f:
+    with open("alpha/env.schema.toml", "w") as f:
         f.write('[DB_HOST]\ndescription="x"\ndefaultValue="db"\n')
-    with open("athena/env_config.local.py", "w") as f:
+    with open("alpha/env_config.local.py", "w") as f:
         f.write('DB_HOST = "db"\n')
 
-    with open("athena/env_config.local.py") as f:
+    with open("alpha/env_config.local.py") as f:
         before = f.read()
-    schema_manager.sync_schema(service_name="athena")
-    with open("athena/env_config.local.py") as f:
+    schema_manager.sync_schema(service_name="alpha")
+    with open("alpha/env_config.local.py") as f:
         after = f.read()
 
     assert before == after
@@ -253,7 +258,7 @@ def test_check_schema_flags_an_invalid_enum_value(mocker, tmp_path):
         with open(".env.local", "w") as f:
             f.write("LOG_LEVEL=verbose\n")
 
-        is_in_sync = schema_manager.check_schema(".env.local")
+        is_in_sync = schema_manager.check_schema(".env.local", service_name="app")
 
         assert is_in_sync is False
 
@@ -267,7 +272,7 @@ def test_check_schema_flags_an_invalid_port_value(mocker, tmp_path):
         with open(".env.local", "w") as f:
             f.write("API_PORT=999999\n")
 
-        is_in_sync = schema_manager.check_schema(".env.local")
+        is_in_sync = schema_manager.check_schema(".env.local", service_name="app")
 
         assert is_in_sync is False
 
@@ -281,7 +286,7 @@ def test_check_schema_passes_a_valid_typed_value(mocker, tmp_path):
         with open(".env.local", "w") as f:
             f.write("API_PORT=8080\n")
 
-        assert schema_manager.check_schema(".env.local") is True
+        assert schema_manager.check_schema(".env.local", service_name="app") is True
 
 
 def test_check_schema_required_if_not_triggered_when_condition_unmet(mocker, tmp_path):
@@ -300,7 +305,7 @@ def test_check_schema_required_if_not_triggered_when_condition_unmet(mocker, tmp
         with open(".env.local", "w") as f:
             f.write("FEATURE_X_ENABLED=false\n")
 
-        assert schema_manager.check_schema(".env.local") is True
+        assert schema_manager.check_schema(".env.local", service_name="app") is True
 
 
 def test_check_schema_required_if_triggered_when_condition_met(mocker, tmp_path):
@@ -318,7 +323,7 @@ def test_check_schema_required_if_triggered_when_condition_met(mocker, tmp_path)
         with open(".env.local", "w") as f:
             f.write("FEATURE_X_ENABLED=true\n")
 
-        assert schema_manager.check_schema(".env.local") is False
+        assert schema_manager.check_schema(".env.local", service_name="app") is False
 
 
 def test_check_schema_against_docker_compose_file(mocker, tmp_path):
@@ -336,7 +341,9 @@ def test_check_schema_against_docker_compose_file(mocker, tmp_path):
                 "services:\n  api:\n    image: myorg/api\n    environment:\n      - DATABASE_URL=postgres://user:pass@db/app\n"
             )
 
-        is_in_sync = schema_manager.check_schema("docker-compose.yml")
+        is_in_sync = schema_manager.check_schema(
+            "docker-compose.yml", service_name="app"
+        )
 
         # REDIS_URL is genuinely missing from the manifest.
         assert is_in_sync is False
@@ -352,7 +359,9 @@ def test_check_schema_against_docker_compose_requires_container_when_ambiguous(
                 "services:\n  api:\n    image: myorg/api\n  worker:\n    image: myorg/worker\n"
             )
 
-        is_in_sync = schema_manager.check_schema("docker-compose.yml")
+        is_in_sync = schema_manager.check_schema(
+            "docker-compose.yml", service_name="app"
+        )
 
         assert is_in_sync is False
 
@@ -377,7 +386,7 @@ def test_check_schema_against_docker_compose_with_explicit_container(mocker, tmp
             )
 
         is_in_sync = schema_manager.check_schema(
-            "docker-compose.yml", container="worker"
+            "docker-compose.yml", service_name="app", container="worker"
         )
 
         assert is_in_sync is True
@@ -413,7 +422,7 @@ def test_check_schema_against_kubernetes_deployment_manifest(mocker, tmp_path):
                 "              value: info\n"
             )
 
-        is_in_sync = schema_manager.check_schema("deployment.yaml")
+        is_in_sync = schema_manager.check_schema("deployment.yaml", service_name="app")
 
         assert is_in_sync is True
 
@@ -443,6 +452,6 @@ def test_check_schema_against_kubernetes_manifest_flags_missing_var(mocker, tmp_
                 "              value: info\n"
             )
 
-        is_in_sync = schema_manager.check_schema("deployment.yaml")
+        is_in_sync = schema_manager.check_schema("deployment.yaml", service_name="app")
 
         assert is_in_sync is False

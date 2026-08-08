@@ -25,16 +25,16 @@ def test_detect_env_style_overrides_local_file_for_non_dot_env_variant(tmp_path)
 
 
 def test_detect_env_style_finds_python_config_module(tmp_path):
-    (tmp_path / "athena" / "config").mkdir(parents=True)
-    (tmp_path / "athena" / "config" / "env_config.local.py").write_text(
-        'DB_HOST = ""\nDB_NAME = "athena"\nCACHE_PORT = 6379\n'
+    (tmp_path / "alpha" / "config").mkdir(parents=True)
+    (tmp_path / "alpha" / "config" / "env_config.local.py").write_text(
+        'DB_HOST = ""\nDB_NAME = "alpha"\nCACHE_PORT = 6379\n'
     )
 
-    result = service_discovery.detect_env_style(str(tmp_path / "athena"))
+    result = service_discovery.detect_env_style(str(tmp_path / "alpha"))
 
     assert result["format"] == "python"
     assert result["local_file"] == str(
-        tmp_path / "athena" / "config" / "env_config.local.py"
+        tmp_path / "alpha" / "config" / "env_config.local.py"
     )
 
 
@@ -120,7 +120,7 @@ def test_detect_env_style_prefers_dotenv_over_python(tmp_path):
     assert result["format"] == "dotenv"
 
 
-def test_discover_candidates_finds_zeus_shaped_services_and_skips_libraries(tmp_path):
+def test_discover_candidates_finds_acme_shaped_services_and_skips_libraries(tmp_path):
     """
     Regression: a naive 'has a project marker (pyproject.toml/package.json)'
     heuristic would wrongly flag shared library packages as services --
@@ -128,17 +128,17 @@ def test_discover_candidates_finds_zeus_shaped_services_and_skips_libraries(tmp_
     service is, but have no environment config of their own.
     """
     # Real services: a Python-module-config one and a dotenv one.
-    (tmp_path / "athena" / "config").mkdir(parents=True)
-    (tmp_path / "athena" / "config" / "env_config.local.py").write_text(
-        'DB_HOST = ""\nDB_NAME = "athena"\nCACHE_PORT = 6379\n'
+    (tmp_path / "alpha" / "config").mkdir(parents=True)
+    (tmp_path / "alpha" / "config" / "env_config.local.py").write_text(
+        'DB_HOST = ""\nDB_NAME = "alpha"\nCACHE_PORT = 6379\n'
     )
     (tmp_path / "web").mkdir()
     (tmp_path / "web" / ".env").write_text("API_URL=http://localhost\n")
 
     # A shared library: has a project marker, but no env config at all.
-    (tmp_path / "modules" / "phineas").mkdir(parents=True)
-    (tmp_path / "modules" / "phineas" / "pyproject.toml").write_text(
-        "[project]\nname = 'phineas'\n"
+    (tmp_path / "modules" / "sharedlib").mkdir(parents=True)
+    (tmp_path / "modules" / "sharedlib" / "pyproject.toml").write_text(
+        "[project]\nname = 'sharedlib'\n"
     )
 
     # Noise directories that must never be walked into.
@@ -149,9 +149,9 @@ def test_discover_candidates_finds_zeus_shaped_services_and_skips_libraries(tmp_
     candidates = service_discovery.discover_candidates(str(tmp_path))
     names = {c["name"] for c in candidates}
 
-    assert names == {"athena", "web"}
-    athena = next(c for c in candidates if c["name"] == "athena")
-    assert athena["format"] == "python"
+    assert names == {"alpha", "web"}
+    alpha = next(c for c in candidates if c["name"] == "alpha")
+    assert alpha["format"] == "python"
     web = next(c for c in candidates if c["name"] == "web")
     assert web["format"] == "dotenv"
 
@@ -172,16 +172,16 @@ def test_discover_candidates_recurses_one_level_into_services_container(tmp_path
 
 def test_discover_candidates_skips_already_known_directories(tmp_path):
     """Idempotency for the 'extend' use case: a previously-registered service must not be re-suggested."""
-    (tmp_path / "athena").mkdir()
-    (tmp_path / "athena" / ".env").write_text("KEY=1\n")
-    (tmp_path / "hermes").mkdir()
-    (tmp_path / "hermes" / ".env").write_text("KEY=1\n")
+    (tmp_path / "alpha").mkdir()
+    (tmp_path / "alpha" / ".env").write_text("KEY=1\n")
+    (tmp_path / "beta").mkdir()
+    (tmp_path / "beta" / ".env").write_text("KEY=1\n")
 
     candidates = service_discovery.discover_candidates(
-        str(tmp_path), known_dirs=[str(tmp_path / "athena")]
+        str(tmp_path), known_dirs=[str(tmp_path / "alpha")]
     )
 
-    assert {c["name"] for c in candidates} == {"hermes"}
+    assert {c["name"] for c in candidates} == {"beta"}
 
 
 def test_discover_candidates_disambiguates_name_collisions(tmp_path):

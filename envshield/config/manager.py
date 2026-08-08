@@ -1,5 +1,5 @@
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import toml
 import yaml
@@ -64,30 +64,52 @@ def load_config(path: Optional[str] = None) -> Dict[str, Any]:
         raise ConfigParseError(config_path, str(e))
 
 
-def load_schema(service_name: Optional[str] = None) -> Dict[str, Any]:
+def load_schema(service_name: str) -> Dict[str, Any]:
     """
-    Loads and parses the env.schema.toml file.
+    Loads and parses a service's env.schema.toml file.
 
-    If `service_name` is provided, loads the schema for that specific service
-    (from envshield.yml's `services` section). Otherwise, loads the root schema.
-
-    This enables multi-service projects: each service has its own contract.
+    envshield.yml is "the brain": every project, single-service or not,
+    always has at least one named entry under `services` (see
+    generate_default_config_content) -- there is no separate root/rootless
+    shape to special-case here anymore. The schema itself stays "the
+    documentation": types, descriptions, secret flags, and everything else
+    describing what a variable *means* lives only in the TOML file this
+    loads, never in envshield.yml.
 
     A schema can also declare a top-level `extends` key (a path, or a list
     of paths, to one or more base schemas) to share common variables across
     services without copy-pasting them -- see `_load_schema_file`.
     """
-    schema_path = SCHEMA_FILE_NAME
-    if service_name:
-        schema_path = get_service_schema_path(service_name)
-        if not schema_path:
-            raise SchemaNotFoundError(
-                f"Service '{service_name}' not found in configuration."
-            )
+    schema_path = get_service_schema_path(service_name)
+    if not schema_path:
+        raise SchemaNotFoundError(
+            f"Service '{service_name}' not found in configuration."
+        )
 
     if not os.path.exists(schema_path):
         raise SchemaNotFoundError(f"Schema file not found: {schema_path}")
     return _load_schema_file(schema_path)
+
+
+def load_bare_schema(path: str = SCHEMA_FILE_NAME) -> Dict[str, Any]:
+    """
+    Loads a schema file directly by path, with no service registration
+    involved at all.
+
+    For a project that hasn't been registered in envshield.yml yet --
+    stateless, read-only commands like 'generate' (and 'import', writing a
+    fresh schema for the first time) have no real need for the "brain" at
+    all: they don't touch a service's local files, so there's no directory
+    or path resolution that actually depends on registration existing.
+    Requiring it anyway would just be ceremony for ceremony's sake. This is
+    the escape hatch for exactly that case -- callers that DO have a
+    registered service should still go through load_schema, which is what
+    keeps 'check'/'doctor'/'setup' safe from the single-service orphaning
+    bug this file's `services`-always-populated design exists to prevent.
+    """
+    if not os.path.exists(path):
+        raise SchemaNotFoundError(f"Schema file not found: {path}")
+    return _load_schema_file(path)
 
 
 def _load_toml_schema(schema_path: str) -> Dict[str, Any]:
@@ -163,16 +185,18 @@ def _load_schema_file(
 
 def get_services() -> Dict[str, Dict[str, Any]]:
     """
-    Returns the services defined in envshield.yml, or an empty dict if none.
+    Returns the services defined in envshield.yml, or an empty dict if the
+    project hasn't been initialized yet.
 
     Example return value:
     {
-        "api": {"path": "services/api/env.schema.toml", "description": "Backend API"},
-        "web": {"path": "services/web/env.schema.toml", "description": "Frontend"},
+        "api": {"schema": "services/api/env.schema.toml", "description": "Backend API"},
+        "web": {"schema": "services/web/env.schema.toml"},
     }
     """
     config = load_config()
-    return config.get("services", {})
+    services = config.get("services")
+    return services if isinstance(services, dict) else {}
 
 
 def get_service_schema_path(service_name: str) -> Optional[str]:
@@ -184,16 +208,11 @@ def get_service_schema_path(service_name: str) -> Optional[str]:
     if service_name not in services:
         return None
     service_config = services[service_name]
-    if isinstance(service_config, dict) and "path" in service_config:
+    if isinstance(service_config, dict) and "schema" in service_config:
         return _ensure_within_project(
-            service_config["path"], f"service '{service_name}' schema path"
+            service_config["schema"], f"service '{service_name}' schema path"
         )
     return None
-
-
-def is_multi_service() -> bool:
-    """Returns True if the project has multiple services configured."""
-    return len(get_services()) > 0
 
 
 def add_service(
@@ -202,21 +221,20 @@ def add_service(
     local_file: Optional[str] = None,
     example_file: Optional[str] = None,
     description: Optional[str] = None,
-    deployment_manifest: Optional[str] = None,
-    container: Optional[str] = None,
 ) -> None:
     """
     Adds (or overwrites) one service entry in envshield.yml, creating the
     file if it doesn't exist yet. Every other top-level key and every other
     already-configured service is left untouched -- this is what makes
     `envshield service discover`/`add` safe to run repeatedly to extend an
-    existing multi-service setup, not just bootstrap a fresh one.
+    existing setup, not just bootstrap a fresh one.
 
-    `deployment_manifest` (a docker-compose file or Kubernetes manifest) is
-    optional -- once registered, `check`/`doctor` validate it automatically
-    alongside the service's local file, with no need to name the file (or
-    pick `container`, when it's declared) on every invocation. See
-    get_deployment_manifest.
+    A deployment manifest is registered separately, via add_manifest -- it
+    maps a container name to a service name and isn't owned by any one
+    service entry (the common real shape is one compose file naming several
+    services at once, and duplicating "which manifest, which container" on
+    every one of them is exactly the kind of topology-vs-meaning drift this
+    file exists to avoid).
 
     Note: envshield.yml is rewritten via a full YAML re-serialization, so
     any hand-written comments in an existing file won't survive.
@@ -228,10 +246,6 @@ def add_service(
         example_file = _ensure_within_project(
             example_file, f"service '{name}' example_file"
         )
-    if deployment_manifest:
-        deployment_manifest = _ensure_within_project(
-            deployment_manifest, f"service '{name}' deployment_manifest"
-        )
 
     config = load_config()
     services = config.get("services")
@@ -239,61 +253,109 @@ def add_service(
         services = {}
     config["services"] = services
 
-    entry: Dict[str, Any] = {"path": schema_path}
+    entry: Dict[str, Any] = {"schema": schema_path}
     if description:
         entry["description"] = description
     if local_file:
         entry["local_file"] = local_file
     if example_file:
         entry["example_file"] = example_file
-    if deployment_manifest:
-        entry["deployment_manifest"] = deployment_manifest
-    if container:
-        entry["container"] = container
     services[name] = entry
 
     with open(CONFIG_FILE_NAME, "w") as f:
         yaml.dump(config, f, sort_keys=False, indent=2)
 
 
-def get_deployment_manifest(
-    service_name: Optional[str] = None,
-) -> Optional[Dict[str, Any]]:
+def remove_service(name: str) -> None:
     """
-    Returns the registered deployment manifest for a service (docker-compose
-    file or Kubernetes manifest -- see parsers/_docker_compose.py and
-    parsers/_kubernetes.py) as {"path": ..., "container": ... or None}, or
-    None if none is registered.
-
-    For a service, this reads that service's own 'deployment_manifest'/
-    'container' entry in envshield.yml. For a single-service/root project
-    (service_name=None), it reads the same two keys at the top level of
-    envshield.yml instead, since there's no per-service block to hold them.
+    De-registers one service from envshield.yml. Never deletes the
+    service's own files (schema, local env file, etc.) -- only the
+    registration entry, plus any manifest container mappings that pointed
+    at it (a mapping to a service that no longer exists is dead weight, not
+    a useful record).
     """
-    if service_name:
-        services = get_services()
-        entry = services.get(service_name)
-        if not isinstance(entry, dict) or "deployment_manifest" not in entry:
-            return None
-        path = _ensure_within_project(
-            entry["deployment_manifest"],
-            f"service '{service_name}' deployment_manifest",
-        )
-        return {"path": path, "container": entry.get("container")}
-
     config = load_config()
-    manifest_path = config.get("deployment_manifest")
-    if not manifest_path:
-        return None
-    path = _ensure_within_project(manifest_path, "deployment_manifest")
-    return {"path": path, "container": config.get("container")}
+    services = config.get("services")
+    if not isinstance(services, dict) or name not in services:
+        raise SchemaNotFoundError(f"Service '{name}' not found in configuration.")
+    del services[name]
+
+    manifests = config.get("manifests")
+    if isinstance(manifests, list):
+        for entry in manifests:
+            containers = entry.get("containers")
+            if isinstance(containers, dict):
+                for container_name in [k for k, v in containers.items() if v == name]:
+                    del containers[container_name]
+        config["manifests"] = [entry for entry in manifests if entry.get("containers")]
+
+    with open(CONFIG_FILE_NAME, "w") as f:
+        yaml.dump(config, f, sort_keys=False, indent=2)
+
+
+def add_manifest(file: str, containers: Dict[str, str]) -> None:
+    """
+    Registers (or extends) one deployment manifest, mapping its container
+    names to already-registered service names. Calling this again for the
+    same file merges in whatever new container mappings are given, rather
+    than replacing the entry outright -- the same "safe to run repeatedly"
+    property add_service has.
+    """
+    file = _ensure_within_project(file, "deployment manifest path")
+    config = load_config()
+    manifests = config.get("manifests")
+    if not isinstance(manifests, list):
+        manifests = []
+    config["manifests"] = manifests
+
+    for entry in manifests:
+        if entry.get("file") == file:
+            existing = entry.get("containers")
+            entry["containers"] = {
+                **(existing if isinstance(existing, dict) else {}),
+                **containers,
+            }
+            break
+    else:
+        manifests.append({"file": file, "containers": dict(containers)})
+
+    with open(CONFIG_FILE_NAME, "w") as f:
+        yaml.dump(config, f, sort_keys=False, indent=2)
+
+
+def get_deployment_manifests(service_name: str) -> List[Dict[str, Any]]:
+    """
+    Returns every registered deployment manifest that maps one of its
+    containers to `service_name`, as [{"path": ..., "container": ...}, ...].
+
+    A service can legitimately show up in more than one manifest (a local
+    docker-compose.yml and a production Kubernetes manifest, say), so this
+    returns a list rather than assuming at most one -- callers that only
+    ever expect zero-or-one should just take the first element.
+    """
+    config = load_config()
+    manifests = config.get("manifests")
+    if not isinstance(manifests, list):
+        return []
+
+    results = []
+    for entry in manifests:
+        file = entry.get("file")
+        containers = entry.get("containers")
+        if not file or not isinstance(containers, dict):
+            continue
+        for container_name, mapped_service in containers.items():
+            if mapped_service == service_name:
+                path = _ensure_within_project(file, f"deployment manifest '{file}'")
+                results.append({"path": path, "container": container_name})
+    return results
 
 
 def get_service_dir(service_name: str) -> str:
     """
     Returns the directory a service's schema lives in -- treated throughout
-    EnvShield as that service's root (e.g. 'athena' for a schema at
-    'athena/env.schema.toml'). Raises SchemaNotFoundError if the service
+    EnvShield as that service's root (e.g. 'alpha' for a schema at
+    'alpha/env.schema.toml'). Raises SchemaNotFoundError if the service
     isn't declared in envshield.yml.
     """
     schema_path = get_service_schema_path(service_name)
@@ -304,43 +366,36 @@ def get_service_dir(service_name: str) -> str:
     return os.path.dirname(schema_path) or "."
 
 
-def get_env_paths(service_name: Optional[str] = None) -> Dict[str, str]:
+def get_env_paths(service_name: str) -> Dict[str, str]:
     """
     Resolves the 'template' (tracked, e.g. '.env.example') and 'local' (real,
-    per-developer, e.g. '.env') environment file paths for a project or service.
+    per-developer, e.g. '.env') environment file paths for a service.
 
-    For a single-service project these default to '.env.example' / '.env' in
-    the current directory -- EnvShield's original behaviour. For a service
-    declared in envshield.yml, they default to the same filenames inside that
-    service's own directory (the directory its schema lives in), so sibling
-    services in a monorepo don't collide on one shared root-level file.
+    These default to '.env.example' / '.env' inside the service's own
+    directory (the directory its schema lives in) -- for a single-service
+    project, that directory is the project root itself, so this looks
+    exactly like EnvShield's original single-project behaviour; nothing
+    moves just because the project is technically "a service" now.
 
-    Either can be overridden per-service via 'example_file' / 'local_file' in
+    Either can be overridden via 'example_file' / 'local_file' in
     envshield.yml. An override is required whenever the local config isn't a
     dotenv file at all -- e.g. a Python module such as `env_config.local.py`
     in a Flask project. EnvShield picks its reader/writer by the file's
     extension (see parsers.factory.get_parser), so a '.py' override is enough
-    to make 'schema sync' and 'setup' treat it as source code instead of a
-    dotenv file: they patch/append plain assignments in place rather than
+    to make 'sync' and 'setup' treat it as source code instead of a dotenv
+    file: they patch/append plain assignments in place rather than
     regenerating the file wholesale.
     """
-    service_dir = "."
-    service_config: Dict[str, Any] = {}
-
-    if service_name:
-        service_dir = get_service_dir(service_name)
-        raw_config = get_services().get(service_name)
-        if isinstance(raw_config, dict):
-            service_config = raw_config
+    service_dir = get_service_dir(service_name)
+    service_config = get_services().get(service_name)
+    if not isinstance(service_config, dict):
+        service_config = {}
 
     def _resolve(override_key: str, default_name: str) -> str:
         override = service_config.get(override_key)
         if override:
             return _ensure_within_project(
-                override,
-                f"service '{service_name}' {override_key}"
-                if service_name
-                else override_key,
+                override, f"service '{service_name}' {override_key}"
             )
         return (
             default_name
@@ -355,20 +410,31 @@ def get_env_paths(service_name: Optional[str] = None) -> Dict[str, str]:
 
 
 def generate_default_config_content(
-    project_name: str, deployment_manifest: Optional[str] = None
+    project_name: str,
+    service_name: str,
+    schema_path: str = SCHEMA_FILE_NAME,
+    deployment_manifest: Optional[str] = None,
+    container: Optional[str] = None,
 ) -> str:
     """
-    Generates the YAML content for a default envshield.yml configuration file.
+    Generates the YAML content for a default envshield.yml configuration
+    file.
+
+    Always registers exactly one service (`service_name`), even for a
+    brand-new single-service project -- there is no separate "rootless"
+    shape. Growing from one service to several is then just appending
+    another entry to the same `services` map, not a structural migration.
 
     `deployment_manifest`, when given (a docker-compose file auto-detected
     at the project root -- see service_discovery.find_compose_file), is
-    registered up front so 'check'/'doctor' validate it automatically from
-    the very first run, with no separate opt-in step.
+    registered up front under `manifests` so `doctor`/`check` validate it
+    automatically from the very first run, with no separate opt-in step.
     """
-    config_data = {
+    config_data: Dict[str, Any] = {
         "project_name": project_name,
-        "version": 2.0,
-        "schema": SCHEMA_FILE_NAME,
+        "services": {
+            service_name: {"schema": schema_path},
+        },
         "secret_scanning": {
             "exclude_files": [
                 "**/tests/*",
@@ -377,7 +443,12 @@ def generate_default_config_content(
         },
     }
     if deployment_manifest:
-        config_data["deployment_manifest"] = deployment_manifest
+        config_data["manifests"] = [
+            {
+                "file": deployment_manifest,
+                "containers": {container or service_name: service_name},
+            }
+        ]
     header = "# EnvShield Configuration File\n# This file manages your project's security settings.\n\n"
     return header + yaml.dump(config_data, sort_keys=False, indent=2)
 

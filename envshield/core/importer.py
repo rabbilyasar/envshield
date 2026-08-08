@@ -92,7 +92,7 @@ def _classify_variable(key: str, value: str) -> Tuple[bool, Any]:
     # anything new. This used to be limited to a small hardcoded whitelist
     # of variable names (DEBUG, LOG_LEVEL, PORT, HOST, ...), which missed
     # every project-specific non-secret var -- e.g. a Flask app's
-    # `DB_NAME = "athena"` or `CACHE_PORT = 6379` got no suggested default
+    # `DB_NAME = "alpha"` or `CACHE_PORT = 6379` got no suggested default
     # at all, just because the name wasn't on the list.
     if value:
         return False, value
