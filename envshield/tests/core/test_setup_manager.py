@@ -281,8 +281,10 @@ def test_setup_all_services_runs_each_wizard_sequentially(mocker, tmp_path):
             f.write('[DB_URL]\ndescription="Beta DB"\nsecret=true\n')
 
         mocker.patch(
-            "questionary.select"
-        ).return_value.ask.return_value = "All services"
+            "envshield.core.service_manager._is_interactive", return_value=True
+        )
+        mock_select = mocker.patch("questionary.select")
+        mock_select.return_value.ask.return_value = "All services"
         mock_prompt = mocker.patch(
             "envshield.core.setup_manager.Prompt.ask",
             side_effect=["alpha-key-value", "beta-db-url"],
@@ -290,6 +292,7 @@ def test_setup_all_services_runs_each_wizard_sequentially(mocker, tmp_path):
 
         result = runner.invoke(app, ["setup"])
 
+        mock_select.assert_called_once()
         assert result.exit_code == 0
         assert mock_prompt.call_count == 2
         assert "── alpha ──" in result.stdout

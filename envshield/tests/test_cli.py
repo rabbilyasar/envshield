@@ -343,11 +343,14 @@ def test_schema_sync_without_service_prompts_and_runs_for_all_services(
     with runner.isolated_filesystem(temp_dir=tmp_path):
         _write_two_service_project()
         mocker.patch(
-            "questionary.select"
-        ).return_value.ask.return_value = "All services"
+            "envshield.core.service_manager._is_interactive", return_value=True
+        )
+        mock_select = mocker.patch("questionary.select")
+        mock_select.return_value.ask.return_value = "All services"
 
         result = runner.invoke(app, ["schema", "sync"])
 
+        mock_select.assert_called_once()
         assert result.exit_code == 0
         assert "── alpha ──" in result.stdout
         assert "── beta ──" in result.stdout
@@ -381,11 +384,14 @@ def test_doctor_without_service_runs_for_all_services(mocker, tmp_path):
         with open("beta/.env", "w") as f:
             f.write("DB_URL=postgres://x\n")
         mocker.patch(
-            "questionary.select"
-        ).return_value.ask.return_value = "All services"
+            "envshield.core.service_manager._is_interactive", return_value=True
+        )
+        mock_select = mocker.patch("questionary.select")
+        mock_select.return_value.ask.return_value = "All services"
 
         result = runner.invoke(app, ["doctor"])
 
+        mock_select.assert_called_once()
         assert "── alpha ──" in result.stdout
         assert "── beta ──" in result.stdout
 
@@ -398,11 +404,14 @@ def test_check_without_service_runs_for_all_services(mocker, tmp_path):
         with open("beta/.env", "w") as f:
             f.write("DB_URL=postgres://x\n")
         mocker.patch(
-            "questionary.select"
-        ).return_value.ask.return_value = "All services"
+            "envshield.core.service_manager._is_interactive", return_value=True
+        )
+        mock_select = mocker.patch("questionary.select")
+        mock_select.return_value.ask.return_value = "All services"
 
         result = runner.invoke(app, ["check"])
 
+        mock_select.assert_called_once()
         assert result.exit_code == 0
         assert "── alpha ──" in result.stdout
         assert "── beta ──" in result.stdout

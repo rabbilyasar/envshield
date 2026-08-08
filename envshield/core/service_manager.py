@@ -1,6 +1,7 @@
 # envshield/core/service_manager.py
 # Helpers for multi-service projects.
 
+import sys
 from typing import List, Optional, Union
 
 import questionary
@@ -12,6 +13,17 @@ from .exceptions import EnvShieldException
 console = Console()
 
 ALL_SERVICES_CHOICE = "All services"
+
+
+def _is_interactive() -> bool:
+    """
+    Whether there's a real terminal to prompt on. A separate, mockable seam
+    rather than inlining 'sys.stdin.isatty()' at the call site -- test
+    runners (Typer's CliRunner included) swap sys.stdin for their own
+    stream for the duration of a run, which would silently defeat a patch
+    aimed directly at 'sys.stdin.isatty'.
+    """
+    return sys.stdin.isatty()
 
 
 def get_available_services() -> List[str]:
@@ -61,6 +73,21 @@ def resolve_service(
     # Only one service: select it automatically
     if len(available) == 1:
         return available[0]
+
+    # Multiple services, none specified, and no TTY to prompt on (CI, a
+    # piped/redirected invocation, etc.) -- never block on a prompt that can
+    # never be answered. A command that can run against every service
+    # (allow_multiple) does so, matching what --json already does explicitly;
+    # one that can't (it writes a single output, e.g. 'generate'/'import')
+    # has to be told which service, so fail with a clear, actionable error
+    # instead of hanging or raising a raw EOFError from questionary.
+    if not _is_interactive():
+        if allow_multiple:
+            return available
+        raise EnvShieldException(
+            "Multiple services configured and no terminal to prompt on. "
+            f"Pass --service explicitly. Available: {', '.join(available)}"
+        )
 
     # Multiple services, none specified: prompt the user
     choices = available + ([ALL_SERVICES_CHOICE] if allow_multiple else [])
