@@ -43,6 +43,26 @@ def _ensure_within_project(path: str, label: str) -> str:
     return path
 
 
+def find_project_root(start: str = ".") -> Optional[str]:
+    """
+    Walks upward from `start` looking for envshield.yml, the same way Git
+    locates a repository from any subdirectory -- so a command run from
+    inside a service's own directory (e.g. 'services/api') still finds the
+    project's config instead of reporting an uninitialized project.
+
+    Returns the absolute directory containing envshield.yml, or None if
+    there isn't one anywhere above `start`.
+    """
+    current = os.path.abspath(start)
+    while True:
+        if os.path.isfile(os.path.join(current, CONFIG_FILE_NAME)):
+            return current
+        parent = os.path.dirname(current)
+        if parent == current:
+            return None
+        current = parent
+
+
 def load_config(path: Optional[str] = None) -> Dict[str, Any]:
     """
     Loads and parses the envshield.yml file.

@@ -1,6 +1,7 @@
 # envshield/core/service_manager.py
 # Helpers for multi-service projects.
 
+import os
 import sys
 from typing import List, Optional, Union
 
@@ -32,16 +33,49 @@ def get_available_services() -> List[str]:
     return sorted(services.keys())
 
 
+def _infer_from_invocation_dir(
+    available: List[str], invocation_dir: Optional[str]
+) -> Optional[str]:
+    """
+    If the command was run from inside (or at) exactly one registered
+    service's own directory -- e.g. 'cd services/api && envshield doctor' --
+    that's the service, no --service or prompt needed. Falls through to the
+    normal resolution (silently returning None) whenever that's ambiguous:
+    invoked from the project root, from outside every service directory, or
+    -- unlikely, but possible with nested service dirs -- inside more than
+    one at once.
+    """
+    if not invocation_dir:
+        return None
+    invocation_dir = os.path.abspath(invocation_dir)
+    matches = []
+    for name in available:
+        try:
+            service_dir = os.path.abspath(config_manager.get_service_dir(name))
+        except EnvShieldException:
+            continue
+        if invocation_dir == service_dir or invocation_dir.startswith(
+            service_dir + os.sep
+        ):
+            matches.append(name)
+    return matches[0] if len(matches) == 1 else None
+
+
 def resolve_service(
-    service_name: Optional[str] = None, allow_multiple: bool = False
+    service_name: Optional[str] = None,
+    allow_multiple: bool = False,
+    invocation_dir: Optional[str] = None,
 ) -> Union[str, List[str]]:
     """
     Resolves which service(s) a command should operate on.
 
     If `service_name` is provided, validates it exists and returns it.
     If None and there's only one service, returns that service automatically.
-    If None and multiple services are configured, interactively prompts the
-    user to pick one (or, if `allow_multiple`, all of them at once).
+    If None, multiple services are configured, and `invocation_dir` sits
+    inside exactly one of them, that one is picked -- no flag or prompt
+    needed for the common case of standing inside a service's own directory.
+    Otherwise, interactively prompts the user to pick one (or, if
+    `allow_multiple`, all of them at once).
 
     envshield.yml always has at least one registered service once a project
     has been initialized -- a single-service project is just the one-entry
@@ -74,6 +108,10 @@ def resolve_service(
     if len(available) == 1:
         return available[0]
 
+    inferred = _infer_from_invocation_dir(available, invocation_dir)
+    if inferred:
+        return inferred
+
     # Multiple services, none specified, and no TTY to prompt on (CI, a
     # piped/redirected invocation, etc.) -- never block on a prompt that can
     # never be answered. A command that can run against every service
@@ -105,14 +143,19 @@ def resolve_service(
     return selected
 
 
-def resolve_targets(service_name: Optional[str] = None) -> List[str]:
+def resolve_targets(
+    service_name: Optional[str] = None, invocation_dir: Optional[str] = None
+) -> List[str]:
     """
     Resolves --service into the list of service_name targets a command should
-    run against. An explicit service, or one auto-selected because it's the
-    only one configured, yields a single target; picking "All services" (see
-    resolve_service) yields every configured service. Always returns a list,
-    so callers can loop unconditionally instead of branching on the return
-    type of `resolve_service`.
+    run against. An explicit service, one auto-selected because it's the
+    only one configured, or one inferred from `invocation_dir` yields a
+    single target; picking "All services" (see resolve_service) yields every
+    configured service. Always returns a list, so callers can loop
+    unconditionally instead of branching on the return type of
+    `resolve_service`.
     """
-    resolved = resolve_service(service_name, allow_multiple=True)
+    resolved = resolve_service(
+        service_name, allow_multiple=True, invocation_dir=invocation_dir
+    )
     return resolved if isinstance(resolved, list) else [resolved]

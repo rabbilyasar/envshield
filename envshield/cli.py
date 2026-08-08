@@ -45,8 +45,16 @@ app = typer.Typer(
 console = Console()
 
 
+# The directory envshield was actually invoked from, captured before any
+# chdir below -- lets a command run from inside a service's own directory
+# (e.g. 'services/api') still be matched to that service automatically. See
+# service_manager.resolve_service's `invocation_dir` parameter.
+INVOCATION_DIR: Optional[str] = None
+
+
 @app.callback()
 def main(
+    ctx: typer.Context,
     version: bool = typer.Option(
         None,
         "--version",
@@ -57,7 +65,17 @@ def main(
     ),
 ) -> None:
     """EnvShield: Your Environment's First Line of Defense."""
-    pass
+    global INVOCATION_DIR
+    INVOCATION_DIR = os.getcwd()
+
+    # 'init' always operates on literal cwd -- it's the one command whose
+    # whole job is "set up a project right here"; walking up to an
+    # ancestor's envshield.yml first would make it report an unrelated
+    # parent project as already set up instead of initializing this one.
+    if ctx.invoked_subcommand != "init":
+        root = config_manager.find_project_root()
+        if root and os.path.abspath(root) != INVOCATION_DIR:
+            os.chdir(root)
 
 
 schema_app = typer.Typer(
@@ -237,14 +255,12 @@ def check(
 ):
     """Validates a local environment file against the schema. Also accepts a docker-compose or Kubernetes manifest."""
     try:
-        # --json is for CI/scripting -- never block on the interactive
-        # "Which service?" picker; run every configured service instead.
-        if json_output and not service:
-            targets = cast(
-                List[Optional[str]], service_manager.get_available_services() or [None]
-            )
-        else:
-            targets = service_manager.resolve_targets(service)
+        # resolve_targets already never blocks on the interactive "Which
+        # service?" picker without a TTY to answer it (CI/scripting,
+        # --json included) -- it runs every configured service instead.
+        targets = service_manager.resolve_targets(
+            service, invocation_dir=INVOCATION_DIR
+        )
     except EnvShieldException as e:
         if json_output:
             print(json.dumps({"success": False, "error": str(e)}, indent=2))
@@ -347,14 +363,12 @@ def doctor_command(
         raise typer.Exit(code=1)
 
     try:
-        # --json is for CI/scripting -- never block on the interactive
-        # "Which service?" picker; run every configured service instead.
-        if json_output and not service:
-            targets = cast(
-                List[Optional[str]], service_manager.get_available_services() or [None]
-            )
-        else:
-            targets = service_manager.resolve_targets(service)
+        # resolve_targets already never blocks on the interactive "Which
+        # service?" picker without a TTY to answer it (CI/scripting,
+        # --json included) -- it runs every configured service instead.
+        targets = service_manager.resolve_targets(
+            service, invocation_dir=INVOCATION_DIR
+        )
     except EnvShieldException as e:
         if json_output:
             print(json.dumps({"success": False, "error": str(e)}, indent=2))
@@ -407,7 +421,9 @@ def setup(
 ):
     """Interactively creates (or completes) a local environment file from the schema."""
     try:
-        targets = service_manager.resolve_targets(service)
+        targets = service_manager.resolve_targets(
+            service, invocation_dir=INVOCATION_DIR
+        )
     except EnvShieldException as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(code=1)
@@ -450,7 +466,9 @@ def schema_sync(
 ):
     """Generates/updates the environment template from your schema."""
     try:
-        targets = service_manager.resolve_targets(service)
+        targets = service_manager.resolve_targets(
+            service, invocation_dir=INVOCATION_DIR
+        )
     except EnvShieldException as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(code=1)
@@ -563,7 +581,10 @@ def generate(
             raise typer.Exit()
 
         if service or service_manager.get_available_services():
-            resolved_service = cast(str, service_manager.resolve_service(service))
+            resolved_service = cast(
+                str,
+                service_manager.resolve_service(service, invocation_dir=INVOCATION_DIR),
+            )
             schema = config_manager.load_schema(service_name=resolved_service)
         else:
             # Nothing registered yet -- generate doesn't touch a service's
@@ -626,7 +647,7 @@ def scan(
             # Validate eagerly for a consistent "Available: ..." error --
             # run_scan's own service_name=None path means "check every
             # configured service", so this only fires for an explicit name.
-            service_manager.resolve_service(service)
+            service_manager.resolve_service(service, invocation_dir=INVOCATION_DIR)
 
         if json_output:
             result = scanner.scan_result(
@@ -698,7 +719,7 @@ def import_command(
     """Generates an env.schema.toml from an existing .env file."""
     try:
         if service:
-            service_manager.resolve_service(service)
+            service_manager.resolve_service(service, invocation_dir=INVOCATION_DIR)
             output = cast(str, config_manager.get_service_schema_path(service))
         elif output == config_manager.SCHEMA_FILE_NAME:
             if service_manager.get_available_services():
@@ -708,7 +729,12 @@ def import_command(
                 # same default-targeting every other command uses, rather
                 # than writing to a literal path that's only coincidentally
                 # correct for a single, unnested service.
-                service = cast(str, service_manager.resolve_service(None))
+                service = cast(
+                    str,
+                    service_manager.resolve_service(
+                        None, invocation_dir=INVOCATION_DIR
+                    ),
+                )
                 output = cast(str, config_manager.get_service_schema_path(service))
             else:
                 # Totally fresh project, nothing registered yet: bootstrap

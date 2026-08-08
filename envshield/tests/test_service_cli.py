@@ -1,4 +1,5 @@
 # envshield/tests/test_service_cli.py
+import json
 import os
 
 from typer.testing import CliRunner
@@ -231,3 +232,47 @@ def test_service_add_explicit_deployment_manifest_and_container(tmp_path):
         assert result.exit_code == 0
         manifests = config_manager.get_deployment_manifests("api")
         assert manifests == [{"path": "docker-compose.yml", "container": "backend"}]
+
+
+def test_commands_find_envshield_yml_from_a_subdirectory(tmp_path):
+    """
+    envshield.yml lookup now walks upward like Git finds '.git' -- a command
+    run from inside a service's own directory shouldn't report an
+    uninitialized project just because envshield.yml lives at the repo root.
+
+    Plain os.chdir, not monkeypatch.chdir: isolated_filesystem already
+    restores the real pre-test cwd in its own finally block regardless of
+    what happens inside it, and stacking monkeypatch's chdir-restore on top
+    fires afterwards, once isolated_filesystem has already moved out of
+    tmp_path -- leaving the process cwd pointed at a now-orphaned directory.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.makedirs("api/nested")
+        runner.invoke(app, ["service", "add", "api", "api"])
+        os.chdir("api/nested")
+
+        result = runner.invoke(app, ["service", "list"])
+
+        assert result.exit_code == 0
+        assert "api" in result.stdout
+
+
+def test_doctor_infers_service_from_invocation_directory(tmp_path):
+    """
+    The other half of directory-context inference: with more than one
+    service configured and no --service given, running from inside one
+    service's own directory should target that service -- not prompt or
+    (worse, with no TTY) crash.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.makedirs("api")
+        os.makedirs("web")
+        runner.invoke(app, ["service", "add", "api", "api"])
+        runner.invoke(app, ["service", "add", "web", "web"])
+        os.chdir("api")
+
+        result = runner.invoke(app, ["doctor", "--json"])
+
+        assert result.exit_code in (0, 1)  # health failures are fine; a crash isn't
+        payload = json.loads(result.stdout)
+        assert [r["service"] for r in payload["results"]] == ["api"]
