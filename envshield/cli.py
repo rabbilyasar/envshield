@@ -88,6 +88,12 @@ service_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(service_app, name="service")
+hook_app = typer.Typer(
+    name="hook",
+    help="Install, check, and remove EnvShield's Git hooks.",
+    no_args_is_help=True,
+)
+app.add_typer(hook_app, name="hook")
 
 
 def _seed_schema_from_file(config_file: str, schema_path: str) -> None:
@@ -676,15 +682,51 @@ def scan(
         raise typer.Exit(code=1)
 
 
+def _install_hooks() -> None:
+    scanner.install_pre_commit_hook()
+    scanner.install_post_merge_hook()
+
+
 @app.command("install-hook")
 def install_hook():
-    """Installs Git hooks: pre-commit (scan for secrets) and post-merge (check env config after pull)."""
+    """Installs Git hooks: pre-commit (scan for secrets) and post-merge (check env config after pull). Same as 'hook install'."""
     try:
-        scanner.install_pre_commit_hook()
-        scanner.install_post_merge_hook()
+        _install_hooks()
     except EnvShieldException as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(code=1)
+
+
+@hook_app.command("install")
+def hook_install():
+    """Installs Git hooks: pre-commit (scan for secrets) and post-merge (check env config after pull)."""
+    try:
+        _install_hooks()
+    except EnvShieldException as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
+        raise typer.Exit(code=1)
+
+
+@hook_app.command("status")
+def hook_status():
+    """Shows which EnvShield Git hooks are currently installed."""
+    hooks_manager.HooksManager().print_hook_status()
+
+
+@hook_app.command("remove")
+def hook_remove():
+    """Removes any EnvShield-installed Git hook. Leaves alone any hook EnvShield didn't install."""
+    try:
+        removed = scanner.remove_hooks()
+    except EnvShieldException as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
+        raise typer.Exit(code=1)
+
+    if not removed:
+        console.print("[yellow]No EnvShield-installed hooks found to remove.[/yellow]")
+        return
+    for hook_name in removed:
+        console.print(f"[bold green]✓[/bold green] Removed {hook_name} hook.")
 
 
 @app.command(name="import")

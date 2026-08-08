@@ -610,6 +610,35 @@ def scan_result(
 _ENVSHIELD_HOOK_MARKER = "# Hook installed by EnvShield"
 
 
+def remove_hooks() -> List[str]:
+    """
+    Removes any EnvShield-installed Git hook (pre-commit, post-merge),
+    identified by the same '# Hook installed by EnvShield' marker `install`
+    already checks before offering to overwrite -- a hook that isn't
+    EnvShield's is left alone rather than deleted out from under whatever
+    else manages it (Husky, a hand-written script, etc.).
+
+    Returns the names of the hooks actually removed.
+    """
+    git_root = git_utils.get_git_root()
+    if not git_root:
+        raise EnvShieldException("Not inside a Git repository.")
+
+    hooks_dir = git_utils.get_hooks_dir()
+    removed = []
+    for hook_name in ("pre-commit", "post-merge"):
+        hook_path = os.path.join(hooks_dir, hook_name)
+        if not os.path.exists(hook_path):
+            continue
+        with open(hook_path, "r") as f:
+            content = f.read()
+        if _ENVSHIELD_HOOK_MARKER not in content:
+            continue
+        os.remove(hook_path)
+        removed.append(hook_name)
+    return removed
+
+
 def _describe_existing_hook(content: str) -> str:
     """Best-effort description of an existing hook file, for the overwrite warning."""
     if _ENVSHIELD_HOOK_MARKER in content:
