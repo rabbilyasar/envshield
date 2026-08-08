@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented in this file.
 
+## [4.5.0] - 2026-08-08
+
+### Added
+- **`envshield.yml` always registers at least one service.** A single-service project is now just the one-entry case of the same `services` map a multi-service project has, instead of a separate "rootless" shape — growing from 1 to N services is appending an entry, not a structural migration. A service's schema path moves from `path:` to `schema:` in `envshield.yml` (no backward-compat shim — an existing multi-service config needs updating), and deployment manifests move from a per-service `deployment_manifest` field to a top-level `manifests:` list, so one manifest naming several services isn't duplicated per entry and a service can validate against more than one manifest at once. Also adds `service remove` and schema `extends` composition. See [Command reference](README.md#command-reference).
+- **Directory-context inference.** A command run from inside a registered service's own directory (e.g. `services/api/`) now scopes to that service automatically — no `--service`, no prompt. `envshield.yml` lookup also walks upward from the current directory looking for it, the way Git finds `.git`, instead of requiring you to stand at the exact project root. See [Monorepo: managing multiple services](README.md#monorepo-managing-multiple-services).
+- **`envshield hook install` / `hook status` / `hook remove`.** A proper noun/verb group for git hooks, alongside the existing `service`/`schema` groups. The old flat `envshield install-hook` still works, identically to `hook install`. `hook status` reports which hooks are currently installed; `hook remove` deletes only hooks EnvShield itself installed, leaving anything else (Husky, a hand-written script) untouched. See [Git hooks](README.md#git-hooks).
+
+### Fixed
+- A command run without `--service` on a multi-service project, with no terminal attached (CI, a script, a piped invocation), used to either hang waiting for input that would never arrive or crash with a raw `EOFError` from the interactive "Which service?" picker. It now runs against every configured service automatically (for `check`/`doctor`/`setup`/`schema sync`) or fails with a clear "pass `--service` explicitly" error (for `generate`/`import`, which can't run against more than one target).
+- `init`, `setup`, and `service discover --yes` could fully succeed — registering services, seeding schemas — and then exit 1 with a bare `Aborted.` anyway, because the hook-install offer that runs right after has its own confirmation prompt with no equivalent TTY guard. It now silently declines the offer instead of aborting when there's no terminal to ask on.
+
 ## [4.4.0] - 2026-08-07
 
 ### Added
