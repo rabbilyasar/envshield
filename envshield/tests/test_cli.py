@@ -26,6 +26,7 @@ def test_init_command_in_git_repo(tmp_path, mocker):
     with runner.isolated_filesystem(temp_dir=tmp_path):
         os.system("git init")
         # Mock the hook installation prompt to answer "yes"
+        mocker.patch("envshield.core.hooks_manager._is_interactive", return_value=True)
         mocker.patch("questionary.confirm").return_value.ask.return_value = True
         result = runner.invoke(app, ["init"])
         assert result.exit_code == 0, (

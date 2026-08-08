@@ -69,3 +69,25 @@ def test_hook_remove_outside_git_repo_errors_clearly(tmp_path):
 
         assert result.exit_code == 1
         assert "Not inside a Git repository" in result.stdout
+
+
+def test_service_discover_does_not_abort_on_the_post_registration_hook_offer(tmp_path):
+    """
+    Regression: 'service discover --yes' (and, by the same code path, 'init'
+    and 'setup') used to fully succeed -- register every service, seed every
+    schema -- and then exit 1 with a bare 'Aborted.' anyway, because the
+    hook-install offer that runs right after has its own confirm prompt with
+    no TTY guard. '--yes' only ever covered which services to register, not
+    this second, unrelated prompt.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _init_git_repo()
+        os.makedirs("api")
+        with open("api/.env", "w") as f:
+            f.write("KEY=1\n")
+
+        result = runner.invoke(app, ["service", "discover", "--yes"])
+
+        assert result.exit_code == 0, result.stdout
+        assert "Added 1 service" in result.stdout
+        assert not os.path.exists(".git/hooks/pre-commit")

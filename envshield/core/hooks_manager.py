@@ -1,6 +1,7 @@
 """Manages Git hooks installation and lifecycle."""
 
 import os
+import sys
 from typing import Tuple
 
 import questionary
@@ -10,6 +11,17 @@ from ..core.exceptions import EnvShieldException
 from ..utils import git_utils
 
 console = Console()
+
+
+def _is_interactive() -> bool:
+    """
+    Whether there's a real terminal to prompt on. Without this check,
+    offering to install hooks from a non-interactive context (CI,
+    'service discover --yes', a piped 'init') aborts with a raw questionary
+    EOF error even after the actual work -- registering services, writing
+    schemas -- already succeeded.
+    """
+    return sys.stdin.isatty()
 
 
 class HooksManager:
@@ -59,6 +71,9 @@ class HooksManager:
             bool: True if user wants to install, False otherwise
         """
         if not self.should_prompt_for_installation():
+            return False
+
+        if not _is_interactive():
             return False
 
         pre_commit, post_merge = self.are_hooks_installed()
