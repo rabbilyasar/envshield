@@ -312,7 +312,7 @@ Everything a single-service project ever needs. `--service` shows up on most of 
 | `envshield schema sync [--service NAME]` | Regenerates `.env.example` from the schema (a dotenv project), or patches a Python-module local file in place to declare any schema variable it's missing (never rewrites it wholesale — only appends/patches the specific lines it owns). `import` already calls this automatically for you when it changes a project's/service's real schema, so you'll rarely need to run it by hand except after a manual schema edit. |
 | `envshield generate [output_file] [--lang/-l python\|typescript] [--force/-f] [--service NAME]` | Compiles the schema into a typed, validated config module. `--lang` is auto-detected from your project (Next.js/Vite/Node.js → TypeScript; Python/Django/Flask, or nothing detected → Python) if omitted. A detected ecosystem with no codegen target at all (currently: Go) errors and asks for `--lang` explicitly, rather than silently guessing Python. Defaults to writing `config.py`/`config.ts`; `--force` overwrites an existing output file. See [Typed config code generation](#typed-config-code-generation). |
 | `envshield scan [paths...] [--staged] [--config/-c PATH] [--exclude/-e PATTERN] [--service NAME] [--json]` | Scans code for hardcoded secrets and for env vars used in code (`os.getenv`, `os.environ.get`, `process.env.X`) but never declared in the schema. `--staged` scans only what's staged for the next commit (what the pre-commit hook runs); `--exclude` (repeatable) adds glob patterns to skip, on top of whatever `secret_scanning.exclude_files` is set in `envshield.yml`. See [Secret scanning and git hooks](#secret-scanning-and-git-hooks). |
-| `envshield install-hook` | Installs both git hooks by hand, without going through `init`/`setup`/`service discover`'s interactive prompt. |
+| `envshield hook install` / `envshield hook status` / `envshield hook remove` | Installs both git hooks by hand, without going through `init`/`setup`/`service discover`'s interactive prompt; reports which hooks are currently installed; or removes any EnvShield-installed hook (leaving alone anything EnvShield didn't install — Husky, a hand-written script). The old flat `envshield install-hook` still works, identically to `hook install`. |
 | `envshield --version` / `-v` | Prints the installed version and exits. |
 
 **Not using a `.env` file at all?** Some projects (a Flask app whose local config is a checked-in Python module, for example) don't use dotenv at all. Point `local_file` at it instead, and EnvShield reads and writes it as source code, not as a dotenv file — appending or patching only the specific assignments it owns, never touching anything else in the file:
@@ -326,7 +326,7 @@ services:
 
 ### Monorepo: managing multiple services
 
-*(Only relevant once your repo has more than one service — see [A monorepo with multiple services](#a-monorepo-with-multiple-services).)* Every core command above already accepts `--service`: automatically, if there's only one service configured; interactively (or against every service at once, via "All services"), if there's more than one.
+*(Only relevant once your repo has more than one service — see [A monorepo with multiple services](#a-monorepo-with-multiple-services).)* Every core command above already accepts `--service`, but you'll rarely need to type it. In order, EnvShield tries: the explicit `--service` you passed; the only service configured, if there's just one; whichever registered service's directory you're currently standing inside (run `envshield doctor` from inside `services/api/` and it scopes to `api` automatically, no flag needed); and only then does it ask — interactively, picking one service or "All services" at once. In a non-interactive context (CI, a script, anything with no terminal attached), a command that can run against every service (`check`, `doctor`, `setup`, `schema sync`) does exactly that instead of prompting; a command that writes one output (`generate`, `import`) fails clearly asking for `--service` instead of hanging.
 
 | Command | What it does |
 |---|---|
@@ -549,12 +549,14 @@ Line 47: PRODUCTION_SECRET = 'a_real_secret_that_just_got_added'
 
 ### Git hooks
 
-`envshield install-hook` (or the interactive prompt during `init`/`setup`/`service discover`) installs two hooks:
+`envshield hook install` (or the interactive prompt during `init`/`setup`/`service discover`) installs two hooks:
 
 - **pre-commit** — runs `envshield scan --staged`, aborting the commit if it finds anything.
 - **post-merge** — runs `envshield doctor` after every `git pull`/merge, but only when a schema file actually changed in that merge, so a teammate who just added a new required variable gets alerted immediately instead of finding out the next time the app crashes.
 
 Hooks respect a configured `core.hooksPath` (as set by Husky or similar tools) instead of assuming `.git/hooks`, and installing over an existing hook always tells you first whether that hook was EnvShield's own (safe to replace) or something else (naming how many lines of unrelated logic would be lost) before asking you to confirm.
+
+`envshield hook status` reports which of the two are currently installed. `envshield hook remove` removes any EnvShield-installed hook — identified by the same marker `install` checks before offering to overwrite — leaving anything EnvShield didn't install (Husky, a hand-written script) untouched.
 
 ---
 
@@ -572,7 +574,7 @@ A few concrete starting points, depending on what you're working with:
 
 **A project deployed via docker-compose or Kubernetes.** Register the manifest once — `service add ... --deployment-manifest docker-compose.yml`, or let `init`/`service discover` find it automatically — and `check`/`doctor` start validating it immediately, with no change to how you deploy.
 
-**A team of more than a couple of people.** Install the git hooks (say yes when prompted, or run `install-hook`). Add `envshield check` (or `envshield doctor`) as a CI step so drift fails a pull request instead of a deploy — see the next section.
+**A team of more than a couple of people.** Install the git hooks (say yes when prompted, or run `hook install`). Add `envshield check` (or `envshield doctor`) as a CI step so drift fails a pull request instead of a deploy — see the next section.
 
 ---
 
@@ -594,7 +596,7 @@ This catches the exact failure mode EnvShield exists to prevent: a pull request 
 
 **Whenever you add a new environment variable, add it to the schema in the same commit, not after.** The pre-commit hook's `scan --staged` will actually catch you here — a newly-used, undeclared variable shows up as a warning before you can commit it. Treat that warning as the schema reminding you, not as noise to dismiss.
 
-**Run `envshield doctor` after pulling, not just when something's already broken.** The post-merge hook does this automatically whenever a schema file changed in the merge — if you skipped installing hooks initially, `envshield install-hook` takes thirty seconds and pays for itself the first time a teammate adds a required variable without telling anyone.
+**Run `envshield doctor` after pulling, not just when something's already broken.** The post-merge hook does this automatically whenever a schema file changed in the merge — if you skipped installing hooks initially, `envshield hook install` takes thirty seconds and pays for itself the first time a teammate adds a required variable without telling anyone.
 
 **When a shared variable changes, update the base schema once, not every service that extends it.** If you're using `extends` (see [Sharing variables across services](#sharing-variables-across-services-extends)), a change to `LOG_LEVEL`'s description or default belongs in the base schema — every service extending it picks it up automatically, with nothing to keep in sync by hand.
 
@@ -630,11 +632,11 @@ EnvShield isn't trying to replace a dedicated secret scanner or a cloud secret m
 
 **`check`/`doctor` say a manifest declares "multiple services" / "multiple containers."** Pass `--container <name>` explicitly, or register the manifest with `service add --deployment-manifest ... --container <name>` so you never have to pass it again.
 
-**My pre-commit hook doesn't seem to run.** Check `git config core.hooksPath` — if it's set (Husky sets this), EnvShield installs there instead of `.git/hooks`, but if the hook was installed by an older EnvShield version before that was supported, re-run `envshield install-hook`. `envshield doctor` includes a "Git Pre-commit Hook" check that catches this.
+**My pre-commit hook doesn't seem to run.** Check `git config core.hooksPath` — if it's set (Husky sets this), EnvShield installs there instead of `.git/hooks`, but if the hook was installed by an older EnvShield version before that was supported, re-run `envshield hook install`. `envshield doctor` includes a "Git Pre-commit Hook" check that catches this.
 
 **`scan` is flagging something that isn't a secret, or missing something that is.** The scanner is regex/entropy-based, not a machine-learning classifier — it's tuned to be broadly useful, not perfect for every codebase. For a false positive, add a targeted `--exclude` glob or a `secret_scanning.exclude_files` entry. For a miss, please open an issue with the (redacted) pattern that slipped through — and if secret-detection *accuracy* specifically is your priority, consider running Gitleaks or a similar dedicated scanner alongside `scan` rather than relying on it alone.
 
-**Can I use EnvShield without git hooks?** Yes — every command works standalone. Hooks are a convenience, not a requirement; decline the prompt (or never run `install-hook`) if your team manages hooks another way.
+**Can I use EnvShield without git hooks?** Yes — every command works standalone. Hooks are a convenience, not a requirement; decline the prompt (or never run `hook install`) if your team manages hooks another way. `envshield hook remove` cleans up ones you already installed.
 
 **Does EnvShield ever send my configuration or secrets anywhere?** No. Every command reads and writes local files. There is no telemetry, no network calls, and no cloud backend in the current release.
 
