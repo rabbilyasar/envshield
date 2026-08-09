@@ -147,7 +147,9 @@ envshield service discover
 ✓ Registered web → services/web/env.schema.toml
 ```
 
-One command scans for service-like directories (anything with a real `.env`-style file or a recognizable Python config module), registers each one in `envshield.yml`, seeds each schema from that service's actual current values, and — if it finds a `docker-compose.yml` in the service's directory or the project root — registers that too. It's additive: run it again later and it only picks up what's new, leaving already-configured services untouched.
+One command scans for service-like directories (anything with a real `.env`-style file or a recognizable Python config module), registers each one in `envshield.yml`, seeds each schema from that service's actual current values, and — if it finds a `docker-compose.yml` in the service's directory or the project root — registers that too. It's additive: run it again later and it only picks up what's new, leaving already-configured services untouched. Service directories don't need to live under a specific folder name — a Turborepo/Nx/Lerna-style `services/`/`apps`/`packages/` container is recursed into unconditionally, and any other container name (`workspaces/`, `components/`, whatever a given repo calls it) is detected the same way as long as it holds 2 or more service-like children; a single nested service under a non-standard name is the one case this can't reliably tell apart from an ordinary directory, so register that one with `service add` directly.
+
+Running plain `envshield init` on a project shaped like this — service-like subdirectories, nothing real at the root itself — is caught before it can do the wrong thing: instead of silently fabricating a generic, fictional schema for a root service that doesn't really exist, it warns and asks whether you meant to run `service discover` instead.
 
 Every command below is service-aware once you have more than one:
 
@@ -210,13 +212,13 @@ That's the whole contract. Every command below — `check`, `doctor`, `setup`, `
 |---|---|---|
 | `description` | string | Shown during `setup`, and copied into generated code as documentation. Not required, but `import`-generated schemas leave `"TODO: Add description."` as a nudge to fill it in. |
 | `secret` | boolean | Marks the variable as sensitive. Secrets are prompted as hidden input in `setup`, masked in generated code (`SecretStr` in Python, a private-field `Secret<T>` wrapper in TypeScript that survives `console.log`/`JSON.stringify`), and never inferred a `type` during `import`. |
-| `defaultValue` | string | A fallback value. A variable **without** `defaultValue` is treated as required — `check`/`doctor` flag it as missing if it's absent from your local file, and `setup` will prompt for it. |
+| `defaultValue` | string | The value `setup` writes automatically, without prompting for it. **Not** a license to leave the variable out of your local file, though: `check`/`doctor` still flag it as missing (or blank) if it's absent there, exactly like a variable with no default at all — nothing guarantees whatever actually reads the file falls back to this same value, or falls back at all, so the file's own copy has to be explicit. The only thing a default changes is whether `setup` asks you for a value. |
 | `type` | string | One of `string` (the default — no shape constraint beyond `pattern`), `int`, `float`, `bool`, `port` (an int, 1–65535), `url`, `email`. Enforced by `check`/`doctor`/`setup`, and drives the type of the field in generated code. |
 | `enum` | list of strings | The variable's value must be one of these. Implies a `type` of `enum` regardless of whatever `type` is also set. `setup` presents these as a picker instead of free text, so an invalid value can't even be typed in. |
 | `pattern` | string (regex) | An additional constraint checked on top of whatever `type` is set — e.g. `pattern = "^v\\d+\\.\\d+\\.\\d+$"` to require a semver-shaped string. |
-| `requiredIf` | table | `{ var = "OTHER_VAR", equals = "some value" }` — this variable is required only when `OTHER_VAR`'s *current local value* equals `"some value"`. Without `requiredIf`, "required" just means "no `defaultValue`," exactly as before this existed. |
+| `requiredIf` | table | `{ var = "OTHER_VAR", equals = "some value" }` — for a variable with **no** `defaultValue`, it's required only when `OTHER_VAR`'s *current local value* equals `"some value"`; without an active `requiredIf` (and without a default), it's genuinely optional. A `defaultValue`d variable must be present regardless of `requiredIf` — see above. |
 
-A variable with no `type`/`enum`/`pattern` at all behaves exactly as it always has: an unconstrained string, required unless it has a default. Every schema written before these fields existed is still valid — nothing here is a breaking change.
+A variable with no `type`/`enum`/`pattern` at all behaves exactly as it always has: an unconstrained string. Every schema written before these fields existed is still valid — nothing here is a breaking change.
 
 **A worked example** — running `envshield check` against a `.env` that violates several of the constraints above:
 
@@ -224,19 +226,21 @@ A variable with no `type`/`enum`/`pattern` at all behaves exactly as it always h
 $ envshield check
 Validating .env against schema...
 
-┌────────────────────┬──────────────────────┬────────────────────────────────────┐
-│ Status              │ Variable Name        │ Source                             │
-├────────────────────┼──────────────────────┼────────────────────────────────────┤
-│ Missing in Local    │ DATABASE_URL         │ env.schema.toml (Required)         │
-│ Invalid Value        │ API_PORT             │ must be a port number from 1-65535 │
-│                      │                      │ (got '99999')                      │
-│ Invalid Value        │ LOG_LEVEL            │ must be one of: debug, info, warn,  │
-│                      │                      │ error (got 'verbose')              │
-│ Extra in Local       │ OLD_UNUSED_FLAG      │ .env                                │
-└────────────────────┴──────────────────────┴────────────────────────────────────┘
+┌────────────────────┬──────────────────────┬─────────────────────────────────────┐
+│ Status              │ Variable Name        │ Source                              │
+├────────────────────┼──────────────────────┼─────────────────────────────────────┤
+│ Missing in Local    │ DATABASE_URL         │ env.schema.toml (Required)          │
+│ Missing in Local    │ LOG_LEVEL            │ env.schema.toml (default: 'info')   │
+│ Invalid Value        │ API_PORT             │ must be a port number from 1-65535  │
+│                      │                      │ (got '99999')                       │
+│ Extra in Local       │ OLD_UNUSED_FLAG      │ .env                                 │
+└────────────────────┴──────────────────────┴─────────────────────────────────────┘
 
-Suggestion: Please update your local file to match the schema contract.
+Suggestion: Run 'envshield setup' to fill in missing/blank values or fix invalid
+ones.
 ```
+
+`LOG_LEVEL` has a `defaultValue` — it's still reported as missing, not silently accepted, and the source column names the default so the fix is obvious without a separate lookup. Running `envshield setup` fills it (and `DATABASE_URL`) in without re-prompting for anything already correct.
 
 ### Conditional requirements (`requiredIf`)
 
@@ -304,15 +308,15 @@ Everything a single-service project ever needs. `--service` shows up on most of 
 
 | Command | What it does |
 |---|---|
-| `envshield init [--force/-f]` | Detects your framework and builds `env.schema.toml` from a real config source if it finds one, otherwise a framework-aware template. Also scaffolds `envshield.yml`, updates `.gitignore`, and offers to install git hooks. Auto-registers a root-level `docker-compose.yml` as the project's deployment manifest if it finds one. `--force` re-runs on a project that already has a config (with a confirmation before overwriting). |
+| `envshield init [--force/-f]` | Detects your framework and builds `env.schema.toml` from a real config source if it finds one, otherwise a framework-aware template. A real dotenv file only counts if it isn't itself EnvShield-generated (see below); a genuine Python config module is preferred over one that is. Also scaffolds `envshield.yml`, updates `.gitignore`, and offers to install git hooks. Auto-registers a root-level `docker-compose.yml` as the project's deployment manifest if it finds one. `--force` re-runs on a project that already has a config (with a confirmation before overwriting) — it reuses the same config source recorded from the first run rather than re-detecting one (see [Maintaining EnvShield over time](#maintaining-envshield-over-time)), and only ever adds to the existing schema, never silently drops or reclassifies a variable it already declares. Either way, it also checks every other real config source it finds alongside the pinned one and merges in any variable that one declares but the schema doesn't yet. If the recorded source has itself since become EnvShield-generated, `--force` notices and asks whether to re-detect a real one instead (see below) — no separate flag needed. "Already has a config" means at least one real service is registered, not just that `envshield.yml` exists on disk — a config file left with zero services (e.g. right after `service remove` takes the last one) is treated the same as no config at all, so bare `init` works without `--force`. |
 | `envshield import <file> [--output/-o PATH] [--force/-f] [--interactive] [--service NAME]` | Runs the same real-variable analysis `init` does automatically, as its own command — for re-importing after your code gains new variables, pointing at a file `init` wouldn't have found, or adding `--interactive` to confirm each secret/type classification by hand instead of accepting the automatic guess. `--output` changes where the schema is written (defaults to `env.schema.toml`, or the target service's schema path with `--service`). |
 | `envshield check [file] [--service NAME] [--container NAME] [--json]` | Validates a local file (or, if omitted, the project's/service's default local file *and* its registered deployment manifest, if any) against the schema. `file` can be a plain `.env`, a Python config module, a docker-compose file, or a Kubernetes manifest. `--container` picks which service/container to check in a manifest that declares more than one (tried against `--service`'s name automatically first). Exits non-zero on any drift — safe to use as a CI gate. `--json` prints a machine-readable result instead (see below) and never falls into an interactive service picker. |
-| `envshield doctor [--fix] [--service NAME] [--json]` | Runs every health check at once (see below) and reports a summary. `--fix` interactively offers to fix whatever it can — re-running `init`, regenerating the template, installing the git hook, or running `setup` to fill in missing/invalid local values. Exits non-zero if anything's still broken afterward. `--json` is incompatible with `--fix` (an interactive confirm prompt makes no sense in a machine-readable mode). |
-| `envshield setup [output_file] [--service NAME]` | Interactive onboarding wizard: walks through every variable that's missing, blank, or has an existing value the schema no longer allows, prompting with the variable's description, masking secret input, and offering a picker for `enum` fields. Leaves everything already correct untouched. |
-| `envshield schema sync [--service NAME]` | Regenerates `.env.example` from the schema (a dotenv project), or patches a Python-module local file in place to declare any schema variable it's missing (never rewrites it wholesale — only appends/patches the specific lines it owns). `import` already calls this automatically for you when it changes a project's/service's real schema, so you'll rarely need to run it by hand except after a manual schema edit. |
+| `envshield doctor [--fix] [--service NAME] [--json]` | Runs every health check at once (see below) and reports a summary. `--fix` interactively offers to fix whatever it can — re-running `init`, regenerating the template, installing the git hooks, or running `setup` to fill in missing/invalid local values. Exits non-zero if anything's still broken afterward. `--json` is incompatible with `--fix` (an interactive confirm prompt makes no sense in a machine-readable mode). |
+| `envshield setup [output_file] [--service NAME]` | Interactive onboarding wizard: walks through every variable that's missing, blank, or has an existing value the schema no longer allows, prompting with the variable's description, masking secret input, and offering a picker for `enum` fields. Leaves everything already correct untouched. Pressing Enter with nothing typed is rejected for a variable that has to be present (required, or has a `defaultValue`) — accepting it silently would let `setup` produce the exact "Blank in Local" failure `check`/`doctor` exist to catch. It's still accepted for a genuinely optional variable that only needed re-prompting because its existing value was invalid — blank is a legitimate way to clear that. |
+| `envshield schema sync [--service NAME] [--check]` | Regenerates `.env.example` from the schema (a dotenv project), or patches a Python-module local file in place to declare any schema variable it's missing (never rewrites it wholesale — only appends/patches the specific lines it owns). `import` already calls this automatically for you when it changes a project's/service's real schema, so you'll rarely need to run it by hand except after a manual schema edit. `--check` writes nothing — it reports whether the tracked template already matches the schema, exiting non-zero if not (what the pre-commit hook runs, see [Git hooks](#git-hooks)). |
 | `envshield generate [output_file] [--lang/-l python\|typescript] [--force/-f] [--service NAME]` | Compiles the schema into a typed, validated config module. `--lang` is auto-detected from your project (Next.js/Vite/Node.js → TypeScript; Python/Django/Flask, or nothing detected → Python) if omitted. A detected ecosystem with no codegen target at all (currently: Go) errors and asks for `--lang` explicitly, rather than silently guessing Python. Defaults to writing `config.py`/`config.ts`; `--force` overwrites an existing output file. See [Typed config code generation](#typed-config-code-generation). |
 | `envshield scan [paths...] [--staged] [--config/-c PATH] [--exclude/-e PATTERN] [--service NAME] [--json]` | Scans code for hardcoded secrets and for env vars used in code (`os.getenv`, `os.environ.get`, `process.env.X`) but never declared in the schema. `--staged` scans only what's staged for the next commit (what the pre-commit hook runs); `--exclude` (repeatable) adds glob patterns to skip, on top of whatever `secret_scanning.exclude_files` is set in `envshield.yml`. See [Secret scanning and git hooks](#secret-scanning-and-git-hooks). |
-| `envshield hook install` / `envshield hook status` / `envshield hook remove` | Installs both git hooks by hand, without going through `init`/`setup`/`service discover`'s interactive prompt; reports which hooks are currently installed; or removes any EnvShield-installed hook (leaving alone anything EnvShield didn't install — Husky, a hand-written script). The old flat `envshield install-hook` still works, identically to `hook install`. |
+| `envshield hook install [--yes/-y]` / `envshield hook status` / `envshield hook remove [--yes/-y]` | Installs both git hooks by hand, after confirming (`--yes` skips the prompt, for scripting); reports which hooks are currently installed; or removes any EnvShield-installed hook after confirming (leaving alone anything EnvShield didn't install — Husky, a hand-written script). `--yes` also covers the separate case of a pre-existing hook that isn't EnvShield's own: rather than prompting a second time (or, with no terminal, hitting undefined input), it warns and leaves the foreign hook untouched — an already-EnvShield hook is always regenerated silently either way, no warning needed. The old flat `envshield install-hook` still works, identically to `hook install`. |
 | `envshield --version` / `-v` | Prints the installed version and exits. |
 
 **Not using a `.env` file at all?** Some projects (a Flask app whose local config is a checked-in Python module, for example) don't use dotenv at all. Point `local_file` at it instead, and EnvShield reads and writes it as source code, not as a dotenv file — appending or patching only the specific assignments it owns, never touching anything else in the file:
@@ -331,8 +335,8 @@ services:
 | Command | What it does |
 |---|---|
 | `envshield service list` | Lists every service currently configured in `envshield.yml`, with its schema and local file paths. |
-| `envshield service add <name> <directory> [--local-file PATH] [--example-file PATH] [--description/-d TEXT] [--schema PATH] [--import FILE] [--deployment-manifest PATH] [--container NAME]` | Registers one service by hand. `--local-file` is required when the service's real config isn't a dotenv file (e.g. a Python module) — see above. `--import` seeds the new service's schema from an existing config file in one step. `--deployment-manifest` is auto-detected (a compose file in the given directory or the project root that actually declares this service) if not given explicitly. |
-| `envshield service remove <name>` | De-registers one service from `envshield.yml` (and drops it from any deployment manifest's container mapping). Never deletes the service's own files — schema, local env file, etc. — only the registration. |
+| `envshield service add <name> <directory> [--local-file PATH] [--example-file PATH] [--description/-d TEXT] [--schema PATH] [--import FILE] [--deployment-manifest PATH] [--container NAME]` | Registers one service by hand. `<directory>` must already exist — a typo'd path fails immediately rather than silently registering a service pointing at nothing. `--local-file` is required when the service's real config isn't a dotenv file (e.g. a Python module) — see above. `--import` seeds the new service's schema from an existing config file in one step; without it, no schema is created (there's nothing to build one from) and the command says so, pointing at `envshield import` as the next step. `--deployment-manifest` is auto-detected (a compose file in the given directory or the project root that actually declares this service) if not given explicitly. |
+| `envshield service remove <name>` | De-registers one service from `envshield.yml` (and drops it from any deployment manifest's container mapping). Never deletes the service's own files — schema, local env file, etc. — only the registration; if they still exist on disk, it names them so you know what to clean up by hand. If that was the last registered service, it also points you at `init`/`service add`/`service discover` to register a new one. |
 | `envshield service discover [root] [--yes/-y]` | Scans for service-like directories not already registered, and offers to add them — see [Quick start](#a-monorepo-with-multiple-services). `--yes` skips the interactive confirmation, for CI/scripting. |
 
 ---
@@ -351,9 +355,9 @@ envshield check --json
   "results": [
     {
       "file": ".env",
-      "service": null,
+      "service": "beta",
       "clean": false,
-      "missing": [],
+      "missing": ["LOG_LEVEL"],
       "blank": ["SECRETS_ENCRYPTION_KEY"],
       "invalid": {},
       "extra": []
@@ -361,6 +365,8 @@ envshield check --json
   ]
 }
 ```
+
+Note that `missing` includes `LOG_LEVEL` even though it has a `defaultValue` in the schema — a default only changes whether `setup` prompts for a value, not whether the variable needs to be explicitly present in your file (see [Every field a variable can have](#every-field-a-variable-can-have)).
 
 `doctor --json` returns the same per-service shape, with each service's individual health checks instead of a variable diff (`--fix` is rejected together with `--json` — an interactive confirm prompt has no place in a machine-readable mode):
 
@@ -484,6 +490,8 @@ EnvShield merges `environment:` with whatever `env_file:` references (`environme
 
 **Kubernetes:** Deployment, StatefulSet, DaemonSet, Job, CronJob, and bare Pod manifests are all supported, including multi-document files (`---`-separated). A `ConfigMap`/`Secret` referenced via `envFrom` is resolved if it's defined in the *same file*; a `valueFrom` reference (or an unresolvable `envFrom`) is treated the same way as compose's `env_file` case — present, value not visible here.
 
+**A schema variable with a `defaultValue` must still be explicitly set in the manifest**, exactly like in a local `.env` — a variable the manifest doesn't mention at all is flagged as missing even if it has a default, since EnvShield has no way to confirm the container image (or the platform) actually falls back to that same value on its own. If a real production manifest legitimately relies on a value baked into the image and genuinely never needs to be overridden, don't declare that variable as an env var in the schema at all — the schema documents what the *environment* is expected to provide, not everything the running container might reference internally.
+
 **Multiple services/containers in one file?** `--container` picks which one. If you don't pass it, EnvShield tries your `--service` name first (services and containers are very often named identically) before asking you to be explicit:
 
 ```bash
@@ -528,7 +536,7 @@ envshield scan app/ --exclude "**/tests/*"
 Commit aborted. Please fix the issues above before committing.
 ```
 
-Detection recognizes framework "intentionally public" naming conventions (`NEXT_PUBLIC_*`, `VITE_*`, `REACT_APP_*`, `NUXT_PUBLIC_*`, `GATSBY_*`, dotenvx's `DOTENV_PUBLIC_KEY`) and never flags them as secrets on name alone — a Stripe *publishable* key is meant to ship in client-side code. A genuinely secret-shaped *value* under one of those names is still caught; only the naming-convention false positive is suppressed. `node_modules`, `.git`, virtualenvs, and build output are excluded from scans by default.
+Detection recognizes framework "intentionally public" naming conventions (`NEXT_PUBLIC_*`, `VITE_*`, `REACT_APP_*`, `NUXT_PUBLIC_*`, `GATSBY_*`, dotenvx's `DOTENV_PUBLIC_KEY`) and never flags them as secrets on name alone — a Stripe *publishable* key is meant to ship in client-side code. A genuinely secret-shaped *value* under one of those names is still caught; only the naming-convention false positive is suppressed. `node_modules`, `.git`, virtualenvs, and build output are excluded from scans by default. A plain `envshield scan` also skips anything Git would ignore (a real `.env`, chief among them) — an ignored file is never going to be committed, so flagging a secret inside it as "DANGER" would just be noise against what `scan` exists to prevent, and it would contradict `scan`'s own advice to move secrets *into* that same gitignored file. `scan --staged` is unaffected by this: it only ever scans what's actually in the index, so an ignored file that got force-staged anyway (`git add -f`) is still flagged as the real, imminent risk it is.
 
 ### Diff-aware scanning for files with intentional baseline secrets
 
@@ -549,14 +557,18 @@ Line 47: PRODUCTION_SECRET = 'a_real_secret_that_just_got_added'
 
 ### Git hooks
 
-`envshield hook install` (or the interactive prompt during `init`/`setup`/`service discover`) installs two hooks:
+`envshield hook install` (or the interactive prompt during `init`/`setup`/`service discover`) installs two hooks, after confirming first (`--yes` skips the prompt, for scripting; with no terminal to confirm on and no `--yes`, it declines rather than blocking):
 
-- **pre-commit** — runs `envshield scan --staged`, aborting the commit if it finds anything.
+- **pre-commit** — runs `envshield scan --staged`, aborting the commit if it finds anything; also, if a staged change touches a service's schema, blocks the commit unless that service's tracked template (`.env.example`) was regenerated to match (`envshield schema sync`) — a schema edited without also syncing its template can't be committed stale in the first place.
 - **post-merge** — runs `envshield doctor` after every `git pull`/merge, but only when a schema file actually changed in that merge, so a teammate who just added a new required variable gets alerted immediately instead of finding out the next time the app crashes.
 
 Hooks respect a configured `core.hooksPath` (as set by Husky or similar tools) instead of assuming `.git/hooks`, and installing over an existing hook always tells you first whether that hook was EnvShield's own (safe to replace) or something else (naming how many lines of unrelated logic would be lost) before asking you to confirm.
 
-`envshield hook status` reports which of the two are currently installed. `envshield hook remove` removes any EnvShield-installed hook — identified by the same marker `install` checks before offering to overwrite — leaving anything EnvShield didn't install (Husky, a hand-written script) untouched.
+`envshield hook status` reports which of the two are currently installed. `envshield hook remove` (also confirms first, also takes `--yes`) removes any EnvShield-installed hook — identified by the same marker `install` checks before offering to overwrite — leaving anything EnvShield didn't install (Husky, a hand-written script) untouched.
+
+**Note on the pre-commit template-sync check:** it only runs for services whose schema file is actually staged in that commit, and only blocks — it never auto-runs `schema sync` for you (a pre-commit hook silently rewriting and re-staging files is more surprising than useful). If it blocks you, run `envshield schema sync` yourself and re-stage.
+
+**A broken schema in one service never blocks commits to another.** `scan`'s undeclared-variable check (what `--staged` runs on every commit) loads every registered service's schema to know what's declared where — if one service's `env.schema.toml` is mid-edit and doesn't parse, that service's own check is skipped with a warning, but scanning (and committing) everything else proceeds normally.
 
 ---
 
@@ -602,6 +614,14 @@ This catches the exact failure mode EnvShield exists to prevent: a pull request 
 
 **Re-run `envshield doctor --fix` instead of hand-editing your local `.env` when it's flagged as broken.** It delegates to the same `setup` wizard used for onboarding, so it fixes exactly what's wrong (missing, blank, or invalid values) and leaves everything else untouched.
 
+**`envshield init --force` is safe to re-run on an established project.** The first `init`/`import` records which real file the schema was built from (`config_source` in `envshield.yml`); a later `--force` re-scans that same file again instead of re-detecting one from scratch — so it can't be silently swapped for a different file that happens to exist now (a real `.env`, once created, would otherwise generally outrank a Python config module in auto-detection, even if that `.env` has since drifted and is missing something the real source still declares). Re-scanning also only ever *adds* to the existing schema: a variable it already declares — including a hand-corrected `secret` flag or an added `pattern` — is never silently dropped or overwritten just because this run's source doesn't happen to reflect it.
+
+**An EnvShield-generated `.env` is never picked as a config source over a real one.** `setup` stamps every local file it writes with its own header — a dotenv carrying it is a *derivative* of the schema (its values came from prompting against variables the schema already knew about), not an independent source, so it can never teach a schema-generation scan about a genuinely new variable. Fresh detection (a brand-new project) skips it in favor of a real Python config module if one exists, and only falls back to it when nothing else is found. If a project's `config_source` is already pinned to a `.env` that's since become EnvShield-generated, `init --force` notices on its own and asks (interactively) whether to re-detect and pin to the real source instead — decline, and it keeps the existing pin exactly as before. With no terminal attached to ask (CI/scripting), it prints the same warning and keeps the existing pin rather than either guessing or blocking.
+
+**Pinning a `config_source` trades one drift problem for another — both `init` and `doctor` cover the gap.** Once a source is pinned, it's only ever re-scanned against itself — so a variable added straight to a Python config module (or vice versa) after the pin would otherwise go unnoticed forever. Every `init`/`init --force` also checks every *other* real config source it finds alongside the pinned one and additively merges in anything it declares that the schema doesn't already have (printing exactly what it found and where), so this can't accumulate silently between runs. `doctor`'s "Config Source Drift" check catches the remaining case — a variable added to another source *between* `init` runs — the same way, naming exactly which variable is missing and where, with the `envshield import <file>` command to run.
+
+**A schema variable existing doesn't mean your app actually reads it from `.env`.** `check`/`doctor` compare `.env` against `env.schema.toml` — they never look at the code that's supposed to consume `.env` at all. If your `config_source` is a Python module built entirely of hardcoded literals (`SECRET_KEY = "..."`, no `os.environ`/`os.getenv` anywhere), it can declare every variable name a schema needs while nothing in the running app ever actually reads `.env`'s values — `check` would report "in sync" forever regardless. `doctor`'s "Config Source Reads Environment" check (only shown for a Python `config_source`) catches the unambiguous case — no environment-reading call anywhere in the file — and points at `envshield generate`: its output actually reads `.env` at runtime (via pydantic-settings/zod), so importing from it instead of the hardcoded module is the real fix. This is a heuristic, not proof either way — it recognizes `os.environ`/`os.getenv` and `BaseSettings`, not every third-party config library, so a clean pass doesn't guarantee correctness and a flag doesn't guarantee something's broken.
+
 **Keep EnvShield itself current.** `pip install --upgrade envshield`. Schema files written by an older version remain fully valid — every field documented above is additive, not a breaking change to the format.
 
 ---
@@ -632,7 +652,7 @@ EnvShield isn't trying to replace a dedicated secret scanner or a cloud secret m
 
 **`check`/`doctor` say a manifest declares "multiple services" / "multiple containers."** Pass `--container <name>` explicitly, or register the manifest with `service add --deployment-manifest ... --container <name>` so you never have to pass it again.
 
-**My pre-commit hook doesn't seem to run.** Check `git config core.hooksPath` — if it's set (Husky sets this), EnvShield installs there instead of `.git/hooks`, but if the hook was installed by an older EnvShield version before that was supported, re-run `envshield hook install`. `envshield doctor` includes a "Git Pre-commit Hook" check that catches this.
+**My pre-commit hook doesn't seem to run.** Check `git config core.hooksPath` — if it's set (Husky sets this), EnvShield installs there instead of `.git/hooks`, but if the hook was installed by an older EnvShield version before that was supported, re-run `envshield hook install`. `envshield doctor` includes a "Git Hooks" check (covers both pre-commit and post-merge) that catches this.
 
 **`scan` is flagging something that isn't a secret, or missing something that is.** The scanner is regex/entropy-based, not a machine-learning classifier — it's tuned to be broadly useful, not perfect for every codebase. For a false positive, add a targeted `--exclude` glob or a `secret_scanning.exclude_files` entry. For a miss, please open an issue with the (redacted) pattern that slipped through — and if secret-detection *accuracy* specifically is your priority, consider running Gitleaks or a similar dedicated scanner alongside `scan` rather than relying on it alone.
 
