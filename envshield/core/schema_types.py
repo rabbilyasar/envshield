@@ -106,3 +106,19 @@ def is_required_now(field_schema: dict[str, Any], local_values: dict[str, str]) 
         return True
     expected = str(condition.get("equals", "true"))
     return local_values.get(other_var) == expected
+
+
+def should_be_present(field_schema: dict[str, Any], local_values: dict[str, str]) -> bool:
+    """
+    Whether a field must have an explicit, non-blank value in the target
+    file -- broader than is_required_now (used for setup's prompt-or-fill
+    decision, which must stay exactly as it is). A defaultValue is a
+    starting value 'setup' writes automatically, not license for the
+    file's own copy to stay silently absent or blank: nothing guarantees
+    whatever reads this file actually falls back the same way, or falls
+    back at all -- that equivalence only holds once 'generate's output is
+    the thing actually being read. A defaulted field must be present
+    regardless of requiredIf; one with neither a default nor an active
+    requiredIf is the only case that's genuinely optional right now.
+    """
+    return "defaultValue" in field_schema or is_required_now(field_schema, local_values)

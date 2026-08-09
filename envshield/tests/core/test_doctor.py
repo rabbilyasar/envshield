@@ -1,4 +1,5 @@
 # envshield/tests/core/test_doctor.py
+import os
 import sys
 
 import pytest
@@ -16,6 +17,40 @@ runner = CliRunner()
 def _write_root_service(name="app", schema_path=SCHEMA_FILE_NAME):
     """Registers one service at the project root -- envshield.yml always has at least one entry (see config_manager.generate_default_config_content)."""
     config_manager.add_service(name, schema_path)
+
+
+def test_healthcheck_prints_its_message_on_success_too(mocker):
+    """
+    Regression: a passing check's message was silently dropped in the plain
+    Rich rendering -- only 'doctor --json' included it. A check can carry
+    real information even while passing (e.g. "using schema default:
+    LOG_LEVEL"), and a bare checkmark must not hide it -- the whole point
+    of this tool is not letting a green check mean less than it looks like.
+    """
+    mock_console = mocker.patch("envshield.core.doctor.console")
+    check = doctor.HealthCheck(
+        "Local Environment Sync",
+        lambda: (
+            True,
+            "'.env' is in sync with schema. Using schema default: LOG_LEVEL.",
+        ),
+    )
+
+    check.run()
+
+    mock_console.print.assert_any_call(
+        "  [dim]'.env' is in sync with schema. Using schema default: LOG_LEVEL.[/dim]"
+    )
+
+
+def test_healthcheck_prints_no_extra_line_when_message_is_empty(mocker):
+    """A passing check with nothing further to say shouldn't grow a blank dim line."""
+    mock_console = mocker.patch("envshield.core.doctor.console")
+    check = doctor.HealthCheck("Git Pre-commit Hook", lambda: (True, ""))
+
+    check.run()
+
+    assert mock_console.print.call_count == 1
 
 
 def test_run_init_fix_uses_current_interpreter_not_bare_path_lookup(mocker):
@@ -93,7 +128,9 @@ def test_doctor_all_ok(mocker, tmp_path):
         mocker.patch(
             "envshield.core.doctor._check_example_file_sync", return_value=(True, "OK")
         )
-        mocker.patch("envshield.core.doctor._check_git_hook", return_value=(True, "OK"))
+        mocker.patch(
+            "envshield.core.doctor._check_git_hooks", return_value=(True, "OK")
+        )
 
         result = runner.invoke(app, ["doctor"])
 
@@ -117,7 +154,9 @@ def test_doctor_with_issues(mocker, tmp_path):
         mocker.patch(
             "envshield.core.doctor._check_local_env_sync", return_value=(True, "OK")
         )
-        mocker.patch("envshield.core.doctor._check_git_hook", return_value=(True, "OK"))
+        mocker.patch(
+            "envshield.core.doctor._check_git_hooks", return_value=(True, "OK")
+        )
 
         result = runner.invoke(app, ["doctor"])
 
@@ -144,13 +183,17 @@ def test_doctor_fix_flow(mocker, tmp_path):
         )
         # Mock the git hook check to fail initially, then pass after the fix
         mocker.patch(
-            "envshield.core.doctor._check_git_hook",
+            "envshield.core.doctor._check_git_hooks",
             side_effect=[(False, "Not installed"), (True, "OK")],
         )
 
-        # Mock the fix function itself
+        # Mock the fix function itself -- the fix now installs both hooks,
+        # not just pre-commit.
         mock_install_hook = mocker.patch(
             "envshield.core.scanner.install_pre_commit_hook"
+        )
+        mock_install_post_merge = mocker.patch(
+            "envshield.core.scanner.install_post_merge_hook"
         )
 
         # Correctly mock the chained call for questionary
@@ -162,10 +205,11 @@ def test_doctor_fix_flow(mocker, tmp_path):
         result = runner.invoke(app, ["doctor", "--fix"])
 
         assert result.exit_code == 0
-        assert "Git Pre-commit Hook" in result.stdout
+        assert "Git Hooks" in result.stdout
         assert "Not installed" in result.stdout
         assert "Fixed!" in result.stdout
         mock_install_hook.assert_called_once()
+        mock_install_post_merge.assert_called_once()
 
 
 def test_check_config_files_looks_up_the_services_own_schema_path(
@@ -242,6 +286,188 @@ def test_check_local_env_sync_flags_a_required_var_declared_but_left_blank(
 
     assert passed is False
     assert "SECRETS_ENCRYPTION_KEY" in message
+
+
+def test_check_local_env_sync_flags_a_defaulted_var_missing_from_env(
+    tmp_path, monkeypatch
+):
+    """
+    A schema variable with a defaultValue, absent from '.env' entirely,
+    must fail the check -- nothing guarantees whatever reads '.env'
+    actually falls back to the schema's documented default.
+    """
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "api").mkdir()
+    with open(CONFIG_FILE_NAME, "w") as f:
+        f.write("services:\n  api:\n    schema: api/env.schema.toml\n")
+    with open("api/env.schema.toml", "w") as f:
+        f.write(
+            '[API_KEY]\ndescription="x"\nsecret=true\n\n[LOG_LEVEL]\ndescription="x"\ndefaultValue="info"\n'
+        )
+    with open("api/.env", "w") as f:
+        f.write("API_KEY=abc\n")
+
+    passed, message = doctor._check_local_env_sync(service_name="api")
+
+    assert passed is False
+    assert "LOG_LEVEL" in message
+    assert "LOG_LEVEL" in message
+
+
+def test_check_config_source_drift_flags_a_var_added_to_another_source(
+    tmp_path, monkeypatch
+):
+    """
+    Real scenario: '.env' is the pinned config_source, but a developer later
+    added LOG_LEVEL straight to config/settings.py and never touched '.env'
+    or the schema. Since a pinned source is never re-scanned, nothing else
+    would ever catch this -- 'doctor' has to compare against other sources
+    directly.
+    """
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config").mkdir()
+    with open(CONFIG_FILE_NAME, "w") as f:
+        f.write(
+            "services:\n  api:\n    schema: env.schema.toml\n    config_source: .env\n"
+        )
+    with open("env.schema.toml", "w") as f:
+        f.write('[API_KEY]\ndescription="x"\nsecret=true\n')
+    with open(".env", "w") as f:
+        f.write("API_KEY=abc\n")
+    with open("config/settings.py", "w") as f:
+        f.write('API_KEY = "abc"\nDEBUG = True\nLOG_LEVEL = "info"\n')
+
+    passed, message = doctor._check_config_source_drift(service_name="api")
+
+    assert passed is False
+    assert "LOG_LEVEL" in message
+    assert "config/settings.py" in message
+    assert "envshield import config/settings.py" in message
+
+
+def test_check_config_source_drift_passes_when_no_other_source_exists(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    with open(CONFIG_FILE_NAME, "w") as f:
+        f.write(
+            "services:\n  api:\n    schema: env.schema.toml\n    config_source: .env\n"
+        )
+    with open("env.schema.toml", "w") as f:
+        f.write('[API_KEY]\ndescription="x"\nsecret=true\n')
+    with open(".env", "w") as f:
+        f.write("API_KEY=abc\n")
+
+    passed, message = doctor._check_config_source_drift(service_name="api")
+
+    assert passed is True, message
+
+
+def test_check_config_source_drift_passes_when_no_config_source_recorded(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    with open(CONFIG_FILE_NAME, "w") as f:
+        f.write("services:\n  api:\n    schema: env.schema.toml\n")
+    with open("env.schema.toml", "w") as f:
+        f.write('[API_KEY]\ndescription="x"\nsecret=true\n')
+
+    passed, message = doctor._check_config_source_drift(service_name="api")
+
+    assert passed is True, message
+
+
+def test_doctor_omits_config_source_drift_check_when_none_recorded(tmp_path):
+    """A project with no recorded config_source (an older envshield.yml) shouldn't see this check at all."""
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_root_service()
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[API_KEY]\ndescription="x"\nsecret=true\n')
+
+        checks = doctor._build_checks("app")
+
+        assert not any(c.description == "Config Source Drift" for c in checks)
+
+
+def test_check_config_source_reads_environment_flags_hardcoded_literals(
+    tmp_path, monkeypatch
+):
+    """
+    Real scenario: config_source is a Python module built entirely of
+    hardcoded literals, no 'os.environ'/'os.getenv' anywhere. 'check'/
+    'doctor' comparing '.env' against the schema can never notice that
+    nothing actually wires '.env's values into the running app.
+    """
+    monkeypatch.chdir(tmp_path)
+    with open(CONFIG_FILE_NAME, "w") as f:
+        f.write(
+            "services:\n  api:\n    schema: env.schema.toml\n    config_source: config/settings.py\n"
+        )
+    with open("env.schema.toml", "w") as f:
+        f.write('[SECRET_KEY]\ndescription="x"\nsecret=true\n')
+    os.makedirs("config")
+    with open("config/settings.py", "w") as f:
+        f.write("SECRET_KEY = 'sk_live_x'\n")
+
+    passed, message = doctor._check_config_source_reads_environment(service_name="api")
+
+    assert passed is False
+    assert "config/settings.py" in message
+    assert "envshield generate" in message
+
+
+def test_check_config_source_reads_environment_passes_when_it_does(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    with open(CONFIG_FILE_NAME, "w") as f:
+        f.write(
+            "services:\n  api:\n    schema: env.schema.toml\n    config_source: config/settings.py\n"
+        )
+    with open("env.schema.toml", "w") as f:
+        f.write('[SECRET_KEY]\ndescription="x"\nsecret=true\n')
+    os.makedirs("config")
+    with open("config/settings.py", "w") as f:
+        f.write("import os\nSECRET_KEY = os.environ['SECRET_KEY']\n")
+
+    passed, message = doctor._check_config_source_reads_environment(service_name="api")
+
+    assert passed is True, message
+
+
+def test_check_config_source_reads_environment_passes_for_a_dotenv_source(
+    tmp_path, monkeypatch
+):
+    """A dotenv config_source IS the environment values -- nothing for it to 'read'."""
+    monkeypatch.chdir(tmp_path)
+    with open(CONFIG_FILE_NAME, "w") as f:
+        f.write(
+            "services:\n  api:\n    schema: env.schema.toml\n    config_source: .env\n"
+        )
+    with open("env.schema.toml", "w") as f:
+        f.write('[SECRET_KEY]\ndescription="x"\nsecret=true\n')
+    with open(".env", "w") as f:
+        f.write("SECRET_KEY=x\n")
+
+    passed, message = doctor._check_config_source_reads_environment(service_name="api")
+
+    assert passed is True, message
+
+
+def test_doctor_omits_config_source_reads_environment_check_for_a_dotenv_source(
+    tmp_path,
+):
+    """The check shouldn't even show up for a dotenv config_source, not just pass silently."""
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        config_manager.add_service("app", SCHEMA_FILE_NAME, config_source=".env")
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[API_KEY]\ndescription="x"\nsecret=true\n')
+
+        checks = doctor._build_checks("app")
+
+        assert not any(
+            c.description == "Config Source Reads Environment" for c in checks
+        )
 
 
 def test_check_example_file_sync_skips_python_format_local_file(tmp_path, monkeypatch):
@@ -352,7 +578,9 @@ def test_doctor_fix_for_local_env_sync_delegates_to_setup_wizard(mocker, tmp_pat
         mocker.patch(
             "envshield.core.doctor._check_example_file_sync", return_value=(True, "OK")
         )
-        mocker.patch("envshield.core.doctor._check_git_hook", return_value=(True, "OK"))
+        mocker.patch(
+            "envshield.core.doctor._check_git_hooks", return_value=(True, "OK")
+        )
         mock_run_setup = mocker.patch("envshield.core.setup_manager.run_setup")
         mocker.patch(
             "questionary.confirm",

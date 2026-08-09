@@ -40,18 +40,33 @@ class SchemaDiff:
         return not (self.missing or self.blank or self.invalid or self.extra)
 
     def summary(self) -> str:
+        # Each category names its own fix -- "here's what's wrong" without
+        # "here's the command that fixes it" just relocates the diagnosis
+        # work onto whoever's reading it.
         messages = []
         if self.missing:
-            messages.append(f"Missing variables: {', '.join(sorted(self.missing))}")
+            messages.append(
+                f"Missing variables: {', '.join(sorted(self.missing))} "
+                "(run 'envshield setup' to fill them in)"
+            )
         if self.blank:
-            messages.append(f"Required but blank: {', '.join(sorted(self.blank))}")
+            messages.append(
+                f"Required but blank: {', '.join(sorted(self.blank))} "
+                "(run 'envshield setup' to fill them in)"
+            )
         if self.invalid:
             details_str = "; ".join(
                 f"{k} ({v})" for k, v in sorted(self.invalid.items())
             )
-            messages.append(f"Invalid values: {details_str}")
+            messages.append(
+                f"Invalid values: {details_str} (run 'envshield setup' to fix -- "
+                "it re-validates existing values, not just missing ones)"
+            )
         if self.extra:
-            messages.append(f"Extra variables: {', '.join(sorted(self.extra))}")
+            messages.append(
+                f"Extra variables: {', '.join(sorted(self.extra))} "
+                "(remove them if unused, or add them to the schema if they're meant to be there)"
+            )
         return "; ".join(messages)
 
 
@@ -62,13 +77,15 @@ def diff_against_schema(
     Compares `local_values` (as read from a .env file, a deployment
     manifest, or anything else a parser can produce) against `schema`.
 
-    A variable is required if it has no defaultValue, and (when declared)
-    its 'requiredIf' condition currently holds against the other local
-    values -- see schema_types.is_required_now. A required var declared
-    only as a blank placeholder (e.g. `SECRETS_ENCRYPTION_KEY = ""` checked
-    in ahead of a real per-developer secret) is reported distinctly from
-    one missing outright. A present, non-blank value still needs to match
-    its declared type/enum/pattern.
+    A variable must be present and non-blank if it has a defaultValue, or
+    (when it doesn't) its 'requiredIf' condition currently holds against
+    the other local values -- see schema_types.should_be_present. A
+    defaulted variable left absent or blank is reported the same way as
+    one with no fallback at all: nothing guarantees whatever reads this
+    file actually falls back the same way the schema documents, or falls
+    back at all, so its own copy has to be explicit rather than implied. A
+    present, non-blank value still needs to match its declared
+    type/enum/pattern.
     """
     local_vars = set(local_values.keys())
     schema_vars_all = set(schema.keys())
@@ -76,7 +93,7 @@ def diff_against_schema(
     schema_vars_required = {
         key
         for key, details in schema.items()
-        if schema_types.is_required_now(details, local_values)
+        if schema_types.should_be_present(details, local_values)
     }
 
     missing = set()
@@ -96,7 +113,20 @@ def diff_against_schema(
 
     extra = local_vars - schema_vars_all
 
-    return SchemaDiff(missing=missing, blank=blank, invalid=invalid, extra=extra)
+    return SchemaDiff(
+        missing=missing,
+        blank=blank,
+        invalid=invalid,
+        extra=extra,
+    )
+
+
+def _source_label(var: str, schema: Dict[str, Any]) -> str:
+    """Describes a missing/blank variable's source for the report table -- naming its default, if it has one, so the fix is obvious without a separate lookup."""
+    default = schema.get(var, {}).get("defaultValue")
+    if default is not None:
+        return f"env.schema.toml (default: {default!r})"
+    return "env.schema.toml (Required)"
 
 
 def check_schema(
@@ -145,31 +175,38 @@ def check_schema(
         console.print(
             "[bold green]✓ Your configuration is perfectly in sync with the schema![/bold green]"
         )
-        return True
+    else:
+        # If there are issues, build and display a report table
+        table = Table(show_header=True, header_style="bold blue")
+        table.add_column("Status", style="cyan")
+        table.add_column("Variable Name", style="white")
+        table.add_column("Source", style="white")
 
-    # If there are issues, build and display a report table
-    table = Table(show_header=True, header_style="bold blue")
-    table.add_column("Status", style="cyan")
-    table.add_column("Variable Name", style="white")
-    table.add_column("Source", style="white")
+        for var in sorted(diff.missing):
+            table.add_row("[red]Missing in Local[/red]", var, _source_label(var, schema))
 
-    for var in sorted(diff.missing):
-        table.add_row("[red]Missing in Local[/red]", var, "env.schema.toml (Required)")
+        for var in sorted(diff.blank):
+            table.add_row("[red]Blank in Local[/red]", var, _source_label(var, schema))
 
-    for var in sorted(diff.blank):
-        table.add_row("[red]Blank in Local[/red]", var, "env.schema.toml (Required)")
+        for var, reason in sorted(diff.invalid.items()):
+            table.add_row("[red]Invalid Value[/red]", var, reason)
 
-    for var, reason in sorted(diff.invalid.items()):
-        table.add_row("[red]Invalid Value[/red]", var, reason)
+        for var in sorted(diff.extra):
+            table.add_row("[yellow]Extra in Local[/yellow]", var, file_path)
 
-    for var in sorted(diff.extra):
-        table.add_row("[yellow]Extra in Local[/yellow]", var, file_path)
+        console.print(table)
+        suggestions = []
+        if diff.missing or diff.blank or diff.invalid:
+            suggestions.append(
+                "Run 'envshield setup' to fill in missing/blank values or fix invalid ones."
+            )
+        if diff.extra:
+            suggestions.append(
+                "Remove extra variables if unused, or add them to the schema if they're meant to be there."
+            )
+        console.print("\n[bold]Suggestion:[/bold] " + " ".join(suggestions))
 
-    console.print(table)
-    console.print(
-        "\n[bold]Suggestion:[/bold] Please update your local file to match the schema contract."
-    )
-    return False
+    return diff.is_clean
 
 
 def check_result(
@@ -222,7 +259,7 @@ def check_result(
     }
 
 
-def sync_schema(service_name: str):
+def sync_schema(service_name: str) -> bool:
     """
     Keeps a service's tracked environment template in sync with its schema
     (resolved to that service's own directory -- see
@@ -237,49 +274,71 @@ def sync_schema(service_name: str):
     assignments. So instead of overwriting it, this only appends whatever
     schema variables are missing from it; existing lines, values, and
     surrounding code are left untouched.
+
+    Returns whether the target actually changed -- a caller (e.g. the
+    CLI's post-sync "next step" hint) needs to tell a genuine no-op apart
+    from a real update, which the dotenv branch can't get for free from
+    "did the write succeed": it always rewrites the file, and the header's
+    own timestamp would make every write look "changed" by a naive
+    before/after content comparison.
     """
     schema = config_manager.load_schema(service_name=service_name)
     paths = config_manager.get_env_paths(service_name=service_name)
 
     if paths["local_file"].endswith(".py"):
-        _sync_python_local_file(schema, paths["local_file"])
-        return
+        return _sync_python_local_file(schema, paths["local_file"])
 
     output_file = paths["example_file"]
     console.print(
         f"\n[bold]Generating [cyan]{output_file}[/cyan] from schema...[/bold]"
     )
 
+    header_marker = "# DO NOT EDIT THIS FILE MANUALLY.\n\n"
     header = (
         f"# This file was auto-generated by EnvShield on {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
         f"# It is generated from the contract defined in env.schema.toml.\n"
-        f"# DO NOT EDIT THIS FILE MANUALLY.\n\n"
+        f"{header_marker}"
     )
 
-    content = header
+    body = ""
     for key, details in schema.items():
         description = details.get("description")
         if description:
-            content += f"# {description}\n"
+            body += f"# {description}\n"
 
         default_value = details.get("defaultValue", "")
-        content += f"{key}={default_value}\n\n"
+        body += f"{key}={default_value}\n\n"
+
+    old_body = None
+    if os.path.exists(output_file):
+        try:
+            with open(output_file, "r") as f:
+                old_content = f.read()
+            old_body = old_content.split(header_marker, 1)[-1]
+        except OSError:
+            old_body = None
+
+    if old_body == body:
+        console.print(f"[green]✓[/green] '{output_file}' is already up to date.")
+        return False
 
     try:
         output_dir = os.path.dirname(output_file)
         if output_dir:
             os.makedirs(output_dir, exist_ok=True)
         with open(output_file, "w") as f:
-            f.write(content)
+            f.write(header + body)
         console.print(
             f"[bold green]✓[/bold green] Successfully created/updated [bold cyan]{output_file}[/bold cyan]!"
         )
+        return True
     except IOError as e:
         console.print(f"[red]Error:[/red] Could not write to {output_file}: {e}")
+        return False
 
 
-def _sync_python_local_file(schema: Dict[str, Any], local_file: str) -> None:
-    """Ensures a Python-module local config file declares every schema variable."""
+def _sync_python_local_file(schema: Dict[str, Any], local_file: str) -> bool:
+    """Ensures a Python-module local config file declares every schema variable. Returns whether it actually changed."""
     if not os.path.exists(local_file):
         console.print(
             f"\n[bold]Creating [cyan]{local_file}[/cyan] from schema...[/bold]"
@@ -302,7 +361,7 @@ def _sync_python_local_file(schema: Dict[str, Any], local_file: str) -> None:
         console.print(
             f"[bold green]✓[/bold green] Created [bold cyan]{local_file}[/bold cyan]!"
         )
-        return
+        return True
 
     console.print(
         f"\n[bold]Checking [cyan]{local_file}[/cyan] for missing variables...[/bold]"
@@ -317,7 +376,7 @@ def _sync_python_local_file(schema: Dict[str, Any], local_file: str) -> None:
         console.print(
             f"[bold green]✓[/bold green] [cyan]{local_file}[/cyan] already declares every schema variable."
         )
-        return
+        return False
 
     updates = [
         {"key": key, "value": str(details.get("defaultValue", ""))}
@@ -327,3 +386,4 @@ def _sync_python_local_file(schema: Dict[str, Any], local_file: str) -> None:
     console.print(
         f"[bold green]✓[/bold green] Added {len(updates)} missing variable(s) to [bold cyan]{local_file}[/bold cyan]: {', '.join(missing.keys())}"
     )
+    return True

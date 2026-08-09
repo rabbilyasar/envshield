@@ -10,7 +10,7 @@ from rich.console import Console
 
 from ..config import manager as config_manager
 from ..parsers.factory import get_parser
-from . import scanner, schema_manager, setup_manager
+from . import scanner, schema_manager, service_discovery, setup_manager
 from .exceptions import EnvShieldException
 
 console = Console()
@@ -46,6 +46,13 @@ class HealthCheck:
 
         else:
             console.print(f"[bold green]✓ {self.description}[/bold green]")
+            # A passing check can still carry real information worth seeing
+            # (e.g. "using schema default: LOG_LEVEL") -- --json already
+            # includes it unconditionally; the plain Rich path silently
+            # dropped it on success, which is exactly the kind of "green
+            # checkmark hiding real information" this tool exists to avoid.
+            if self.message:
+                console.print(f"  [dim]{self.message}[/dim]")
 
 
 def _check_config_files(service_name: str):
@@ -58,15 +65,20 @@ def _check_config_files(service_name: str):
     if not config_exists and not schema_exists:
         return (
             False,
-            f"Neither '{config_manager.CONFIG_FILE_NAME}' nor '{schema_label}' found.",
+            f"Neither '{config_manager.CONFIG_FILE_NAME}' nor '{schema_label}' found. "
+            "Run 'envshield init' to create them.",
         )
     if not config_exists:
         return (
             False,
-            f"Configuration file '{config_manager.CONFIG_FILE_NAME}' not found.",
+            f"Configuration file '{config_manager.CONFIG_FILE_NAME}' not found. "
+            "Run 'envshield init' to create it.",
         )
     if not schema_exists:
-        return False, f"Schema file '{schema_label}' not found."
+        return (
+            False,
+            f"Schema file '{schema_label}' not found. Run 'envshield init' to create it.",
+        )
     return True, "Found and accessible."
 
 
@@ -77,7 +89,10 @@ def _check_local_env_sync(service_name: str):
             "local_file"
         ]
         if not os.path.exists(local_file):
-            return False, f"Local env file '{local_file}' not found."
+            return (
+                False,
+                f"Local env file '{local_file}' not found. Run 'envshield setup' to create it.",
+            )
 
         parser = get_parser(local_file)
         if not parser:
@@ -89,8 +104,11 @@ def _check_local_env_sync(service_name: str):
             return True, f"'{local_file}' is in sync with schema."
         return False, diff.summary()
 
-    except EnvShieldException:
-        return False, "Could not load schema to perform check."
+    except EnvShieldException as e:
+        # Preserve the real reason (already actionable -- see
+        # config_manager's load_schema/get_service_schema_path) instead of
+        # masking it behind a generic "could not load schema."
+        return False, str(e)
 
 
 def _check_deployment_manifest(service_name: str):
@@ -100,8 +118,8 @@ def _check_deployment_manifest(service_name: str):
 
     try:
         schema = config_manager.load_schema(service_name=service_name)
-    except EnvShieldException:
-        return False, "Could not load schema to perform check."
+    except EnvShieldException as e:
+        return False, str(e)
 
     all_clean = True
     messages = []
@@ -136,8 +154,8 @@ def _check_deployment_manifest(service_name: str):
 def _check_example_file_sync(service_name: str):
     try:
         schema = config_manager.load_schema(service_name=service_name)
-    except EnvShieldException:
-        return False, "Could not load schema to perform sync check."
+    except EnvShieldException as e:
+        return False, str(e)
 
     paths = config_manager.get_env_paths(service_name=service_name)
     local_file = paths["local_file"]
@@ -153,7 +171,10 @@ def _check_example_file_sync(service_name: str):
         )
 
     if not os.path.exists(example_file):
-        return False, f"'{example_file}' file is missing."
+        return (
+            False,
+            f"'{example_file}' file is missing. Run 'envshield schema sync' to create it.",
+        )
 
     schema_vars = set(schema.keys())
     parser = get_parser(example_file)
@@ -168,27 +189,125 @@ def _check_example_file_sync(service_name: str):
 
     messages = []
     if missing:
-        messages.append(f"Missing from '{example_file}': {', '.join(missing)}")
+        messages.append(
+            f"Missing from '{example_file}': {', '.join(missing)} "
+            "(run 'envshield schema sync' to regenerate it)"
+        )
     if extra:
-        messages.append(f"Extra in '{example_file}': {', '.join(extra)}")
+        messages.append(
+            f"Extra in '{example_file}': {', '.join(extra)} "
+            "(remove them, or add them to the schema if they're meant to be there)"
+        )
     return False, "; ".join(messages)
 
 
-def _check_git_hook():
+def _check_config_source_drift(service_name: str):
+    """
+    Catches the case a pinned config_source (see config_manager.add_service)
+    exists specifically to prevent: a variable added to some OTHER real
+    config source in the same directory (typically a Python config module
+    gaining a var that a stale '.env' never picked up, since dotenv always
+    wins the pinning priority) that never makes it into the schema, because
+    nothing ever re-scans a source once it's pinned.
+    """
+    config_source = config_manager.get_service_config_source(service_name)
+    if not config_source or not os.path.exists(config_source):
+        return True, "No recorded config source to compare against."
+
+    try:
+        schema = config_manager.load_schema(service_name=service_name)
+    except EnvShieldException as e:
+        return False, str(e)
+
+    service_dir = config_manager.get_service_dir(service_name)
+    other_sources = service_discovery.find_other_config_sources(
+        service_dir, config_source
+    )
+    if not other_sources:
+        return True, "No other config sources found to compare against."
+
+    schema_vars = set(schema.keys())
+    messages = []
+    for source in other_sources:
+        parser = get_parser(source)
+        if not parser:
+            continue
+        try:
+            source_vars = parser.get_vars(source)
+        except (FileNotFoundError, OSError):
+            continue
+        extra = sorted(set(source_vars) - schema_vars)
+        if extra:
+            messages.append(
+                f"'{source}' defines {', '.join(extra)}, not declared in the schema "
+                f"(built from '{config_source}'). Run 'envshield import {source}' to add them."
+            )
+
+    if messages:
+        return False, "; ".join(messages)
+    return True, "No variables found in other sources beyond what's already declared."
+
+
+def _check_config_source_reads_environment(service_name: str):
+    """
+    'check'/'doctor' can only ever compare '.env' against the schema --
+    never against the code that's supposed to consume it. A Python
+    config_source that's pure hardcoded literals (no 'os.environ'/
+    'os.getenv' anywhere) can pass every other check forever while the
+    running app never actually reads '.env' at all. Only meaningful for a
+    Python config_source: a dotenv config_source *is* the environment
+    values, nothing to read from itself.
+    """
+    config_source = config_manager.get_service_config_source(service_name)
+    if not config_source or not config_source.endswith(".py"):
+        return True, "Not a Python config source -- nothing to check."
+    if not os.path.exists(config_source):
+        return True, "Recorded config source no longer exists."
+
+    if service_discovery.looks_like_it_reads_the_environment(config_source):
+        return True, f"'{config_source}' reads from the environment."
+
+    return (
+        False,
+        f"'{config_source}' has hardcoded values -- nothing in it reads from the "
+        "environment (no 'os.environ'/'os.getenv'), so nothing guarantees your app "
+        "actually consumes '.env' at all. Run 'envshield generate' and import from "
+        "its output instead.",
+    )
+
+
+def _check_git_hooks():
+    """
+    Checks both hooks, not just pre-commit -- post-merge is the one thing
+    that actually tells a developer about a schema change they pulled
+    without any action on their part, so its absence deserves the exact
+    same visibility pre-commit's already had. A hook file existing isn't
+    enough either; it has to actually be EnvShield's (the shared marker
+    every generated hook script carries), the same bar pre-commit already
+    held itself to.
+    """
     if not scanner.git_utils.get_git_root():
         return False, "Not a Git repository."
 
     hooks_dir = scanner.git_utils.get_hooks_dir()
-    hook_path = os.path.join(hooks_dir, "pre-commit")
-    if not os.path.exists(hook_path):
-        return False, "Pre-commit hook is not installed."
+    missing = []
+    for hook_name in ("pre-commit", "post-merge"):
+        hook_path = os.path.join(hooks_dir, hook_name)
+        if not os.path.exists(hook_path):
+            missing.append(hook_name)
+            continue
+        with open(hook_path, "r") as f:
+            content = f.read()
+        if scanner.ENVSHIELD_HOOK_MARKER not in content:
+            missing.append(hook_name)
 
-    with open(hook_path, "r") as f:
-        content = f.read()
-        if "envshield scan --staged" not in content:
-            return False, "Pre-commit hook is present but does not run EnvShield."
-
-    return True, "Pre-commit hook is installed and active."
+    if missing:
+        return (
+            False,
+            f"Not installed (or not EnvShield's): {', '.join(missing)}. "
+            "Run 'envshield hook install' to fix.",
+        )
+    return True, "pre-commit and post-merge hooks are both installed and active."
 
 
 def _run_init_fix() -> None:
@@ -237,12 +356,39 @@ def _build_checks(service_name: str) -> List[HealthCheck]:
             fix_description="Template is missing or out of sync. Generate/update it from the schema?",
         ),
         HealthCheck(
-            "Git Pre-commit Hook",
-            _check_git_hook,
-            fix_func=lambda: scanner.install_pre_commit_hook(force=True),
-            fix_description="The security hook is not installed. Install it now?",
+            "Git Hooks",
+            _check_git_hooks,
+            fix_func=lambda: (
+                scanner.install_pre_commit_hook(force=True),
+                scanner.install_post_merge_hook(force=True),
+            ),
+            fix_description="One or both git hooks are missing or not EnvShield's. Install them now?",
         ),
     ]
+
+    # Only shown at all when a config_source was actually recorded -- an
+    # older envshield.yml or a schema built from a generic template has
+    # nothing to compare drift against.
+    if config_manager.get_service_config_source(service_name):
+        checks.append(
+            HealthCheck(
+                "Config Source Drift",
+                lambda: _check_config_source_drift(service_name),
+                fix_func=None,
+            )
+        )
+
+    # Only shown at all for a Python config_source -- a dotenv one has
+    # nothing separate to "read the environment," it IS the values.
+    config_source = config_manager.get_service_config_source(service_name)
+    if config_source and config_source.endswith(".py"):
+        checks.append(
+            HealthCheck(
+                "Config Source Reads Environment",
+                lambda: _check_config_source_reads_environment(service_name),
+                fix_func=None,
+            )
+        )
 
     # Only shown at all when a manifest is actually registered for this
     # service -- a project that doesn't use one shouldn't see a check for

@@ -245,3 +245,88 @@ def test_generate_schema_from_file_does_not_infer_a_type_for_secrets(tmp_path):
 
     assert schema["DATABASE_URL"]["secret"] is True
     assert "type" not in schema["DATABASE_URL"]
+
+
+def test_generate_schema_from_file_interactive_overrides_existing_declaration_for_a_rescanned_var(
+    tmp_path, mocker
+):
+    """
+    Real bug: '--interactive --force' let a user re-confirm a variable's
+    classification live, then silently discarded that answer and kept the
+    stale existing schema entry instead -- defeating the entire point of
+    '--interactive' re-classification for anything already declared.
+    """
+    settings = tmp_path / "settings.py"
+    settings.write_text("DATABASE_URL = 'postgres://user:pass@localhost/db'\n")
+
+    existing_schema = {
+        "DATABASE_URL": {
+            "description": "TODO: Add description.",
+            "secret": False,
+            "defaultValue": "thisisdatabasse",
+        },
+        "STRIPE_API": {"description": "TODO: Add description.", "secret": True},
+    }
+
+    # Live answers: not a secret, use the freshly-scanned value as the default.
+    mocker.patch("questionary.confirm").return_value.ask.side_effect = [False, True]
+
+    schema_content = importer.generate_schema_from_file(
+        str(settings), interactive=True, existing_schema=existing_schema
+    )
+    schema = toml.loads(schema_content)
+
+    assert (
+        schema["DATABASE_URL"]["defaultValue"] == "postgres://user:pass@localhost/db"
+    )
+    # STRIPE_API wasn't in this scan at all -- still preserved unchanged.
+    assert schema["STRIPE_API"] == existing_schema["STRIPE_API"]
+
+
+def test_generate_schema_from_file_noninteractive_keeps_existing_declaration_for_a_rescanned_var(
+    tmp_path,
+):
+    """Without --interactive, the existing declaration still wins outright -- protecting an unreviewed re-scan."""
+    settings = tmp_path / "settings.py"
+    settings.write_text("DATABASE_URL = 'postgres://user:pass@localhost/db'\n")
+
+    existing_schema = {
+        "DATABASE_URL": {
+            "description": "TODO: Add description.",
+            "secret": False,
+            "defaultValue": "thisisdatabasse",
+        }
+    }
+
+    schema_content = importer.generate_schema_from_file(
+        str(settings), interactive=False, existing_schema=existing_schema
+    )
+    schema = toml.loads(schema_content)
+
+    assert schema["DATABASE_URL"]["defaultValue"] == "thisisdatabasse"
+
+
+def test_merge_variables_from_other_sources_adds_only_new_keys(tmp_path):
+    other_file = tmp_path / "settings.py"
+    other_file.write_text(
+        "SECRET_KEY = 'sk_live_x'\nDEBUG = True\nLOG_LEVEL = 'info'\n"
+    )
+    schema_dict = {"SECRET_KEY": {"description": "x", "secret": True}}
+
+    added = importer.merge_variables_from_other_sources(schema_dict, [str(other_file)])
+
+    assert added == {str(other_file): ["DEBUG", "LOG_LEVEL"]}
+    assert schema_dict["SECRET_KEY"] == {"description": "x", "secret": True}
+    assert schema_dict["LOG_LEVEL"]["defaultValue"] == "info"
+    assert schema_dict["DEBUG"]["type"] == "bool"
+
+
+def test_merge_variables_from_other_sources_no_op_when_nothing_new(tmp_path):
+    other_file = tmp_path / ".env"
+    other_file.write_text("SECRET_KEY=x\n")
+    schema_dict = {"SECRET_KEY": {"description": "x", "secret": True}}
+
+    added = importer.merge_variables_from_other_sources(schema_dict, [str(other_file)])
+
+    assert added == {}
+    assert schema_dict == {"SECRET_KEY": {"description": "x", "secret": True}}

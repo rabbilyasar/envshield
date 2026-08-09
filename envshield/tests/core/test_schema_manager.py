@@ -74,8 +74,14 @@ def test_check_schema_flags_a_required_var_declared_but_left_blank(mocker, tmp_p
         assert is_in_sync is False
 
 
-def test_check_schema_does_not_flag_a_blank_var_that_has_a_default(mocker, tmp_path):
-    """A var with a schema default is fine to leave blank locally -- the default covers it."""
+def test_check_schema_flags_a_blank_var_that_has_a_default(mocker, tmp_path):
+    """
+    A blank value is worse than an absent one: os.getenv("X", "default")
+    only falls back to "default" when the key is missing entirely -- a
+    present-but-empty key returns "" instead. A schema default is a
+    starting value 'setup' writes automatically, not license for the
+    local file's own copy to be silently blank.
+    """
     with runner.isolated_filesystem(temp_dir=tmp_path):
         mocker.patch(
             "envshield.config.manager.load_schema",
@@ -86,7 +92,7 @@ def test_check_schema_does_not_flag_a_blank_var_that_has_a_default(mocker, tmp_p
 
         is_in_sync = schema_manager.check_schema(".env.local", service_name="app")
 
-        assert is_in_sync is True
+        assert is_in_sync is False
 
 
 def test_sync_schema_generates_perfect_file(mocker, tmp_path):
@@ -223,6 +229,78 @@ def test_diff_against_schema_reports_clean_result():
 
     assert diff.is_clean is True
     assert diff.summary() == ""
+
+
+def test_diff_against_schema_flags_defaulted_vars_missing_from_local():
+    """
+    Regression: a schema variable with a defaultValue, absent from the
+    local file entirely, used to be silently accepted as "in sync" --
+    nothing guarantees whatever reads this file actually falls back to the
+    schema's documented default, or falls back at all, so its own copy has
+    to be explicit. Real repro: LOG_LEVEL declared with defaultValue="info",
+    never added to a developer's own .env after a schema update.
+    """
+    schema = {"LOG_LEVEL": {"description": "x", "defaultValue": "info"}}
+
+    diff = schema_manager.diff_against_schema(schema, {})
+
+    assert diff.is_clean is False
+    assert diff.missing == {"LOG_LEVEL"}
+    assert "LOG_LEVEL" in diff.summary()
+
+
+def test_diff_against_schema_defaulted_vars_required_regardless_of_requiredif():
+    """
+    A defaulted variable must be present even if it also happens to carry
+    a requiredIf condition that isn't currently active -- the default
+    makes it meaningful in every case. A var with neither a default nor an
+    active requiredIf condition is the only one still genuinely optional.
+    """
+    schema = {
+        "FLAG": {"description": "x", "defaultValue": "false"},
+        "DEPENDENT": {
+            "description": "x",
+            "requiredIf": {"var": "FLAG", "equals": "true"},
+        },
+    }
+
+    diff = schema_manager.diff_against_schema(schema, {})
+
+    assert diff.missing == {"FLAG"}
+    assert "DEPENDENT" not in diff.missing
+
+
+def test_check_schema_flags_defaulted_vars_missing_from_local(mocker, tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        mocker.patch(
+            "envshield.config.manager.load_schema",
+            return_value={
+                "API_KEY": {"secret": True},
+                "LOG_LEVEL": {"defaultValue": "info"},
+            },
+        )
+        with open(".env.local", "w") as f:
+            f.write("API_KEY=abc123\n")
+
+        is_in_sync = schema_manager.check_schema(".env.local", service_name="app")
+
+        assert is_in_sync is False
+
+
+def test_check_result_json_flags_defaulted_vars_missing_from_local(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    config_manager.add_service("app", SCHEMA_FILE_NAME)
+    with open(SCHEMA_FILE_NAME, "w") as f:
+        f.write('[LOG_LEVEL]\ndescription="x"\ndefaultValue="info"\n')
+    with open(".env", "w") as f:
+        f.write("")
+
+    result = schema_manager.check_result(".env", service_name="app")
+
+    assert result["clean"] is False
+    assert result["missing"] == ["LOG_LEVEL"]
 
 
 def test_diff_against_schema_reports_every_category():

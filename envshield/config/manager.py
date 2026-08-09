@@ -102,12 +102,17 @@ def load_schema(service_name: str) -> Dict[str, Any]:
     """
     schema_path = get_service_schema_path(service_name)
     if not schema_path:
+        available = ", ".join(sorted(get_services().keys())) or "none registered yet"
         raise SchemaNotFoundError(
-            f"Service '{service_name}' not found in configuration."
+            f"Service '{service_name}' not found in configuration. "
+            f"Available: {available}. Run 'envshield service list' to check."
         )
 
     if not os.path.exists(schema_path):
-        raise SchemaNotFoundError(f"Schema file not found: {schema_path}")
+        raise SchemaNotFoundError(
+            f"Schema file not found: {schema_path}. Run 'envshield init' to "
+            "recreate it, or restore the file at that path."
+        )
     return _load_schema_file(schema_path)
 
 
@@ -128,11 +133,14 @@ def load_bare_schema(path: str = SCHEMA_FILE_NAME) -> Dict[str, Any]:
     bug this file's `services`-always-populated design exists to prevent.
     """
     if not os.path.exists(path):
-        raise SchemaNotFoundError(f"Schema file not found: {path}")
+        raise SchemaNotFoundError(
+            f"Schema file not found: {path}. Run 'envshield import <file>' to "
+            "generate one from an existing config, or 'envshield init'."
+        )
     return _load_schema_file(path)
 
 
-def _load_toml_schema(schema_path: str) -> Dict[str, Any]:
+def load_toml_schema(schema_path: str) -> Dict[str, Any]:
     """Reads and parses one TOML schema file, with friendlier error messages on malformed TOML."""
     try:
         with open(schema_path, "r") as f:
@@ -181,7 +189,7 @@ def _load_schema_file(
         raise SchemaParseError(schema_path, "circular 'extends' chain detected")
     visited = visited | {real_path}
 
-    raw = _load_toml_schema(schema_path)
+    raw = load_toml_schema(schema_path)
     extends = raw.pop("extends", None)
 
     merged: Dict[str, Any] = {}
@@ -195,7 +203,8 @@ def _load_schema_file(
             )
             if not os.path.exists(base_path):
                 raise SchemaNotFoundError(
-                    f"'{schema_path}' extends '{base_path}', which doesn't exist."
+                    f"'{schema_path}' extends '{base_path}', which doesn't exist. "
+                    f"Fix the 'extends' path in {schema_path}, or create the missing file."
                 )
             merged.update(_load_schema_file(base_path, _visited=visited))
 
@@ -241,6 +250,7 @@ def add_service(
     local_file: Optional[str] = None,
     example_file: Optional[str] = None,
     description: Optional[str] = None,
+    config_source: Optional[str] = None,
 ) -> None:
     """
     Adds (or overwrites) one service entry in envshield.yml, creating the
@@ -255,6 +265,12 @@ def add_service(
     services at once, and duplicating "which manifest, which container" on
     every one of them is exactly the kind of topology-vs-meaning drift this
     file exists to avoid).
+
+    `config_source`, when given, records which real file this service's
+    schema was originally built from (e.g. 'config/settings.py') -- so a
+    later 'init --force' re-scans that same file again instead of
+    re-running auto-detection, which could silently pick a different file
+    (e.g. a locally-drifted '.env') and regress the schema based on it.
 
     Note: envshield.yml is rewritten via a full YAML re-serialization, so
     any hand-written comments in an existing file won't survive.
@@ -280,10 +296,26 @@ def add_service(
         entry["local_file"] = local_file
     if example_file:
         entry["example_file"] = example_file
+    if config_source:
+        entry["config_source"] = config_source
     services[name] = entry
 
     with open(CONFIG_FILE_NAME, "w") as f:
         yaml.dump(config, f, sort_keys=False, indent=2)
+
+
+def get_service_config_source(name: str) -> Optional[str]:
+    """
+    Returns the real file this service's schema was originally built from
+    (see add_service's `config_source`), or None if it was never recorded
+    -- an older envshield.yml, or a schema built from a generic template
+    with no real source at all.
+    """
+    services = get_services()
+    entry = services.get(name)
+    if not isinstance(entry, dict):
+        return None
+    return entry.get("config_source")
 
 
 def remove_service(name: str) -> None:
@@ -297,7 +329,15 @@ def remove_service(name: str) -> None:
     config = load_config()
     services = config.get("services")
     if not isinstance(services, dict) or name not in services:
-        raise SchemaNotFoundError(f"Service '{name}' not found in configuration.")
+        available = (
+            ", ".join(sorted(services.keys()))
+            if isinstance(services, dict) and services
+            else "none registered yet"
+        )
+        raise SchemaNotFoundError(
+            f"Service '{name}' not found in configuration. Available: {available}. "
+            "Run 'envshield service list' to check."
+        )
     del services[name]
 
     manifests = config.get("manifests")
@@ -435,6 +475,7 @@ def generate_default_config_content(
     schema_path: str = SCHEMA_FILE_NAME,
     deployment_manifest: Optional[str] = None,
     container: Optional[str] = None,
+    config_source: Optional[str] = None,
 ) -> str:
     """
     Generates the YAML content for a default envshield.yml configuration
@@ -449,11 +490,18 @@ def generate_default_config_content(
     at the project root -- see service_discovery.find_compose_file), is
     registered up front under `manifests` so `doctor`/`check` validate it
     automatically from the very first run, with no separate opt-in step.
+
+    `config_source`, when given, records which real file the schema was
+    built from -- see add_service's docstring for why a later 'init
+    --force' needs to remember this instead of re-detecting it.
     """
+    service_entry: Dict[str, Any] = {"schema": schema_path}
+    if config_source:
+        service_entry["config_source"] = config_source
     config_data: Dict[str, Any] = {
         "project_name": project_name,
         "services": {
-            service_name: {"schema": schema_path},
+            service_name: service_entry,
         },
         "secret_scanning": {
             "exclude_files": [
