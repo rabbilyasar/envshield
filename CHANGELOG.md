@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented in this file.
 
+## [4.5.1] - 2026-08-10
+
+### Fixed
+- **A schema variable with a `defaultValue` must now be explicitly present and non-blank** in the local file, Python `local_file`, and deployment manifests alike — a default only ever changed whether `setup` prompts for a value, never whether the file's own copy could be absent or blank. `check`/`doctor` flag it the same as a truly required variable, with the default named inline so the fix is obvious. See [Every field a variable can have](README.md#every-field-a-variable-can-have).
+- **`init --force` no longer risks silently regressing a shared schema.** The real config source a schema was built from is now recorded and reused on re-runs instead of being re-detected from scratch (a real `.env` created later would otherwise always outrank the actual source, even drifted); re-scans only ever add to an existing schema, never drop or reclassify a variable it already declares. `doctor` gains a "Config Source Drift" check for a variable added to a sibling config file after the pin, detection skips a dotenv file EnvShield itself generated, and a config source with no recognizable environment-reading call at all is flagged. See [Maintaining EnvShield over time](README.md#maintaining-envshield-over-time).
+- **Pre-commit and post-merge hooks now scope every check to the service actually touched**, not every registered service whenever any one schema changed — staging or merging only one service's schema could previously fail (or silently pass) another service's check that nothing in the change affected. Pre-commit also catches a template with unstaged changes when its schema is staged, closing a gap where running `schema sync` and forgetting to `git add` the result let a commit land with a stale, mismatched template anyway.
+- **`scan` skips git-ignored files by default** — a real `.env` was being reported as "DANGER" even though it can never be committed; `--staged` is unaffected, since a force-staged ignored file is a real risk. `scan` also rejects a nonexistent path instead of silently reporting a clean scan, and tolerates a broken schema in one service without crashing the scan for every other service.
+- `hook install --yes` now actually reaches the second, foreign-hook-overwrite confirmation instead of leaving it ungated (a real terminal got an unexpected extra prompt anyway; no terminal hit undefined input instead of the safe "warn and skip" path).
+- `service add` rejects a nonexistent directory instead of registering a service pointing at nothing; `service remove` names any leftover files and points at what to run next when it was the last registered service.
+- `generate` refuses to shadow an existing same-named package directory instead of silently breaking its imports.
+- `setup` no longer accepts a blank answer for a variable that has to be present, and `schema sync` distinguishes a real change from an already-in-sync no-op instead of always claiming success.
+
 ## [4.5.0] - 2026-08-08
 
 ### Added
