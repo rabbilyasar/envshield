@@ -65,6 +65,33 @@ def get_hooks_dir() -> str | None:
     return os.path.join(git_root, ".git", "hooks")
 
 
+def get_ignored_files(paths: list[str]) -> set[str]:
+    """
+    Returns the subset of `paths` that Git would ignore (per .gitignore),
+    via a single batched 'git check-ignore --stdin' call rather than one
+    subprocess per file.
+
+    Returns an empty set outside a Git repository, or if git itself isn't
+    available -- callers should treat that as "can't tell, don't filter,"
+    not "nothing is ignored."
+    """
+    if not get_git_root() or not paths:
+        return set()
+
+    try:
+        result = subprocess.run(
+            ["git", "check-ignore", "--stdin"],
+            input="\n".join(paths),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        return set()
+    # Exit code 1 just means "none of these are ignored" -- not an error.
+    return {line for line in result.stdout.splitlines() if line}
+
+
 def get_staged_files() -> list[str]:
     """
     Gets a list of all files that are currently staged for the next commit.

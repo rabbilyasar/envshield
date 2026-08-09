@@ -272,6 +272,15 @@ def _collect_files_to_scan(paths: Optional[List[str]], staged_only: bool) -> Lis
     files_to_scan = []
     scan_paths = paths or ["."]
 
+    # A typo'd path must fail loudly, not silently scan zero files and
+    # report "no issues found" -- that reads as "your code is clean" when
+    # what actually happened is "nothing was scanned at all."
+    missing_paths = [p for p in scan_paths if not os.path.exists(p)]
+    if missing_paths:
+        raise EnvShieldException(
+            f"Path not found: {', '.join(missing_paths)}. Check for a typo."
+        )
+
     if "." in scan_paths:
         console.print("Scanning [yellow]current directory[/yellow] recursively...")
 
@@ -284,6 +293,23 @@ def _collect_files_to_scan(paths: Optional[List[str]], staged_only: bool) -> Lis
                 dirs[:] = [d for d in dirs if not _is_default_excluded_dir(d)]
                 for file in files:
                     files_to_scan.append(os.path.join(root, file))
+
+    # A git-ignored file (a real '.env', chief among them) is never going
+    # to be committed, so flagging a secret inside it as "DANGER" is pure
+    # noise against what this command actually exists to prevent -- and
+    # actively contradicts its own suggestion text, which tells you to
+    # move secrets INTO that same gitignored file. '--staged' is
+    # unaffected: if an ignored file somehow got staged anyway, that's a
+    # real, imminent risk worth flagging, not noise.
+    ignored = git_utils.get_ignored_files(files_to_scan)
+    if ignored:
+        console.print(
+            f"[dim]ℹ️  Skipping {len(ignored)} git-ignored file(s) -- not "
+            "committable, so not scanned: "
+            f"{', '.join(sorted(ignored))}[/dim]"
+        )
+        files_to_scan = [f for f in files_to_scan if f not in ignored]
+
     return files_to_scan
 
 
@@ -353,6 +379,19 @@ def _build_undeclared_var_resolver(service_name: Optional[str]):
             service_dir = _normalize_for_dir_match(config_manager.get_service_dir(name))
             schema_vars = set(config_manager.load_schema(service_name=name).keys())
         except SchemaNotFoundError:
+            continue
+        except EnvShieldException as e:
+            # A broken schema in one service (e.g. mid-edit, unrelated to
+            # what's actually staged) must not block undeclared-variable
+            # checking -- or the commit itself, via 'scan --staged' -- for
+            # every other service in the project. Real incident this
+            # reproduces: a malformed env.schema.toml sitting in service
+            # A's working tree silently blocked every commit touching
+            # service B, even though B was never involved.
+            console.print(
+                f"[yellow]Warning: Could not load schema for service '{name}': {e} "
+                f"Skipping its undeclared-variable check.[/yellow]"
+            )
             continue
         service_dirs.append((service_dir, schema_vars))
     # Longest directory first, so a nested service dir wins over a shorter
@@ -541,6 +580,11 @@ def run_scan(
                 finding["line_content"],
             )
         console.print(table)
+        console.print(
+            "\n[bold]Suggestion:[/bold] Remove the secret from this file and move it "
+            "to '.env' (gitignored) instead. If it's a known false positive, add a "
+            "targeted '--exclude' glob or a 'secret_scanning.exclude_files' entry in envshield.yml."
+        )
 
     if all_undeclared_findings:
         found_issues = True
@@ -607,7 +651,7 @@ def scan_result(
     }
 
 
-_ENVSHIELD_HOOK_MARKER = "# Hook installed by EnvShield"
+ENVSHIELD_HOOK_MARKER = "# Hook installed by EnvShield"
 
 
 def remove_hooks() -> List[str]:
@@ -632,7 +676,7 @@ def remove_hooks() -> List[str]:
             continue
         with open(hook_path, "r") as f:
             content = f.read()
-        if _ENVSHIELD_HOOK_MARKER not in content:
+        if ENVSHIELD_HOOK_MARKER not in content:
             continue
         os.remove(hook_path)
         removed.append(hook_name)
@@ -641,7 +685,7 @@ def remove_hooks() -> List[str]:
 
 def _describe_existing_hook(content: str) -> str:
     """Best-effort description of an existing hook file, for the overwrite warning."""
-    if _ENVSHIELD_HOOK_MARKER in content:
+    if ENVSHIELD_HOOK_MARKER in content:
         return "previously installed by EnvShield -- safe to regenerate"
     if "husky.sh" in content or ".husky" in content:
         return "managed by Husky"
@@ -661,6 +705,84 @@ def _warn_hooks_path_redirect(hooks_dir: str, git_root: str) -> None:
         )
 
 
+def _generate_pre_commit_hook_content() -> str:
+    """
+    Generates the bash script content for the pre-commit hook: always scans
+    staged files for secrets/undeclared vars, and -- when a staged change
+    touches a service's schema -- also blocks the commit if that service's
+    tracked template (.env.example) wasn't regenerated to match. Without
+    this, a hand-edited env.schema.toml can go stale at the source, silent
+    until whoever next pulls (and only then if they have the post-merge
+    hook installed at all).
+    """
+    config = config_manager.load_config()
+    services_config = config.get("services", {})
+
+    schema_to_service = {
+        service_config["schema"]: name
+        for name, service_config in services_config.items()
+        if isinstance(service_config, dict) and service_config.get("schema")
+    }
+
+    header = (
+        "#!/bin/sh\n\n"
+        "# Hook installed by EnvShield\n"
+        "# Scans staged files for hardcoded secrets AND undeclared environment variables.\n"
+        "envshield scan --staged\n"
+        "STATUS=$?\n"
+    )
+
+    if not schema_to_service:
+        return header + "exit $STATUS\n"
+
+    # Each service's template sync is only checked when THAT service's own
+    # schema was actually staged -- one 'if' per service, gated on its own
+    # path with grep -F (a literal-string match, no alternation needed).
+    # A single shared 'if' gating every service's check (the previous
+    # shape) is the same class of bug the combined -E alternation was
+    # meant to fix elsewhere: staging only 'web's schema still ran 'api's
+    # check too, false-failing the commit over a service nobody touched.
+    blocks = []
+    for schema_path, name in schema_to_service.items():
+        lines = [f"if git diff --cached --name-only | grep -qF '{schema_path}'; then"]
+
+        # 'schema sync --check' below only ever reads the template off
+        # disk, not what's actually staged -- so running 'schema sync'
+        # (which updates disk) and then forgetting to 'git add' the
+        # result would pass that check while the commit itself still
+        # lands with a stale template baked in. Real incident this
+        # reproduces. Blocking on ANY unstaged template diff here closes
+        # that gap without needing to duplicate schema/template parsing
+        # against git's staged blob content. Python-module services have
+        # no separate template file to check (see _check_example_file_sync).
+        try:
+            paths = config_manager.get_env_paths(service_name=name)
+            if not paths["local_file"].endswith(".py"):
+                example_file = paths["example_file"]
+                lines.append(
+                    f"  if git diff --name-only | grep -qF '{example_file}'; then\n"
+                    f"    echo \"✗ '{example_file}' has unstaged changes -- did you "
+                    'forget \'git add\' after running \'envshield schema sync\'?"\n'
+                    "    STATUS=1\n"
+                    "  fi"
+                )
+        except EnvShieldException:
+            pass
+
+        lines.append(f"  envshield schema sync --service {name} --check || STATUS=1")
+        lines.append("fi")
+        blocks.append("\n".join(lines))
+
+    return (
+        header
+        + "\n# A staged schema change must also update its tracked template --\n"
+        + "# otherwise .env.example goes stale the moment this commit lands.\n"
+        + "\n".join(blocks)
+        + "\n\n"
+        + "exit $STATUS\n"
+    )
+
+
 def install_pre_commit_hook(force: bool = False, non_interactive: bool = False):
     """Installs the Git pre-commit hook."""
     git_root = git_utils.get_git_root()
@@ -672,14 +794,17 @@ def install_pre_commit_hook(force: bool = False, non_interactive: bool = False):
     os.makedirs(hooks_dir, exist_ok=True)
     pre_commit_path = os.path.join(hooks_dir, "pre-commit")
 
-    hook_script_content = "#!/bin/sh\n\n# Hook installed by EnvShield\n# This hook scans for hardcoded secrets AND undeclared environment variables.\nenvshield scan --staged\n"
+    hook_script_content = _generate_pre_commit_hook_content()
 
     try:
         if os.path.exists(pre_commit_path):
             with open(pre_commit_path, "r") as f:
                 existing_content = f.read()
 
-            if non_interactive:
+            # Regenerating EnvShield's own hook is always safe -- non-interactive
+            # mode only needs to hold back from a genuinely foreign one, not
+            # bail out on every re-run just because the file already exists.
+            if non_interactive and ENVSHIELD_HOOK_MARKER not in existing_content:
                 console.print(
                     "[bold yellow]⚠️  Warning:[/] A pre-commit hook already exists. EnvShield was not installed automatically."
                 )
@@ -688,7 +813,7 @@ def install_pre_commit_hook(force: bool = False, non_interactive: bool = False):
                 )
                 return
 
-            if not force:
+            if not force and not non_interactive:
                 overwrite = questionary.confirm(
                     f"A pre-commit hook already exists ({_describe_existing_hook(existing_content)}). Do you want to overwrite it?",
                     default=False,
@@ -721,55 +846,53 @@ def install_pre_commit_hook(force: bool = False, non_interactive: bool = False):
 
 def _generate_post_merge_hook_content() -> str:
     """
-    Generates the bash script content for the post-merge hook.
-    Smart: only runs if schema files actually changed.
+    Generates the bash script content for the post-merge hook. Smart: each
+    service's 'doctor' check only runs when THAT service's own schema
+    actually changed in the merge -- not every registered service
+    whenever any one schema changed. Same class of false-positive-across-
+    services bug the pre-commit hook had: merging a branch that only
+    touched 'api's schema must not also run (and potentially report
+    issues for) 'web', which nothing in this merge affected at all.
     """
     config = config_manager.load_config()
+    services_config = config.get("services", {})
 
-    # Every registered service's schema path -- envshield.yml always has at
-    # least one, single-service or not, so there's no separate root-schema
-    # case to fall back to.
-    schema_files = [
-        service_config["schema"]
-        for service_config in config.get("services", {}).values()
+    schema_to_service = {
+        service_config["schema"]: name
+        for name, service_config in services_config.items()
         if isinstance(service_config, dict) and service_config.get("schema")
-    ]
+    }
 
-    # Build the hook script with schema change detection
-    schema_check = " ".join(f'"{f}"' for f in schema_files)
-
-    if config.get("services"):
-        # Multi-service project: generate a doctor call for each service
-        services = list(config["services"].keys())
-        service_checks = "\n  ".join(
-            f"envshield doctor --service {svc} 2>/dev/null" for svc in services
-        )
+    if not schema_to_service:
+        # Hooks can be installed before any service is registered (e.g. a
+        # standalone 'hook install' in a fresh repo) -- nothing to watch
+        # for yet, so there's nothing this hook can usefully check.
         return (
             "#!/bin/sh\n\n"
             "# Hook installed by EnvShield\n"
-            "# Smart: only runs if schema files actually changed.\n"
-            "# If new required variables were added, it alerts the developer immediately.\n"
-            "# Non-blocking: warns but doesn't fail the merge.\n\n"
-            f"# Check if any schema files changed in this merge\n"
-            f"if git diff --name-only HEAD@{{1}}..HEAD | grep -qE {schema_check} 2>/dev/null; then\n"
-            f"  {service_checks}\n"
-            f"fi\n\n"
+            "# No services registered yet -- nothing to check.\n"
             "exit 0\n"
         )
-    else:
-        # Single-service project: check the root schema
-        return (
-            "#!/bin/sh\n\n"
-            "# Hook installed by EnvShield\n"
-            "# Smart: only runs if schema files actually changed.\n"
-            "# If new required variables were added, it alerts the developer immediately.\n"
-            "# Non-blocking: warns but doesn't fail the merge.\n\n"
-            f"# Check if schema file changed in this merge\n"
-            f"if git diff --name-only HEAD@{{1}}..HEAD | grep -qE {schema_check} 2>/dev/null; then\n"
-            f"  envshield doctor 2>/dev/null\n"
-            f"fi\n\n"
-            "exit 0\n"
-        )
+
+    # One 'if' per service, gated on grep -F matching that service's own
+    # schema path only (a literal-string match -- no alternation needed,
+    # unlike the old shared gate this replaces).
+    checks = "\n".join(
+        f"if git diff --name-only HEAD@{{1}}..HEAD | grep -qF '{schema_path}' 2>/dev/null; then\n"
+        f"  envshield doctor --service {name} 2>/dev/null\n"
+        "fi"
+        for schema_path, name in schema_to_service.items()
+    )
+    return (
+        "#!/bin/sh\n\n"
+        "# Hook installed by EnvShield\n"
+        "# Smart: only runs for a service whose own schema actually changed in this merge.\n"
+        "# If new required variables were added, it alerts the developer immediately.\n"
+        "# Non-blocking: warns but doesn't fail the merge.\n\n"
+        + checks
+        + "\n\n"
+        + "exit 0\n"
+    )
 
 
 def install_post_merge_hook(force: bool = False, non_interactive: bool = False):
@@ -794,7 +917,10 @@ def install_post_merge_hook(force: bool = False, non_interactive: bool = False):
             with open(post_merge_path, "r") as f:
                 existing_content = f.read()
 
-            if non_interactive:
+            # Regenerating EnvShield's own hook is always safe -- non-interactive
+            # mode only needs to hold back from a genuinely foreign one, not
+            # bail out on every re-run just because the file already exists.
+            if non_interactive and ENVSHIELD_HOOK_MARKER not in existing_content:
                 console.print(
                     "[bold yellow]⚠️  Warning:[/] A post-merge hook already exists. EnvShield was not installed automatically."
                 )
@@ -803,7 +929,7 @@ def install_post_merge_hook(force: bool = False, non_interactive: bool = False):
                 )
                 return
 
-            if not force:
+            if not force and not non_interactive:
                 overwrite = questionary.confirm(
                     f"A post-merge hook already exists ({_describe_existing_hook(existing_content)}). Do you want to overwrite it?",
                     default=False,

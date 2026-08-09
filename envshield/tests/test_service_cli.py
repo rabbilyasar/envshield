@@ -30,6 +30,81 @@ def test_service_add_registers_and_creates_envshield_yml(tmp_path):
         )
 
 
+def test_service_add_rejects_a_nonexistent_directory(tmp_path):
+    """
+    Real bug: 'service add foo foo' with no 'foo/' directory anywhere
+    silently registered the service and reported success -- indistinguishable
+    from a real registration, right up until every other command against
+    'foo' failed. A typo'd directory must fail loudly instead, the same
+    principle as 'scan' rejecting a nonexistent path.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        result = runner.invoke(app, ["service", "add", "foo", "foo"])
+
+        assert result.exit_code == 1
+        assert "does not exist" in result.stdout
+        assert config_manager.get_services() == {}
+
+
+def test_service_remove_points_at_leftover_files_and_next_step_when_last(tmp_path):
+    """
+    'service remove' never deletes a service's own files -- without saying
+    so, and without saying what to do once no services are left at all,
+    the bare "Removed" checkmark leaves a developer with no idea their
+    schema/local file are still sitting on disk, or what command comes
+    next for an otherwise now-uninitialized project.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.makedirs("api")
+        runner.invoke(app, ["service", "add", "api", "api"])
+        with open("api/env.schema.toml", "w") as f:
+            f.write('[API_KEY]\ndescription="x"\nsecret=true\n')
+        with open("api/.env", "w") as f:
+            f.write("API_KEY=x\n")
+
+        result = runner.invoke(app, ["service", "remove", "api"])
+
+        assert result.exit_code == 0
+        assert "api/env.schema.toml" in result.stdout
+        assert "api/.env" in result.stdout
+        assert os.path.exists("api/env.schema.toml")  # files are untouched
+        assert "envshield init" in result.stdout
+        assert config_manager.get_services() == {}
+
+
+def test_service_remove_omits_next_step_hint_when_other_services_remain(tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.makedirs("api")
+        os.makedirs("web")
+        runner.invoke(app, ["service", "add", "api", "api"])
+        runner.invoke(app, ["service", "add", "web", "web"])
+
+        result = runner.invoke(app, ["service", "remove", "api"])
+
+        assert result.exit_code == 0
+        assert "Next step" not in result.stdout
+        assert config_manager.get_services() == {"web": {"schema": "web/env.schema.toml"}}
+
+
+def test_service_add_warns_when_no_schema_was_created(tmp_path):
+    """
+    Real gap: 'service add' without '--import' only registers the path in
+    envshield.yml -- it never creates a schema file, since there's nothing
+    to build one from. Without a warning, the checkmark output reads as
+    "done" even though every other command (check/doctor/setup) would
+    immediately fail against this service with "schema not found."
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.makedirs("api")
+
+        result = runner.invoke(app, ["service", "add", "api", "api"])
+
+        assert result.exit_code == 0
+        assert not os.path.exists("api/env.schema.toml")
+        assert "doesn't exist yet" in result.stdout
+        assert "import <file> --service api" in result.stdout.replace("\n", " ")
+
+
 def test_service_add_seeds_schema_from_import_file(tmp_path):
     with runner.isolated_filesystem(temp_dir=tmp_path):
         os.makedirs("alpha/config")

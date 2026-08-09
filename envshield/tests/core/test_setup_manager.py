@@ -351,6 +351,66 @@ def test_setup_does_not_re_prompt_for_an_existing_valid_value(mocker, tmp_path):
             assert "LOG_LEVEL=info" in f.read()
 
 
+def test_setup_rejects_a_blank_answer_for_a_required_variable(mocker, tmp_path):
+    """
+    Real bug: pressing Enter with no input for a required variable (no
+    default) was silently accepted as a valid answer -- 'setup' would
+    report success and write a blank value, even though 'check'/'doctor'
+    immediately flag a blank required variable as broken. The wizard whose
+    whole job is to prevent that must not be the one creating it.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_root_service_config()
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[WEB_KEY]\ndescription="x"\n')
+        with open(setup_manager.EXAMPLE_FILE, "w") as f:
+            f.write("WEB_KEY=\n")
+
+        mock_prompt = mocker.patch("envshield.core.setup_manager.Prompt.ask")
+        mock_prompt.side_effect = ["", "real_value"]
+
+        result = runner.invoke(app, ["setup"])
+
+        assert result.exit_code == 0
+        assert "required and cannot be left blank" in result.stdout
+        with open(".env") as f:
+            assert "WEB_KEY=real_value" in f.read()
+
+
+def test_setup_still_accepts_blank_to_clear_an_invalid_but_optional_value(
+    mocker, tmp_path
+):
+    """
+    The only way a genuinely optional field (unmet 'requiredIf', no
+    default) reaches the retry loop at all is an existing value that's
+    invalid against the schema (e.g. a stale pattern mismatch) -- in that
+    case, blank is a legitimate way to clear it, and must not be forced
+    into a "required" error just because it needed re-prompting.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_root_service_config()
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write(
+                '[X_ENABLED]\ndescription="x"\ndefaultValue="false"\n\n'
+                '[OPTIONAL_CODE]\ndescription="x"\npattern="^[0-9]{4}$"\n'
+                'requiredIf={var="X_ENABLED", equals="true"}\n'
+            )
+        with open(".env", "w") as f:
+            f.write("X_ENABLED=false\nOPTIONAL_CODE=not-digits\n")
+
+        mocker.patch("questionary.confirm").return_value.ask.return_value = True
+        mock_prompt = mocker.patch("envshield.core.setup_manager.Prompt.ask")
+        mock_prompt.return_value = ""
+
+        result = runner.invoke(app, ["setup"])
+
+        assert result.exit_code == 0, result.stdout
+        assert "required and cannot be left blank" not in result.stdout
+        with open(".env") as f:
+            content = f.read()
+            assert "OPTIONAL_CODE=" in content
+
+
 def test_setup_uses_a_picker_for_enum_fields(mocker, tmp_path):
     with runner.isolated_filesystem(temp_dir=tmp_path):
         _write_root_service_config()

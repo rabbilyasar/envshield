@@ -1,4 +1,5 @@
 # envshield/tests/core/test_scanner_compliance.py
+import json
 import os
 
 from typer.testing import CliRunner
@@ -102,6 +103,53 @@ def test_scan_ignores_dependency_and_vcs_dirs_by_default(tmp_path):
         assert "No issues found" in result.stdout
 
 
+def test_scan_skips_a_gitignored_env_file(tmp_path):
+    """
+    Real friction: a plain `envshield scan` flagged the developer's own
+    '.env' as "DANGER" -- but '.env' is gitignored by convention (and by
+    'scan's own suggestion text, which tells you to move secrets INTO it),
+    so it will never actually be committed. Flagging it is pure noise
+    against what 'scan' exists to prevent. Git-ignored files must be
+    skipped in the default (non-'--staged') scan.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.system("git init -q")
+        with open(".gitignore", "w") as f:
+            f.write(".env\n")
+        with open(".env", "w") as f:
+            f.write("SECRET_KEY=sk_live_123456789abcdefghijklmnopqrstuv\n")
+
+        result = runner.invoke(app, ["scan"])
+
+        assert result.exit_code == 0, result.stdout
+        assert "No issues found" in result.stdout
+        assert "Skipping" in result.stdout
+        assert ".env" in result.stdout
+
+
+def test_scan_staged_still_flags_a_gitignored_file_that_got_force_staged(tmp_path):
+    """
+    The gitignore skip is only for the default (working-tree) scan, where
+    an ignored file genuinely won't be committed. '--staged' scans exactly
+    what's in the index -- if an ignored file got force-added anyway,
+    that's a real, imminent risk and must still be flagged, not silenced.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.system("git init -q")
+        os.system('git config user.email "test@example.com"')
+        os.system('git config user.name "Test"')
+        with open(".gitignore", "w") as f:
+            f.write(".env\n")
+        with open(".env", "w") as f:
+            f.write("SECRET_KEY=sk_live_123456789abcdefghijklmnopqrstuv\n")
+        os.system("git add -f .env")
+
+        result = runner.invoke(app, ["scan", "--staged"])
+
+        assert result.exit_code == 1
+        assert "DANGER" in result.stdout
+
+
 def test_scan_staged_scans_index_content_not_working_tree(tmp_path):
     """
     Regression (critical): the pre-commit hook (`scan --staged`) must scan
@@ -197,6 +245,39 @@ def test_scan_without_service_resolves_schema_per_service_directory(tmp_path):
         assert "BETA_VAR" not in result.stdout.split("Undeclared Variable Usage")[-1]
 
 
+def test_scan_without_service_skips_a_broken_schema_instead_of_crashing_entirely(
+    tmp_path,
+):
+    """
+    Real incident this reproduces: a malformed env.schema.toml in one
+    service (mid-edit, completely unrelated to what's staged) crashed
+    'scan --staged' outright with an uncaught parse error -- blocking
+    every commit in the whole project, including ones that never touched
+    the broken service at all. A broken schema in one service must only
+    degrade that service's own undeclared-variable check, not take down
+    scanning for every other service.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.makedirs("alpha")
+        os.makedirs("beta")
+        with open("envshield.yml", "w") as f:
+            f.write(
+                "services:\n  alpha:\n    schema: alpha/env.schema.toml\n  beta:\n    schema: beta/env.schema.toml\n"
+            )
+        with open("alpha/env.schema.toml", "w") as f:
+            f.write('[ALPHA_VAR]\ndescription = "unterminated\n')  # malformed TOML
+        with open("beta/env.schema.toml", "w") as f:
+            f.write('[BETA_VAR]\ndescription="x"\n')
+        with open("beta/app.py", "w") as f:
+            f.write("import os\n\nc = os.environ.get('BETA_VAR')\n")
+
+        result = runner.invoke(app, ["scan"])
+
+        assert result.exit_code == 0, result.stdout
+        assert "Could not load schema for service 'alpha'" in result.stdout
+        assert "No issues found" in result.stdout
+
+
 def test_scan_with_explicit_service_still_checks_a_single_schema_for_every_file(
     tmp_path,
 ):
@@ -287,3 +368,28 @@ def test_scan_gracefully_handles_missing_schema_file(tmp_path):
         assert "Warning: No services configured" in result.stdout
         assert "Found 1 undeclared variable(s)!" in result.stdout
         assert "SOME_KEY" in result.stdout
+
+
+def test_scan_rejects_a_nonexistent_path_instead_of_reporting_clean(tmp_path):
+    """
+    Real bug: 'scan nonexi.py' (a typo'd path) silently scanned zero files
+    and reported "No issues found -- your configuration is secure and
+    compliant!" -- indistinguishable from an actual clean scan of real
+    files. A typo'd path must fail loudly instead.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        result = runner.invoke(app, ["scan", "nonexistent.py"])
+
+        assert result.exit_code == 1
+        assert "not found" in result.stdout.lower()
+        assert "No issues found" not in result.stdout
+
+
+def test_scan_json_rejects_a_nonexistent_path_instead_of_reporting_clean(tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        result = runner.invoke(app, ["scan", "nonexistent.py", "--json"])
+
+        assert result.exit_code == 1
+        payload = json.loads(result.stdout)
+        assert payload["clean"] is False
+        assert "not found" in payload["error"].lower()

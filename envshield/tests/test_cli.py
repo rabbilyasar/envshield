@@ -163,6 +163,89 @@ def test_schema_sync_command(tmp_path):
             content = f.read()
             assert "# My test key" in content
             assert "API_KEY=abc" in content
+        # Real gap: a successful sync said nothing about what to do with
+        # the result -- commit it? does anything else need updating?
+        assert "Next step" in result.stdout
+        assert "envshield setup" in result.stdout
+
+
+def test_schema_sync_reports_no_op_on_a_second_run_with_no_schema_change(tmp_path):
+    """
+    Real gap this reproduces: re-running 'schema sync' with nothing
+    changed still claimed "Successfully created/updated" and told the
+    developer to review and commit -- even though the file's actual
+    content (ignoring the regenerated timestamp) is identical to before.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_root_service()
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[API_KEY]\ndescription="x"\ndefaultValue="abc"\n')
+
+        first = runner.invoke(app, ["schema", "sync"])
+        assert first.exit_code == 0
+        assert "Successfully created/updated" in first.stdout
+
+        second = runner.invoke(app, ["schema", "sync"])
+
+        assert second.exit_code == 0
+        assert "already up to date" in second.stdout
+        assert "Successfully created/updated" not in second.stdout
+        assert "Next step" not in second.stdout
+        assert "Nothing to do" in second.stdout
+
+
+def test_schema_sync_check_prints_no_next_step_hint_when_passing(tmp_path):
+    """'--check' is a read-only verification -- unlike a real sync, passing cleanly needs no further action, matching 'check'/'doctor's own convention."""
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_root_service()
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[API_KEY]\ndescription="x"\ndefaultValue="abc"\n')
+        with open(".env.example", "w") as f:
+            f.write("# x\nAPI_KEY=abc\n")
+
+        result = runner.invoke(app, ["schema", "sync", "--check"])
+
+        assert result.exit_code == 0
+        assert "Next step" not in result.stdout
+
+
+def test_schema_sync_check_passes_and_writes_nothing_when_already_in_sync(tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_root_service()
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[API_KEY]\ndescription="x"\ndefaultValue="abc"\n')
+        with open(".env.example", "w") as f:
+            f.write("# x\nAPI_KEY=abc\n")
+        before = os.path.getmtime(".env.example")
+
+        result = runner.invoke(app, ["schema", "sync", "--check"])
+
+        assert result.exit_code == 0
+        assert os.path.getmtime(".env.example") == before  # never written to
+
+
+def test_schema_sync_check_fails_without_writing_when_template_is_stale(tmp_path):
+    """
+    Regression target: a schema edited by hand with no matching
+    '.env.example' update must be caught, not silently accepted -- this is
+    what the pre-commit hook now runs before allowing a commit that touches
+    a schema file.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_root_service()
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write(
+                '[API_KEY]\ndescription="x"\ndefaultValue="abc"\n\n[NEW_VAR]\ndescription="y"\n'
+            )
+        with open(".env.example", "w") as f:
+            f.write("# x\nAPI_KEY=abc\n")  # NEW_VAR never synced in
+
+        result = runner.invoke(app, ["schema", "sync", "--check"])
+
+        assert result.exit_code == 1
+        assert "NEW_VAR" in result.stdout
+        with open(".env.example") as f:
+            assert "NEW_VAR" not in f.read()  # --check never writes
 
 
 def test_import_command_on_python_settings_file(tmp_path):
@@ -221,6 +304,35 @@ def test_generate_command_refuses_to_overwrite_without_force(tmp_path):
         assert "already exists" in result.stdout
         with open("config.py", "r") as f:
             assert "hand-written" in f.read()
+
+
+def test_generate_command_refuses_to_shadow_an_existing_package_directory(tmp_path):
+    """
+    Real incident: a Flask/Django-style project with a 'config/settings.py'
+    package, generating to the default 'config.py' output. CPython resolves
+    a plain module over a same-named package in the same directory, so this
+    would silently make 'import config' return the generated file instead
+    of the real package -- breaking every 'from config.settings import ...'
+    in the app, with nothing at write time to warn about it. Not
+    overridable by --force: the output path itself has to change.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[API_KEY]\ndescription = "Test"\nsecret = true\n')
+        os.makedirs("config")
+        with open("config/settings.py", "w") as f:
+            f.write("SECRET_KEY = 'x'\n")
+
+        result = runner.invoke(app, ["generate"])
+
+        assert result.exit_code == 1
+        assert "shadow" in result.stdout
+        assert not os.path.exists("config.py")
+
+        # --force must not paper over this -- it's not an overwrite problem.
+        result = runner.invoke(app, ["generate", "--force"])
+        assert result.exit_code == 1
+        assert not os.path.exists("config.py")
 
 
 def test_generate_command_with_explicit_typescript_lang(tmp_path):
@@ -457,6 +569,43 @@ def test_import_command_syncs_the_env_example_template(tmp_path):
             assert "API_PORT" in content
 
 
+def test_import_force_preserves_existing_variables_not_in_the_new_source(tmp_path):
+    """Same merge-safety as 'init --force': a re-import must only add to the schema, never silently drop what's already declared."""
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        with open("settings.py", "w") as f:
+            f.write("SECRET_KEY = 'x'\nLOG_LEVEL = 'info'\n")
+        runner.invoke(app, ["import", "settings.py"])
+
+        with open("settings.py", "w") as f:
+            f.write("SECRET_KEY = 'x'\n")  # LOG_LEVEL dropped from the source
+
+        result = runner.invoke(app, ["import", "settings.py", "--force"])
+
+        assert result.exit_code == 0, result.stdout
+        with open(SCHEMA_FILE_NAME) as f:
+            assert "LOG_LEVEL" in f.read()
+
+
+def test_import_force_preserves_an_extends_directive(tmp_path):
+    """'extends' is a schema-composition directive, not a variable -- a value-scan has no way to rediscover it if a re-import drops it."""
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        with open("base.schema.toml", "w") as f:
+            f.write('[LOG_LEVEL]\ndescription="x"\ndefaultValue="info"\n')
+        with open("settings.py", "w") as f:
+            f.write("SECRET_KEY = 'x'\n")
+        runner.invoke(app, ["import", "settings.py"])
+        with open(SCHEMA_FILE_NAME) as f:
+            content = f.read()
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('extends = "base.schema.toml"\n\n' + content)
+
+        result = runner.invoke(app, ["import", "settings.py", "--force"])
+
+        assert result.exit_code == 0, result.stdout
+        with open(SCHEMA_FILE_NAME) as f:
+            assert 'extends = "base.schema.toml"' in f.read()
+
+
 def test_init_builds_schema_from_a_real_config_source_instead_of_the_template(
     tmp_path, mocker
 ):
@@ -489,6 +638,262 @@ def test_init_builds_schema_from_a_real_config_source_instead_of_the_template(
             assert "LOG_LEVEL" in content
 
 
+def test_init_records_the_config_source_it_used(tmp_path, mocker):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.system("git init -q")
+        mocker.patch("questionary.confirm").return_value.ask.return_value = False
+        os.makedirs("config")
+        with open("config/settings.py", "w") as f:
+            f.write("SECRET_KEY = 'x'\nDEBUG = True\nAPI_PORT = 5000\n")
+
+        runner.invoke(app, ["init"])
+
+        project_name = os.path.basename(os.getcwd())
+        assert (
+            config_manager.get_service_config_source(project_name)
+            == "config/settings.py"
+        )
+
+
+def test_init_force_reuses_the_recorded_config_source_instead_of_redetecting(
+    tmp_path, mocker
+):
+    """
+    Real incident this reproduces: the first 'init' builds the schema from
+    'config/settings.py' (5 variables, including LOG_LEVEL). Later, 'setup'
+    creates a '.env' -- and a developer manually removes LOG_LEVEL from it.
+    Re-running 'init --force' used to re-detect a config source from
+    scratch, and a real '.env' always wins that detection over a Python
+    module -- silently rebuilding the schema from the now-incomplete '.env'
+    and losing LOG_LEVEL, even though 'config/settings.py' still declares
+    it. It must keep using the originally-recorded source instead.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.system("git init -q")
+        mocker.patch("questionary.confirm").return_value.ask.return_value = True
+        os.makedirs("config")
+        with open("config/settings.py", "w") as f:
+            f.write(
+                "SECRET_KEY = 'x'\nDATABASE_URL = 'postgres://x'\nDEBUG = True\n"
+                "API_PORT = 5000\nLOG_LEVEL = 'info'\n"
+            )
+        runner.invoke(app, ["init"])
+
+        # Simulate the drifted '.env': present, but missing LOG_LEVEL.
+        with open(".env", "w") as f:
+            f.write(
+                "SECRET_KEY=x\nDATABASE_URL=postgres://x\nDEBUG=True\nAPI_PORT=5000\n"
+            )
+
+        result = runner.invoke(app, ["init", "--force"])
+
+        assert result.exit_code == 0, result.stdout
+        with open(SCHEMA_FILE_NAME) as f:
+            assert "LOG_LEVEL" in f.read()
+
+
+def test_init_force_preserves_a_variable_missing_from_a_drifted_source(
+    tmp_path, mocker
+):
+    """
+    Even if the recorded source itself is what changed (not just a rival
+    '.env'), a variable already declared in the current schema must never
+    be silently dropped just because this scan's source doesn't mention it
+    -- only ever added to, never destructively replaced.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.system("git init -q")
+        mocker.patch("questionary.confirm").return_value.ask.return_value = True
+        os.makedirs("config")
+        with open("config/settings.py", "w") as f:
+            f.write(
+                "SECRET_KEY = 'x'\nDEBUG = True\nAPI_PORT = 5000\nLOG_LEVEL = 'info'\n"
+            )
+        runner.invoke(app, ["init"])
+
+        # The recorded source file itself loses a variable.
+        with open("config/settings.py", "w") as f:
+            f.write("SECRET_KEY = 'x'\n")
+
+        result = runner.invoke(app, ["init", "--force"])
+
+        assert result.exit_code == 0, result.stdout
+        with open(SCHEMA_FILE_NAME) as f:
+            assert "LOG_LEVEL" in f.read()
+
+
+def test_init_force_preserves_a_hand_corrected_secret_classification(tmp_path, mocker):
+    """A manual fix to the schema (e.g. correcting a wrong 'secret' guess) must survive a re-scan, not get silently reclassified back."""
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.system("git init -q")
+        mocker.patch("questionary.confirm").return_value.ask.return_value = True
+        os.makedirs("config")
+        with open("config/settings.py", "w") as f:
+            f.write(
+                "DATABASE_URL = 'plain-placeholder'\nDEBUG = True\nAPI_PORT = 5000\n"
+            )
+        runner.invoke(app, ["init"])
+
+        # Hand-correct the (wrongly guessed non-secret) classification.
+        with open(SCHEMA_FILE_NAME) as f:
+            content = f.read()
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write(content.replace("secret = false", "secret = true"))
+
+        result = runner.invoke(app, ["init", "--force"])
+
+        assert result.exit_code == 0, result.stdout
+        with open(SCHEMA_FILE_NAME) as f:
+            content = f.read()
+        assert "secret = true" in content
+
+
+def test_init_merges_a_variable_only_present_in_another_config_source(
+    tmp_path, mocker
+):
+    """
+    Real incident this reproduces: '.env' is (and stays) the pinned
+    config_source, but 'config/settings.py' gains LOG_LEVEL that never
+    makes it into '.env'. Since a pinned source is only ever re-scanned
+    itself, nothing would otherwise notice -- 'init' has to check other
+    real config sources sitting alongside it too, not just wait for a
+    separate 'doctor' run to catch the drift.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.system("git init -q")
+        mocker.patch("questionary.confirm").return_value.ask.return_value = True
+        os.makedirs("config")
+        with open("config/settings.py", "w") as f:
+            f.write(
+                "SECRET_KEY = 'x'\nDATABASE_URL = 'postgres://x'\nDEBUG = True\n"
+                "API_PORT = 5000\n"
+            )
+        with open(".env", "w") as f:
+            f.write(
+                "SECRET_KEY=x\nDATABASE_URL=postgres://x\nDEBUG=True\nAPI_PORT=5000\n"
+            )
+        runner.invoke(app, ["init"])
+
+        # LOG_LEVEL lands in the code but never in the pinned '.env'.
+        with open("config/settings.py", "a") as f:
+            f.write("LOG_LEVEL = 'info'\n")
+
+        result = runner.invoke(app, ["init", "--force"])
+
+        assert result.exit_code == 0, result.stdout
+        assert "config/settings.py" in result.stdout
+        assert "LOG_LEVEL" in result.stdout
+        with open(SCHEMA_FILE_NAME) as f:
+            content = f.read()
+        assert "[LOG_LEVEL]" in content
+        assert 'defaultValue = "info"' in content
+        # The pinned source stays '.env' -- only the merge closed the gap.
+        project_name = os.path.basename(os.getcwd())
+        assert config_manager.get_service_config_source(project_name) == ".env"
+
+
+def test_init_force_offers_to_repin_once_the_recorded_source_is_envshield_generated(
+    tmp_path, mocker
+):
+    """
+    Interactively confirming the repin prompt re-detects from scratch
+    instead of reusing the recorded config_source -- needed once a
+    project's '.env' has since become an EnvShield-generated artifact (via
+    'setup'), which find_config_source now deliberately skips in favor of
+    a genuine Python config module.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.system("git init -q")
+        mocker.patch("questionary.confirm").return_value.ask.return_value = True
+        mocker.patch(
+            "envshield.core.hooks_manager._is_interactive", return_value=True
+        )
+        with open(".env", "w") as f:
+            f.write("SECRET_KEY=x\n")
+        runner.invoke(app, ["init"])
+
+        project_name = os.path.basename(os.getcwd())
+        assert config_manager.get_service_config_source(project_name) == ".env"
+
+        # The real source of truth shows up later; 'setup' regenerates
+        # '.env' from the schema, making it a derivative, not independent.
+        os.makedirs("config")
+        with open("config/settings.py", "w") as f:
+            f.write("SECRET_KEY = 'x'\nDEBUG = True\nAPI_PORT = 5000\n")
+        with open(".env", "w") as f:
+            f.write(
+                "# Auto-generated by 'envshield setup' on 2026-01-01\n\nSECRET_KEY=x\n"
+            )
+
+        result = runner.invoke(app, ["init", "--force"])
+
+        assert result.exit_code == 0, result.stdout
+        assert (
+            config_manager.get_service_config_source(project_name)
+            == "config/settings.py"
+        )
+
+
+def test_init_force_keeps_the_recorded_source_when_repin_prompt_is_declined(
+    tmp_path, mocker
+):
+    """Declining the repin prompt must keep reusing the recorded config_source -- no silent repin."""
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.system("git init -q")
+        mocker.patch(
+            "envshield.core.hooks_manager._is_interactive", return_value=True
+        )
+        with open(".env", "w") as f:
+            f.write("SECRET_KEY=x\n")
+        confirm = mocker.patch("questionary.confirm")
+        confirm.return_value.ask.return_value = True
+        runner.invoke(app, ["init"])
+
+        os.makedirs("config")
+        with open("config/settings.py", "w") as f:
+            f.write("SECRET_KEY = 'x'\nDEBUG = True\nAPI_PORT = 5000\n")
+        with open(".env", "w") as f:
+            f.write(
+                "# Auto-generated by 'envshield setup' on 2026-01-01\n\nSECRET_KEY=x\n"
+            )
+
+        # Still confirm the destructive overwrite, but decline the repin.
+        confirm.return_value.ask.side_effect = [True, False]
+        result = runner.invoke(app, ["init", "--force"])
+
+        assert result.exit_code == 0, result.stdout
+        project_name = os.path.basename(os.getcwd())
+        assert config_manager.get_service_config_source(project_name) == ".env"
+
+
+def test_init_force_keeps_the_recorded_source_without_a_tty_to_ask(tmp_path, mocker):
+    """
+    No TTY to prompt (CI/scripting) must default to keeping the recorded
+    config_source rather than either silently repinning or blocking --
+    consistent with every other no-TTY-safe confirmation in this codebase.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.system("git init -q")
+        mocker.patch("questionary.confirm").return_value.ask.return_value = True
+        with open(".env", "w") as f:
+            f.write("SECRET_KEY=x\n")
+        runner.invoke(app, ["init"])
+
+        os.makedirs("config")
+        with open("config/settings.py", "w") as f:
+            f.write("SECRET_KEY = 'x'\nDEBUG = True\nAPI_PORT = 5000\n")
+        with open(".env", "w") as f:
+            f.write(
+                "# Auto-generated by 'envshield setup' on 2026-01-01\n\nSECRET_KEY=x\n"
+            )
+
+        result = runner.invoke(app, ["init", "--force"])
+
+        assert result.exit_code == 0, result.stdout
+        project_name = os.path.basename(os.getcwd())
+        assert config_manager.get_service_config_source(project_name) == ".env"
+
+
 def test_init_falls_back_to_the_framework_template_when_no_real_config_exists(
     tmp_path, mocker
 ):
@@ -505,6 +910,126 @@ def test_init_falls_back_to_the_framework_template_when_no_real_config_exists(
             content = f.read()
             assert "SECRET_KEY" in content
             assert "FLASK_ENV" in content
+
+
+def test_init_proceeds_without_force_when_envshield_yml_has_zero_services(tmp_path):
+    """
+    Real bug this reproduces: 'service remove' can leave 'envshield.yml'
+    with 'services: {}' (removing the last one) and then suggests running
+    'envshield init' next -- but init's "already exists" gate checked raw
+    file existence, not whether there was anything real registered, so its
+    own suggested recovery command failed with "already exists, use
+    --force." A config file with zero services must be treated the same
+    as no config file at all, everywhere -- including here.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        with open(CONFIG_FILE_NAME, "w") as f:
+            f.write("project_name: test\nservices: {}\n")
+
+        result = runner.invoke(app, ["init"])
+
+        assert result.exit_code == 0, result.stdout
+        assert "already exists" not in result.stdout
+        assert config_manager.get_services()
+
+
+def test_init_still_blocks_without_force_when_a_real_service_exists(tmp_path, mocker):
+    """Sanity check: the fix above must not weaken the normal 'already exists' gate when a real service is registered."""
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.makedirs("alpha")
+        runner.invoke(app, ["service", "add", "alpha", "alpha"])
+        with open("alpha/env.schema.toml", "w") as f:
+            f.write('[API_KEY]\ndescription="x"\nsecret=true\n')
+
+        result = runner.invoke(app, ["init"])
+
+        assert result.exit_code == 0, result.stdout
+        assert "already exists" in result.stdout
+
+
+def test_init_warns_and_cancels_when_declining_a_detected_multi_service_layout(
+    tmp_path, mocker
+):
+    """
+    Real bug this reproduces: 'init' on a project shaped like a monorepo
+    (service-like subdirectories, nothing real at the root) used to
+    silently fabricate a generic, fictional single-service schema and
+    declare success -- never mentioning the real services at all. It must
+    instead warn and let the user back out in favor of 'service discover'.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.system("git init -q")
+        mocker.patch(
+            "envshield.core.hooks_manager._is_interactive", return_value=True
+        )
+        os.makedirs("api")
+        with open("api/.env", "w") as f:
+            f.write("API_KEY=abc\n")
+        os.makedirs("web")
+        with open("web/.env", "w") as f:
+            f.write("WEB_KEY=xyz\n")
+        # Decline the "continue anyway?" prompt.
+        mocker.patch("questionary.confirm").return_value.ask.return_value = False
+
+        result = runner.invoke(app, ["init"])
+
+        assert result.exit_code == 0, result.stdout
+        assert "multi-service" in result.stdout
+        assert "service discover" in result.stdout
+        assert not os.path.exists(SCHEMA_FILE_NAME)
+
+
+def test_init_proceeds_with_generic_template_when_confirming_anyway(tmp_path, mocker):
+    """Confirming 'continue anyway' still produces the generic fallback template, same as before this check existed."""
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.system("git init -q")
+        mocker.patch(
+            "envshield.core.hooks_manager._is_interactive", return_value=True
+        )
+        os.makedirs("api")
+        with open("api/.env", "w") as f:
+            f.write("API_KEY=abc\n")
+        os.makedirs("web")
+        with open("web/.env", "w") as f:
+            f.write("WEB_KEY=xyz\n")
+        mocker.patch("questionary.confirm").return_value.ask.return_value = True
+
+        result = runner.invoke(app, ["init"])
+
+        assert result.exit_code == 0, result.stdout
+        assert os.path.exists(SCHEMA_FILE_NAME)
+
+
+def test_init_warns_but_proceeds_without_a_tty_to_ask(tmp_path):
+    """No TTY to ask (CI/scripting) must not silently block 'init' -- warn and keep going, same as every other no-TTY-safe prompt."""
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.system("git init -q")
+        os.makedirs("api")
+        with open("api/.env", "w") as f:
+            f.write("API_KEY=abc\n")
+        os.makedirs("web")
+        with open("web/.env", "w") as f:
+            f.write("WEB_KEY=xyz\n")
+
+        result = runner.invoke(app, ["init"])
+
+        assert result.exit_code == 0, result.stdout
+        assert "multi-service" in result.stdout
+        assert os.path.exists(SCHEMA_FILE_NAME)
+
+
+def test_init_says_nothing_when_no_multi_service_layout_is_detected(tmp_path, mocker):
+    """Sanity check: an ordinary single-service project must not see this warning at all."""
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.system("git init -q")
+        mocker.patch("questionary.confirm").return_value.ask.return_value = False
+        with open("requirements.txt", "w") as f:
+            f.write("Flask\n")
+
+        result = runner.invoke(app, ["init"])
+
+        assert result.exit_code == 0, result.stdout
+        assert "multi-service" not in result.stdout
 
 
 def test_check_json_reports_clean_state(tmp_path):

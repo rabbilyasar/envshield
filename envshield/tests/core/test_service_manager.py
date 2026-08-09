@@ -107,12 +107,24 @@ def test_resolve_service_does_not_offer_all_when_disallowed(
 
 
 def test_resolve_service_raises_on_cancelled_prompt(mocker, tmp_path, monkeypatch):
+    """
+    Real gap: cancelling the picker (Ctrl+C/Esc) used to raise a bare "No
+    service selected." -- no indication of what to actually do next. The
+    error must name the available services and the --service flag, the
+    same "tell them the next command" standard every other diagnostic in
+    this codebase already holds to.
+    """
     _write_two_services(monkeypatch, tmp_path)
     mocker.patch("envshield.core.service_manager._is_interactive", return_value=True)
     mocker.patch("questionary.select").return_value.ask.return_value = None
 
-    with pytest.raises(EnvShieldException):
-        service_manager.resolve_service()
+    with pytest.raises(EnvShieldException) as exc_info:
+        service_manager.resolve_service(allow_multiple=True)
+
+    message = str(exc_info.value)
+    assert "--service" in message
+    assert "alpha" in message and "beta" in message
+    assert service_manager.ALL_SERVICES_CHOICE in message
 
 
 def test_resolve_service_defaults_to_all_when_no_tty_and_multiple_allowed(

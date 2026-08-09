@@ -40,6 +40,9 @@ dependencies = [
 [project.scripts]
 envshield = "envshield.cli:app"
 
+[tool.setuptools.packages.find]
+include = ["envshield*"]
+
 [project.optional-dependencies]
 dev = [
     "ruff>=0.16,<0.17",

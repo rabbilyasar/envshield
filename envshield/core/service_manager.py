@@ -135,7 +135,10 @@ def resolve_service(
     ).ask()
 
     if selected is None:
-        raise EnvShieldException("No service selected.")
+        hint = f"Pass --service explicitly next time. Available: {', '.join(available)}"
+        if allow_multiple:
+            hint += f", or choose '{ALL_SERVICES_CHOICE}' from the prompt to run against every one."
+        raise EnvShieldException(f"No service selected (prompt cancelled). {hint}")
 
     if selected == ALL_SERVICES_CHOICE:
         return available
