@@ -144,6 +144,45 @@ def _is_default_excluded_dir(dirname: str) -> bool:
     )
 
 
+# O_NOFOLLOW doesn't exist in the os module at all on Windows (creating a
+# real filesystem symlink there also requires a privilege an ordinary user
+# doesn't have by default, unlike POSIX) -- checked once at import time
+# rather than via a try/except on every call.
+_CAN_USE_O_NOFOLLOW = hasattr(os, "O_NOFOLLOW")
+
+
+def _open_for_scan(file_path: str):
+    """
+    Opens a file for scanning -- the actual security boundary against a
+    symlink that appears after _collect_files_to_scan's own islink() checks
+    already ran and let the path through (a real, if narrow, TOCTOU
+    window: those checks and this open are separate syscalls, with every
+    other file ahead of this one in the scan list executing in between).
+
+    On a platform with O_NOFOLLOW, the kernel refuses to open the path if
+    its *final* path component is a symlink, as part of this single
+    open() syscall -- there's no separate check to race against, because
+    the check and the read happen atomically together. If the path became
+    a symlink after collection, this raises OSError (ELOOP), which the
+    caller already handles the same way as any other unreadable file --
+    the scan skips that one file and continues, it doesn't crash.
+
+    On a platform without O_NOFOLLOW (Windows), this falls back to a plain
+    open with no symlink protection -- an accepted, documented gap there
+    rather than a silent one, and one the base attack surface is already
+    narrower against by default (see module-level note above). Deliberately
+    out of scope: a symlinked *ancestor directory* swapped mid-walk (would
+    need dir_fd-relative opens component by component) and the unrelated
+    file-size TOCTOU on the >1MB skip check -- both tracked separately, not
+    fixed here.
+    """
+    flags = os.O_RDONLY
+    if _CAN_USE_O_NOFOLLOW:
+        flags |= os.O_NOFOLLOW
+    fd = os.open(file_path, flags)
+    return os.fdopen(fd, "r", encoding="utf-8", errors="ignore")
+
+
 def _redact_match(matched_text: str) -> str:
     """
     Turns a matched secret span into a safe, non-reversible preview: the
@@ -233,7 +272,7 @@ def _scan_single_file(
         if content is not None:
             lines = content.splitlines(keepends=True)
         else:
-            with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            with _open_for_scan(file_path) as f:
                 lines = f.readlines()
 
         for line_num, line in enumerate(lines, 1):
@@ -303,7 +342,21 @@ def _collect_files_to_scan(paths: Optional[List[str]], staged_only: bool) -> Lis
     if "." in scan_paths:
         console.print("Scanning [yellow]current directory[/yellow] recursively...")
 
+    # A symlink can point anywhere on disk -- reading through one would let
+    # a file outside the directory the caller actually asked to scan be
+    # read (and its findings reported) as if it were part of the scan.
+    # os.walk's own symlink protection (followlinks=False, the default)
+    # only stops it recursing into a symlinked subdirectory *discovered
+    # during* the walk -- it does nothing for a symlinked file leaf, and
+    # nothing at all for the top-level path argument itself if that's a
+    # symlink to a directory. Both are checked explicitly below so no
+    # symlink -- however it's reached -- is ever opened.
+    skipped_symlinks = []
+
     for path in scan_paths:
+        if os.path.islink(path):
+            skipped_symlinks.append(path)
+            continue
         if os.path.isfile(path):
             files_to_scan.append(os.path.abspath(path))
         elif os.path.isdir(path):
@@ -311,7 +364,18 @@ def _collect_files_to_scan(paths: Optional[List[str]], staged_only: bool) -> Lis
                 # Prune in-place so os.walk doesn't descend into these dirs at all.
                 dirs[:] = [d for d in dirs if not _is_default_excluded_dir(d)]
                 for file in files:
-                    files_to_scan.append(os.path.join(root, file))
+                    file_path = os.path.join(root, file)
+                    if os.path.islink(file_path):
+                        skipped_symlinks.append(file_path)
+                        continue
+                    files_to_scan.append(file_path)
+
+    if skipped_symlinks:
+        console.print(
+            f"[dim]ℹ️  Skipping {len(skipped_symlinks)} symlink(s) -- not "
+            "followed, to avoid reading a file outside the scanned "
+            f"directory: {', '.join(sorted(skipped_symlinks))}[/dim]"
+        )
 
     # A git-ignored file (a real '.env', chief among them) is never going
     # to be committed, so flagging a secret inside it as "DANGER" is pure

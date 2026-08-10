@@ -3,6 +3,7 @@ import json
 import os
 import re
 
+import pytest
 from typer.testing import CliRunner
 
 from envshield.cli import app
@@ -399,6 +400,249 @@ def test_scan_json_rejects_a_nonexistent_path_instead_of_reporting_clean(tmp_pat
         payload = json.loads(result.stdout)
         assert payload["clean"] is False
         assert "not found" in payload["error"].lower()
+
+
+class TestSymlinkNeverFollowed:
+    """
+    Regression coverage for the security invariant behind P0-2: a scan must
+    never read content from outside the directory tree it was asked to
+    scan. A symlink is the mechanism that can violate this, and it can be
+    reached three ways -- all three are covered here rather than only the
+    single case the original report named, since they're the same
+    vulnerability via three entry points into the same file-collection
+    code: a symlinked file discovered while walking a real directory, a
+    symlinked directory passed directly as the scan path, and a symlinked
+    file passed directly as the scan path.
+    """
+
+    OUTSIDE_SECRET = "AKIAABCDEFGHIJKLMNOP"
+
+    def _make_outside_secret_file(self, tmp_path, name="outside_secret.env"):
+        outside_dir = tmp_path / "outside"
+        outside_dir.mkdir(exist_ok=True)
+        target = outside_dir / name
+        target.write_text(f"AWS_ACCESS_KEY_ID={self.OUTSIDE_SECRET}\n")
+        return target
+
+    def test_symlinked_file_inside_a_walked_directory_is_not_read(self, tmp_path):
+        target = self._make_outside_secret_file(tmp_path)
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            os.makedirs("project/subdir")
+            os.symlink(target, "project/subdir/.env")
+
+            result = runner.invoke(app, ["scan", "project"])
+
+            assert result.exit_code == 0, result.stdout
+            assert "No issues found" in result.stdout
+            assert self.OUTSIDE_SECRET not in result.stdout
+            assert "Skipping 1 symlink" in result.stdout
+            assert "subdir" in result.stdout
+
+    def test_symlinked_directory_passed_directly_is_not_walked(self, tmp_path):
+        outside_dir = tmp_path / "outside_dir"
+        outside_dir.mkdir()
+        (outside_dir / "a.env").write_text(f"AWS_ACCESS_KEY_ID={self.OUTSIDE_SECRET}\n")
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            os.symlink(outside_dir, "linked_dir")
+
+            result = runner.invoke(app, ["scan", "linked_dir"])
+
+            assert result.exit_code == 0, result.stdout
+            assert "No issues found" in result.stdout
+            assert self.OUTSIDE_SECRET not in result.stdout
+            assert "Skipping 1 symlink" in result.stdout
+
+    def test_symlinked_file_passed_directly_is_not_read(self, tmp_path):
+        target = self._make_outside_secret_file(tmp_path)
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            os.symlink(target, "linked.env")
+
+            result = runner.invoke(app, ["scan", "linked.env"])
+
+            assert result.exit_code == 0, result.stdout
+            assert "No issues found" in result.stdout
+            assert self.OUTSIDE_SECRET not in result.stdout
+            assert "Skipping 1 symlink" in result.stdout
+
+    def test_skip_message_names_the_skipped_path(self, tmp_path):
+        """
+        Matches this file's own existing convention for the git-ignored-file
+        skip: a skip must be visible and identify what was skipped, not a
+        silent, unexplained drop in coverage that reads identically to
+        "nothing was there to find."
+        """
+        target = self._make_outside_secret_file(tmp_path)
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            os.symlink(target, "linked.env")
+
+            result = runner.invoke(app, ["scan", "linked.env"])
+
+            assert result.exit_code == 0
+            assert "Skipping 1 symlink(s)" in result.stdout
+            assert "linked.env" in result.stdout
+
+    def test_staged_scan_of_a_symlink_is_unaffected(self, tmp_path):
+        """
+        Confirms the stated contract directly, rather than only in prose:
+        '--staged' reads a symlink's Git-index entry, which is the literal
+        target path *string*, not the target file's bytes -- so it was
+        never exposed to this vulnerability and needs no skip logic. A
+        secret sitting in the real target file must not surface via
+        '--staged' either (proving nothing reads through it), and the scan
+        must not crash on a staged symlink entry.
+        """
+        target = self._make_outside_secret_file(tmp_path)
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            os.system("git init -q")
+            os.system('git config user.email "test@example.com"')
+            os.system('git config user.name "Test"')
+            os.symlink(target, "linked.env")
+            os.system("git add linked.env")
+
+            result = runner.invoke(app, ["scan", "--staged"])
+
+            assert result.exit_code == 0, result.stdout
+            assert "No issues found" in result.stdout
+            assert self.OUTSIDE_SECRET not in result.stdout
+
+
+class TestAtomicOpenBoundary:
+    """
+    Regression coverage for the P0-2 hardening: _open_for_scan is the
+    actual security boundary, not _collect_files_to_scan's islink()
+    pre-filter -- because that pre-filter and the eventual read are
+    separate syscalls with a real (if narrow) window between them (see the
+    P0-2 TOCTOU analysis in the session that added this). These tests
+    exercise the read-time boundary directly and deterministically --
+    calling _scan_single_file/_open_for_scan on a path that *is* a symlink
+    right now, which is exactly the state the read-time boundary must
+    defend against regardless of what an earlier check decided -- rather
+    than trying to literally win a timing race, which would be flaky by
+    construction.
+    """
+
+    OUTSIDE_SECRET = "AKIAABCDEFGHIJKLMNOP"
+
+    def _make_outside_secret_file(self, tmp_path, name="outside_secret.env"):
+        outside_dir = tmp_path / "outside"
+        outside_dir.mkdir(exist_ok=True)
+        target = outside_dir / name
+        target.write_text(f"AWS_ACCESS_KEY_ID={self.OUTSIDE_SECRET}\n")
+        return target
+
+    def test_regular_file_still_scans_via_open_for_scan(self, tmp_path):
+        real_file = tmp_path / "real.env"
+        real_file.write_text(f"AWS_ACCESS_KEY_ID={self.OUTSIDE_SECRET}\n")
+
+        secrets, _ = scanner._scan_single_file(str(real_file), set())
+
+        assert len(secrets) == 1
+        assert self.OUTSIDE_SECRET not in secrets[0]["redacted_preview"]
+
+    def test_scan_single_file_refuses_a_symlink_independent_of_collection(
+        self, tmp_path
+    ):
+        """
+        Models the moment after collection where the filesystem object at
+        this path is (or has become) a symlink -- calling the read-time
+        function directly, with no collection step involved at all, proves
+        it refuses the read on its own rather than trusting an earlier
+        check that may be stale by the time this runs.
+        """
+        target = self._make_outside_secret_file(tmp_path)
+        symlink_path = tmp_path / "linked.env"
+        os.symlink(target, symlink_path)
+
+        secrets, undeclared = scanner._scan_single_file(str(symlink_path), set())
+
+        assert secrets == []
+        assert undeclared == []
+
+    def test_open_for_scan_raises_on_a_symlink(self, tmp_path):
+        """Unit-level proof of the mechanism itself, at the smallest
+        granularity: the open call raises, it doesn't silently succeed."""
+        target = self._make_outside_secret_file(tmp_path)
+        symlink_path = tmp_path / "linked.env"
+        os.symlink(target, symlink_path)
+
+        assert scanner._CAN_USE_O_NOFOLLOW, (
+            "this test environment is expected to support O_NOFOLLOW; "
+            "see TestONofollowFallback for the platform without it"
+        )
+        with pytest.raises(OSError):
+            scanner._open_for_scan(str(symlink_path))
+
+    def test_open_for_scan_reads_a_regular_file_normally(self, tmp_path):
+        real_file = tmp_path / "real.txt"
+        real_file.write_text("hello world\nsecond line\n")
+
+        with scanner._open_for_scan(str(real_file)) as f:
+            content = f.read()
+
+        assert content == "hello world\nsecond line\n"
+
+    def test_staged_scan_never_calls_open_for_scan(self, mocker, tmp_path):
+        """
+        Proves requirement 8 directly: staged scanning must never reach the
+        disk-open boundary at all, since it reads content from the Git
+        index (see _scan_single_file's `content` parameter), not from disk.
+        """
+        spy = mocker.patch(
+            "envshield.core.scanner._open_for_scan",
+            side_effect=AssertionError("a staged scan must never call _open_for_scan"),
+        )
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            os.system("git init -q")
+            os.system('git config user.email "test@example.com"')
+            os.system('git config user.name "Test"')
+            with open("app.py", "w") as f:
+                f.write("import os\n\nx = os.getenv('SOME_KEY')\n")
+            os.system("git add app.py")
+
+            result = runner.invoke(app, ["scan", "--staged"])
+
+            assert result.exit_code == 1  # SOME_KEY is undeclared -- expected
+        spy.assert_not_called()
+
+
+class TestONofollowFallback:
+    """
+    Coverage for platforms without os.O_NOFOLLOW (Windows). Patches the
+    module-level capability flag rather than mocking any stdlib function,
+    so this stays a narrow, local, deterministic test of _open_for_scan's
+    own branch -- not a global patch of os.path/os.open that could affect
+    unrelated code running in the same test.
+    """
+
+    def test_fallback_still_reads_regular_files_normally(self, tmp_path, mocker):
+        mocker.patch.object(scanner, "_CAN_USE_O_NOFOLLOW", False)
+        real_file = tmp_path / "real.txt"
+        real_file.write_text("hello world\n")
+
+        with scanner._open_for_scan(str(real_file)) as f:
+            content = f.read()
+
+        assert content == "hello world\n"
+
+    def test_fallback_has_the_documented_residual_symlink_gap(self, tmp_path, mocker):
+        """
+        Proves the accepted limitation explicitly rather than leaving it
+        asserted only in a comment: without O_NOFOLLOW, a symlink IS
+        followed. This is the documented, disclosed gap on such platforms
+        (see _open_for_scan's docstring and the P0-2 TOCTOU analysis) -- a
+        test failure here would mean the fallback became *more* dangerous
+        than documented, not less.
+        """
+        mocker.patch.object(scanner, "_CAN_USE_O_NOFOLLOW", False)
+        outside = tmp_path / "outside.txt"
+        outside.write_text("target content\n")
+        symlink_path = tmp_path / "linked.txt"
+        os.symlink(outside, symlink_path)
+
+        with scanner._open_for_scan(str(symlink_path)) as f:
+            content = f.read()
+
+        assert content == "target content\n"
 
 
 class TestRedactMatch:
