@@ -49,39 +49,50 @@ def validate_value(value: str, field_schema: dict[str, Any]) -> str | None:
     """
     Checks `value` against a field's declared type, enum, and/or pattern
     constraints. Returns None if valid, or a human-readable reason if not.
+
+    The reason never echoes `value` itself, in any form (not `repr()`, not
+    `str()`, not a quoted excerpt) -- only what the *constraint* is. This
+    isn't conditional on the field's `secret` flag: a validator has no
+    reliable way to know, at the point an error is generated, whether the
+    string it was just handed is safe to print (a `secret`-flagged field is
+    the confirmed case, but an unflagged field can just as easily hold a
+    value nobody intended to expose). Every caller -- `check`/`doctor`'s
+    Rich and `--json` output, and `setup`'s retry-loop prompt -- inherits
+    this from this one function; none of them should, or need to, re-decide
+    it themselves.
     """
     field_type = resolve_field_type(field_schema)
 
     if field_type == "enum":
         allowed = enum_values(field_schema)
         if value not in allowed:
-            return f"must be one of: {', '.join(allowed)} (got {value!r})"
+            return f"must be one of: {', '.join(allowed)}"
     elif field_type == "int":
         if not re.fullmatch(r"-?\d+", value):
-            return f"must be an integer (got {value!r})"
+            return "must be an integer"
     elif field_type == "float":
         try:
             float(value)
         except ValueError:
-            return f"must be a number (got {value!r})"
+            return "must be a number"
     elif field_type == "bool":
         if value.lower() not in _BOOL_VALUES:
-            return f"must be 'true' or 'false' (got {value!r})"
+            return "must be 'true' or 'false'"
     elif field_type == "port":
         if not re.fullmatch(r"\d+", value) or not (1 <= int(value) <= 65535):
-            return f"must be a port number from 1-65535 (got {value!r})"
+            return "must be a port number from 1-65535"
     elif field_type == "url":
         parsed = urlparse(value)
         if not (parsed.scheme and parsed.netloc):
-            return f"must be a valid URL (got {value!r})"
+            return "must be a valid URL"
     elif field_type == "email":
         if not _EMAIL_RE.match(value):
-            return f"must be a valid email address (got {value!r})"
+            return "must be a valid email address"
     # "string" (the default): no shape check beyond 'pattern' below.
 
     pattern = field_schema.get("pattern")
     if pattern and not re.search(pattern, value):
-        return f"must match pattern {pattern!r} (got {value!r})"
+        return f"must match pattern {pattern!r}"
 
     return None
 

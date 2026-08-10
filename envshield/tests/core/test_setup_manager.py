@@ -430,3 +430,34 @@ def test_setup_uses_a_picker_for_enum_fields(mocker, tmp_path):
         assert kwargs["choices"] == ["debug", "info", "warn", "error"]
         with open(".env") as f:
             assert "LOG_LEVEL=debug" in f.read()
+
+
+def test_setup_retry_loop_never_prints_the_rejected_value(mocker, tmp_path):
+    """
+    Regression coverage for P0-3, and the one call site with no prior
+    coverage at all: the free-text retry loop (setup_manager.py's
+    Prompt.ask -> validate_value -> console.print(error) sequence) must
+    never print the value it just rejected -- right after masking the same
+    keystrokes on input (password=True for a secret field), printing the
+    rejection error in plaintext would completely defeat that masking.
+    Uses a distinctive sentinel so a leak is unambiguous.
+    """
+    sentinel = "SUPER_SECRET_TEST_VALUE_12345"
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_root_service_config()
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[API_PORT]\ndescription="x"\ntype="port"\nsecret=true\n')
+
+        mock_prompt = mocker.patch("envshield.core.setup_manager.Prompt.ask")
+        # First answer is rejected (not a valid port) -- the error for
+        # *that* answer must be printed without the answer itself. Second
+        # answer is valid, ending the retry loop.
+        mock_prompt.side_effect = [sentinel, "8080"]
+
+        result = runner.invoke(app, ["setup"])
+
+        assert result.exit_code == 0
+        assert sentinel not in result.stdout
+        assert "must be a port number from 1-65535" in result.stdout
+        with open(".env") as f:
+            assert "API_PORT=8080" in f.read()

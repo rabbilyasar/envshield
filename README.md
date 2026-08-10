@@ -232,7 +232,6 @@ Validating .env against schema...
 │ Missing in Local    │ DATABASE_URL         │ env.schema.toml (Required)          │
 │ Missing in Local    │ LOG_LEVEL            │ env.schema.toml (default: 'info')   │
 │ Invalid Value        │ API_PORT             │ must be a port number from 1-65535  │
-│                      │                      │ (got '99999')                       │
 │ Extra in Local       │ OLD_UNUSED_FLAG      │ .env                                 │
 └────────────────────┴──────────────────────┴─────────────────────────────────────┘
 

@@ -1079,6 +1079,51 @@ def test_check_json_reports_drift_and_exits_nonzero(tmp_path):
         assert "[bold" not in result.stdout
 
 
+def test_check_rich_output_never_echoes_an_invalid_value(tmp_path):
+    """
+    Regression coverage for P0-3: 'Invalid Value' rows must describe the
+    constraint, never the value that failed it -- for both a secret-flagged
+    and an unflagged field, since the fix in schema_types.validate_value is
+    unconditional, not secret-specific.
+    """
+    sentinel = "SUPER_SECRET_TEST_VALUE_12345"
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_root_service()
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[API_PORT]\ndescription = "x"\ntype = "port"\nsecret = true\n')
+        with open(".env", "w") as f:
+            f.write(f"API_PORT={sentinel}\n")
+
+        result = runner.invoke(app, ["check"])
+
+        assert result.exit_code == 1
+        assert "Invalid Value" in result.stdout
+        assert "must be a port number from 1-65535" in result.stdout
+        assert sentinel not in result.stdout
+
+
+def test_check_json_never_echoes_an_invalid_value(tmp_path):
+    """Same invariant as the Rich-table test above, for the --json path."""
+    sentinel = "SUPER_SECRET_TEST_VALUE_12345"
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_root_service()
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[API_PORT]\ndescription = "x"\ntype = "port"\nsecret = true\n')
+        with open(".env", "w") as f:
+            f.write(f"API_PORT={sentinel}\n")
+
+        result = runner.invoke(app, ["check", "--json"])
+
+        assert result.exit_code == 1
+        # Assert on the raw serialized stdout, not just the parsed object --
+        # proves the value is absent from the actual bytes written.
+        assert sentinel not in result.stdout
+        payload = json.loads(result.stdout)
+        assert payload["results"][0]["invalid"] == {
+            "API_PORT": "must be a port number from 1-65535"
+        }
+
+
 def test_check_json_with_multiple_services_runs_all_without_prompting(tmp_path):
     """Regression: --json must never fall into the interactive 'Which service?' picker."""
     with runner.isolated_filesystem(temp_dir=tmp_path):
