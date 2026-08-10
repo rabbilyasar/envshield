@@ -391,7 +391,7 @@ Note that `missing` includes `LOG_LEVEL` even though it has a `defaultValue` in 
 {
   "clean": false,
   "secrets": [
-    {"file_path": "./config.py", "line_num": 12, "secret_type": "Generic API Key", "line_content": "..."}
+    {"file_path": "./config.py", "line_num": 12, "secret_type": "Generic API Key", "redacted_preview": "<redacted, 32 chars>"}
   ],
   "undeclared_variables": [],
   "skipped_files": []

@@ -1,12 +1,14 @@
 # envshield/tests/core/test_scanner_compliance.py
 import json
 import os
+import re
 
 from typer.testing import CliRunner
 
 from envshield.cli import app
 from envshield.config import manager as config_manager
 from envshield.config.manager import SCHEMA_FILE_NAME
+from envshield.core import scanner
 
 runner = CliRunner()
 
@@ -77,8 +79,12 @@ def test_scan_with_both_secret_and_undeclared_variable(mocker, tmp_path):
         assert result.exit_code == 1, "Scan should fail if any issue is found"
         assert "DANGER: Found 1 potential secret(s)!" in result.stdout
         assert "WARNING: Found 1 undeclared variable(s)!" in result.stdout
-        # Fix: Assert on the key content, not the full table rendering, which is brittle.
-        assert "sk_live_123456789" in result.stdout
+        # Security invariant: the finding identifies itself (a redacted
+        # preview), but the secret's own value must never reach output. See
+        # TestSecretValueNeverLeaksToOutput for the dedicated regression
+        # coverage of this invariant.
+        assert "sk_live_123456789abcdefghijklmnopqrstuv" not in result.stdout
+        assert "redacted" in result.stdout.lower()
         assert "UNDECLARED_KEY" in result.stdout
 
 
@@ -393,3 +399,172 @@ def test_scan_json_rejects_a_nonexistent_path_instead_of_reporting_clean(tmp_pat
         payload = json.loads(result.stdout)
         assert payload["clean"] is False
         assert "not found" in payload["error"].lower()
+
+
+class TestRedactMatch:
+    """
+    Unit coverage for scanner._redact_match -- the single function every
+    output path (CLI table, --json) now depends on to never emit a secret
+    value. Exercised directly, independent of which detection regex
+    happened to match, so these hold regardless of how SECRET_PATTERNS
+    changes in the future.
+    """
+
+    def test_never_returns_the_input_text(self):
+        secret = "AKIAABCDEFGHIJKLMNOP"
+        preview = scanner._redact_match(secret)
+        assert secret not in preview
+
+    def test_reports_the_length(self):
+        assert scanner._redact_match("a" * 40) == "<redacted, 40 chars>"
+
+    def test_very_short_secret_reveals_nothing(self):
+        """
+        A 1-2 character 'secret' is the case where any boundary-character
+        reveal would disclose most or all of the value -- confirm the
+        redaction is still fully opaque, not just 'safe enough'.
+        """
+        preview = scanner._redact_match("ab")
+        assert preview == "<redacted, 2 chars>"
+        assert "a" not in preview.replace("chars", "").replace("redacted", "")
+        assert "b" not in preview.replace("chars", "").replace("redacted", "")
+
+    def test_secret_containing_quotes_is_not_leaked(self):
+        secret = '"AKIAABCDEFGHIJKLMNOP"'
+        preview = scanner._redact_match(secret)
+        assert "AKIAABCDEFGHIJKLMNOP" not in preview
+        assert '"' not in preview
+
+    def test_secret_containing_whitespace_is_not_leaked(self):
+        secret = "sk_live_ 123 456 789abcdefghijklmnop"
+        preview = scanner._redact_match(secret)
+        assert "123" not in preview
+        assert "456" not in preview
+
+    def test_unicode_secret_is_not_leaked(self):
+        secret = "tökén_日本語_secretvalue1234567890"
+        preview = scanner._redact_match(secret)
+        assert "tökén" not in preview
+        assert "日本語" not in preview
+        # len() on a Python str counts codepoints, so this must match the
+        # actual character count, not a byte count that would silently
+        # differ for multi-byte characters.
+        assert preview == f"<redacted, {len(secret)} chars>"
+
+
+_REDACTED_PREVIEW_RE = re.compile(r"^<redacted, \d+ chars>$")
+
+
+def _assert_well_formed_finding(finding):
+    """
+    A finding must still be a usable lead (file, line, a classification,
+    and a preview whose *shape* is right) without the preview ever being
+    anything other than the fixed, contentless redaction format -- not
+    just "doesn't happen to contain this one test's secret".
+    """
+    assert finding["file_path"]
+    assert isinstance(finding["line_num"], int) and finding["line_num"] > 0
+    assert finding["secret_type"]
+    assert _REDACTED_PREVIEW_RE.match(finding["redacted_preview"]), finding[
+        "redacted_preview"
+    ]
+    assert "line_content" not in finding, (
+        "the old raw-line field must be gone entirely, not just emptied"
+    )
+
+
+class TestSecretValueNeverLeaksToOutput:
+    """
+    Regression coverage for the security invariant behind P0-1: a secret
+    value must never enter an output representation, in any form the
+    scanner produces -- not the normal Rich-rendered CLI output, not
+    `--json`. These tests prove the invariant directly (the exact secret
+    string is provably absent from stdout), rather than only re-running the
+    original reported case.
+
+    Deliberately does not assert *which* named pattern in SECRET_PATTERNS
+    fires for a given line (several overlap by design, e.g. "Generic API
+    Key" matches most vendor-specific shapes too) -- that's a detection
+    coverage question, not part of this invariant.
+    """
+
+    SECRET_VALUE = "AKIAABCDEFGHIJKLMNOP"
+
+    def _write_secret_file(self, path="app.py"):
+        with open(path, "w") as f:
+            f.write(f'AWS_ACCESS_KEY_ID = "{self.SECRET_VALUE}"\n')
+
+    def test_normal_cli_output_never_contains_the_secret_value(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._write_secret_file()
+
+            result = runner.invoke(app, ["scan"])
+
+            assert result.exit_code == 1
+            assert "DANGER: Found 1 potential secret(s)!" in result.stdout
+            assert self.SECRET_VALUE not in result.stdout
+            # The finding must still be identifiable without the value.
+            assert "app.py" in result.stdout
+            assert "redacted" in result.stdout.lower()
+
+    def test_json_output_never_contains_the_secret_value(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._write_secret_file()
+
+            result = runner.invoke(app, ["scan", "--json"])
+
+            assert result.exit_code == 1
+            # Assert on the raw, already-serialized stdout -- proves the
+            # value is absent from the actual bytes written, not just from
+            # a re-parsed/re-rendered view of them (proves redaction
+            # survives JSON serialization, not just Python-object identity).
+            assert self.SECRET_VALUE not in result.stdout
+
+            payload = json.loads(result.stdout)
+            assert payload["clean"] is False
+            assert len(payload["secrets"]) == 1
+            finding = payload["secrets"][0]
+            assert finding["file_path"].endswith("app.py")
+            assert finding["line_num"] == 1
+            assert self.SECRET_VALUE not in finding["redacted_preview"]
+            _assert_well_formed_finding(finding)
+
+    def test_secret_embedded_in_surrounding_source_text_is_not_leaked(self, tmp_path):
+        """A secret sitting mid-line, surrounded by ordinary code, must not
+        leak even though the rest of the line is harmless and could
+        reasonably appear in output."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            secret_value = "sk_live_" + "a" * 30
+            with open("app.py", "w") as f:
+                f.write(
+                    "def configure():\n"
+                    f'    token = "{secret_value}"  # noqa: hardcoded for local dev\n'
+                )
+
+            result = runner.invoke(app, ["scan", "--json"])
+
+            assert result.exit_code == 1
+            assert secret_value not in result.stdout
+            payload = json.loads(result.stdout)
+            finding = payload["secrets"][0]
+            _assert_well_formed_finding(finding)
+
+    def test_multiple_findings_each_redacted_independently(self, tmp_path):
+        """Two distinct secrets across two lines must each be individually
+        redacted -- one leaking must not be masked by the other passing."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            with open(".env", "w") as f:
+                f.write(
+                    "AWS_ACCESS_KEY_ID=AKIAABCDEFGHIJKLMNOP\n"
+                    "STRIPE_KEY=sk_live_123456789abcdefghijklmnopqrstuv\n"
+                )
+
+            result = runner.invoke(app, ["scan", "--json"])
+
+            assert result.exit_code == 1
+            payload = json.loads(result.stdout)
+            assert len(payload["secrets"]) == 2
+            for finding in payload["secrets"]:
+                _assert_well_formed_finding(finding)
+            assert "AKIAABCDEFGHIJKLMNOP" not in result.stdout
+            assert "sk_live_123456789abcdefghijklmnopqrstuv" not in result.stdout

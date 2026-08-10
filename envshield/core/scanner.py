@@ -144,6 +144,21 @@ def _is_default_excluded_dir(dirname: str) -> bool:
     )
 
 
+def _redact_match(matched_text: str) -> str:
+    """
+    Turns a matched secret span into a safe, non-reversible preview: the
+    character count only, never any part of the value itself.
+
+    No boundary characters are shown, at any length. For a short secret (a
+    placeholder, a short token) even one or two boundary characters can be
+    a large fraction of the whole value, so there's no length threshold
+    above which partial disclosure becomes safe enough to bother with --
+    length alone is still enough to tell a real-looking key apart from an
+    empty or placeholder value.
+    """
+    return f"<redacted, {len(matched_text)} chars>"
+
+
 def _get_diff_lines(file_path: str) -> Optional[set]:
     """Get line numbers that are newly added in the staged version.
 
@@ -228,13 +243,17 @@ def _scan_single_file(
 
             # Check for secrets
             for secret in SECRET_PATTERNS:
-                if re.search(secret["pattern"], line):
+                match = re.search(secret["pattern"], line)
+                if match:
                     secret_findings.append(
                         {
                             "file_path": file_path,
                             "line_num": line_num,
                             "secret_type": secret["name"],
-                            "line_content": line.strip(),
+                            # Only the matched span's length, never the raw
+                            # line or any part of the matched value itself --
+                            # see _redact_match.
+                            "redacted_preview": _redact_match(match.group(0)),
                         }
                     )
                     break
@@ -571,13 +590,13 @@ def run_scan(
         table.add_column("File", style="cyan")
         table.add_column("Line", style="yellow")
         table.add_column("Secret Type", style="magenta")
-        table.add_column("Line Content", style="white")
+        table.add_column("Preview", style="white")
         for finding in all_secret_findings:
             table.add_row(
                 finding["file_path"],
                 str(finding["line_num"]),
                 finding["secret_type"],
-                finding["line_content"],
+                finding["redacted_preview"],
             )
         console.print(table)
         console.print(
