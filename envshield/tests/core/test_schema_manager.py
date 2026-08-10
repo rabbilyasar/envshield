@@ -1,6 +1,7 @@
 # envshield/tests/core/test_schema_manager.py
 import ast
 import os
+import stat
 
 import pytest
 from typer.testing import CliRunner
@@ -650,3 +651,58 @@ class TestSchemaSyncGenerationInjectionIsPrevented:
             if isinstance(target, ast.Name)
         }
         assert "ENVSHIELD_P0_5_SENTINEL" not in top_level_names
+
+
+class TestNewLocalFilesGetRestrictivePermissions:
+    """
+    Regression coverage for P1-1. sync_schema's Python-local-file branch
+    writes to the same 'local_file' setup writes real secret values into,
+    so a freshly-created one must be 0600 -- but its '.env.example'
+    branch writes a template explicitly meant to be committed/shared, and
+    must NOT be force-restricted, or every project's tracked template
+    would come out with unexpectedly narrow permissions.
+    """
+
+    def test_fresh_python_local_file_is_created_as_0600(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "alpha").mkdir(parents=True)
+        with open("envshield.yml", "w") as f:
+            f.write(
+                "services:\n  alpha:\n    schema: alpha/env.schema.toml\n"
+                "    local_file: alpha/env_config.local.py\n"
+            )
+        with open("alpha/env.schema.toml", "w") as f:
+            f.write('[API_KEY]\ndescription="Admin token"\nsecret=true\n')
+
+        schema_manager.sync_schema(service_name="alpha")
+
+        mode = stat.S_IMODE(os.stat("alpha/env_config.local.py").st_mode)
+        assert mode == 0o600
+
+    def test_env_example_template_is_not_restricted_to_0600(self, mocker, tmp_path):
+        """
+        Control case: '.env.example' is a template, not a secret-bearing
+        file -- it must keep its normal, umask-derived permissions, the
+        same as before this fix. Compared against an ordinary open()'d
+        file created in the same process/umask, rather than a hardcoded
+        mode, so this doesn't depend on what the test runner's own umask
+        happens to be.
+        """
+        with runner.isolated_filesystem(temp_dir=tmp_path) as td:
+            mocker.patch(
+                "envshield.config.manager.load_schema",
+                return_value={"API_KEY": {"description": "x", "secret": True}},
+            )
+            config_manager.add_service("app", SCHEMA_FILE_NAME)
+
+            schema_manager.sync_schema(service_name="app")
+
+            example_mode = stat.S_IMODE(
+                os.stat(os.path.join(td, ".env.example")).st_mode
+            )
+            with open(os.path.join(td, "ordinary-file.txt"), "w") as f:
+                f.write("x")
+            ordinary_mode = stat.S_IMODE(
+                os.stat(os.path.join(td, "ordinary-file.txt")).st_mode
+            )
+        assert example_mode == ordinary_mode

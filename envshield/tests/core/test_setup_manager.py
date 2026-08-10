@@ -1,5 +1,6 @@
 # envshield/tests/core/test_setup_manager.py
 import os
+import stat
 
 import pytest
 from typer.testing import CliRunner
@@ -498,3 +499,45 @@ class TestLocalFileGenerationInjectionIsPrevented:
             )
 
         assert not target.exists()
+
+
+class TestNewLocalFilesGetRestrictivePermissions:
+    """
+    Regression coverage for P1-1: a freshly-created local secrets file
+    used to inherit whatever the process umask produced instead of being
+    explicitly restricted -- landing world-readable (0644) on a
+    permissive-umask or shared multi-user host. Both writers must
+    guarantee 0600 for a genuinely new file, regardless of umask, while
+    never touching the permissions of a file that already exists there.
+    """
+
+    def test_dotenv_writer_creates_a_fresh_file_as_0600(self, tmp_path):
+        target = tmp_path / ".env"
+
+        setup_manager._write_dotenv_local_file(str(target), {"API_KEY": "abc123"})
+
+        assert stat.S_IMODE(os.stat(target).st_mode) == 0o600
+
+    def test_python_writer_creates_a_fresh_file_as_0600(self, tmp_path):
+        target = tmp_path / "config.py"
+
+        setup_manager._write_python_local_file(
+            str(target), {"API_KEY": "abc123"}, prompted_keys=["API_KEY"]
+        )
+
+        assert stat.S_IMODE(os.stat(target).st_mode) == 0o600
+
+    def test_dotenv_writer_does_not_widen_permissions_of_an_existing_file(
+        self, tmp_path
+    ):
+        target = tmp_path / ".env"
+        target.write_text("OLD=value\n")
+        os.chmod(target, 0o644)
+
+        setup_manager._write_dotenv_local_file(str(target), {"API_KEY": "abc123"})
+
+        # Regenerating an existing file is documented, intentional
+        # behavior (see _write_dotenv_local_file's own docstring) --
+        # P1-1 only changes what permissions a *new* file gets, not
+        # whether an existing one's permissions get silently narrowed.
+        assert stat.S_IMODE(os.stat(target).st_mode) == 0o644

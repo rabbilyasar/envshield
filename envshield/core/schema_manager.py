@@ -384,7 +384,7 @@ def _sync_python_local_file(schema: Dict[str, Any], local_file: str) -> bool:
         output_dir = os.path.dirname(local_file)
         if output_dir:
             os.makedirs(output_dir, exist_ok=True)
-        with open(local_file, "w") as f:
+        with file_updater.open_new_secret_file(local_file) as f:
             f.writelines(lines)
         console.print(
             f"[bold green]✓[/bold green] Created [bold cyan]{local_file}[/bold cyan]!"

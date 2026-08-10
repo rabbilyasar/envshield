@@ -1,10 +1,48 @@
 # envshield/core/file_updater.py
 # Contains logic for safely updating variables within configuration files.
+import os
 import re
 from typing import List
 
 from . import schema_types
 from .exceptions import EnvShieldException
+
+
+def open_new_secret_file(path: str):
+    """
+    Opens `path` for writing, guaranteeing 0600 permissions if this call is
+    what actually creates the file on disk -- never touching the
+    permissions of a file that already exists there.
+
+    Both properties come from POSIX open()'s own semantics for O_CREAT,
+    not from any extra logic here: the `mode` argument only takes effect
+    at true creation (an existing file's permissions are left exactly as
+    they are, no matter what mode is passed), and the OS ANDs that mode
+    with the complement of the process umask before applying it -- umask
+    can only clear bits, never add them, so passing 0o600 guarantees the
+    result is never broader than 0600 regardless of how permissive the
+    umask is. A plain open(path, "w") followed by a separate os.chmod()
+    would leave a brief window where the file exists with whatever the
+    umask produced before the chmod call catches up; doing it in one
+    open() call has no such window.
+
+    Callers needing to distinguish "created a fresh file" from "reused an
+    existing one" for other reasons (e.g. a different message to print)
+    should still check os.path.exists() themselves beforehand -- this
+    function only guarantees the permission outcome, not that signal.
+
+    This function is responsible for secure permissions on a newly-created
+    file, not for project-boundary enforcement: it follows normal OS
+    symlink semantics with no containment check of its own, so a caller
+    must validate any repository-controlled path (e.g. via
+    config.manager._ensure_within_project) before passing it here.
+    """
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        return os.fdopen(fd, "w")
+    except Exception:
+        os.close(fd)
+        raise
 
 
 def update_variables_in_file(file_path: str, updates: List[dict]):

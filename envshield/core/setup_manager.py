@@ -238,7 +238,7 @@ def _write_dotenv_local_file(local_file: str, final_vars: Dict[str, str]) -> Non
         output_dir = os.path.dirname(local_file)
         if output_dir:
             os.makedirs(output_dir, exist_ok=True)
-        with open(local_file, "w") as f:
+        with file_updater.open_new_secret_file(local_file) as f:
             f.write(
                 f"{service_discovery.ENVSHIELD_GENERATED_MARKER} on {datetime.datetime.now().strftime('%Y-%m-%d')}\n\n"
             )
@@ -289,7 +289,7 @@ def _write_python_local_file(
             output_dir = os.path.dirname(local_file)
             if output_dir:
                 os.makedirs(output_dir, exist_ok=True)
-            with open(local_file, "w") as f:
+            with file_updater.open_new_secret_file(local_file) as f:
                 f.write(
                     f"{service_discovery.ENVSHIELD_GENERATED_MARKER} on {datetime.datetime.now().strftime('%Y-%m-%d')}\n\n"
                 )
