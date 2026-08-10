@@ -29,11 +29,26 @@ def _ensure_within_project(path: str, label: str) -> str:
     why this matters: envshield.yml is committed to the repo, so an
     unvalidated override is a supply-chain-style arbitrary read/write vector
     for anyone who clones the repo and runs ordinary commands.
+
+    The containment decision is made on the *resolved* (symlink-followed)
+    location of both sides, via os.path.realpath -- not just the lexically
+    normalized abspath. A committed symlink inside the project pointing
+    outside it (or a chain of them) satisfies a purely lexical abspath/
+    commonpath check while its real target does not, which is the P0-6
+    vulnerability this guards against. realpath resolves as much of the
+    path as exists and appends the remainder unresolved, so a dangling
+    symlink or a not-yet-existing target under a symlinked parent directory
+    is still resolved and checked correctly -- no separate existence check
+    is needed. The *returned* value is still the original `path` string,
+    unresolved: callers persist this into envshield.yml, and swapping in a
+    resolved absolute path there would replace a portable relative path
+    with a machine-specific one.
     """
     project_root = os.path.abspath(os.getcwd())
-    candidate = os.path.abspath(os.path.join(project_root, path))
+    real_root = os.path.realpath(project_root)
+    real_candidate = os.path.realpath(os.path.join(project_root, path))
     try:
-        is_within = os.path.commonpath([project_root, candidate]) == project_root
+        is_within = os.path.commonpath([real_root, real_candidate]) == real_root
     except ValueError:
         # Raised on Windows when the two paths are on different drives --
         # definitionally not "within" the project.

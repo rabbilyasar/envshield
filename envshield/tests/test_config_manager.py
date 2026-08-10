@@ -506,3 +506,191 @@ def test_add_service_overwrites_a_service_registered_under_the_same_name(
     config_manager.add_service("alpha", "alpha/env.schema.toml", description="new")
 
     assert config_manager.get_services()["alpha"]["description"] == "new"
+
+
+class TestSymlinkEscapeIsPrevented:
+    """
+    Regression coverage for P0-6: _ensure_within_project used a purely
+    lexical os.path.abspath()/commonpath() check, which never resolves
+    symlinks -- a symlinked path component (or the configured path itself)
+    satisfied the check while its real target resolved outside the
+    project. envshield.yml is committed/PR-editable (see UnsafePathError's
+    own docstring), so a malicious repository could ship a symlink plus a
+    matching envshield.yml entry and have an ordinary command read or write
+    through it. These tests exercise the actual containment boundary with
+    real symlinks on disk, not just string assertions -- and for the
+    write case, prove the outside target was never created, not merely
+    that an exception was raised.
+    """
+
+    def test_symlinked_directory_component_escaping_the_project_is_rejected(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        outside = tmp_path.parent / "outside_dir_component"
+        outside.mkdir(exist_ok=True)
+        os.symlink(outside, tmp_path / "inside-link")
+
+        with pytest.raises(UnsafePathError):
+            config_manager._ensure_within_project(
+                os.path.join("inside-link", "target.toml"), "test path"
+            )
+
+    def test_leaf_symlink_escaping_the_project_is_rejected(self, tmp_path, monkeypatch):
+        """The symlink IS the final path component, not a parent directory."""
+        monkeypatch.chdir(tmp_path)
+        outside_file = tmp_path.parent / "outside_leaf.toml"
+        outside_file.write_text("[X]\n")
+        os.symlink(outside_file, tmp_path / "leaf-link.toml")
+
+        with pytest.raises(UnsafePathError):
+            config_manager._ensure_within_project("leaf-link.toml", "test path")
+
+    def test_nested_symlink_chain_escaping_the_project_is_rejected(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        outside = tmp_path.parent / "outside_nested"
+        outside.mkdir(exist_ok=True)
+        link_b = tmp_path / "link-b"
+        os.symlink(outside, link_b)
+        link_a = tmp_path / "link-a"
+        os.symlink(link_b, link_a)
+
+        with pytest.raises(UnsafePathError):
+            config_manager._ensure_within_project(
+                os.path.join("link-a", "target.toml"), "test path"
+            )
+
+    def test_symlink_resolving_inside_the_project_is_accepted(
+        self, tmp_path, monkeypatch
+    ):
+        """Regression guard: the fix must not start rejecting a symlink
+        whose target genuinely is inside the project."""
+        monkeypatch.chdir(tmp_path)
+        real_subdir = tmp_path / "real-subdir"
+        real_subdir.mkdir()
+        os.symlink(real_subdir, tmp_path / "in-project-link")
+
+        result = config_manager._ensure_within_project(
+            os.path.join("in-project-link", "config.toml"), "test path"
+        )
+
+        assert result == os.path.join("in-project-link", "config.toml")
+
+    def test_dangling_symlink_escaping_the_project_is_rejected_not_crashed(
+        self, tmp_path, monkeypatch
+    ):
+        """A dangling symlink (target doesn't exist) must still be resolved
+        and rejected, not raise an unrelated OSError or silently pass."""
+        monkeypatch.chdir(tmp_path)
+        os.symlink(
+            tmp_path.parent / "does-not-exist-anywhere",
+            tmp_path / "dangling-link",
+        )
+
+        with pytest.raises(UnsafePathError):
+            config_manager._ensure_within_project(
+                os.path.join("dangling-link", "newfile.env"), "test path"
+            )
+
+    def test_returned_value_is_still_the_original_relative_path_string(
+        self, tmp_path, monkeypatch
+    ):
+        """
+        The fix changes the *comparison*, not the *return value* -- a
+        legitimate relative path must still round-trip unchanged, since
+        add_service/add_manifest persist this exact string into
+        envshield.yml, and a resolved absolute path there would replace a
+        portable path with a machine-specific one.
+        """
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "services" / "api").mkdir(parents=True)
+
+        result = config_manager._ensure_within_project(
+            "services/api/env.schema.toml", "test path"
+        )
+
+        assert result == "services/api/env.schema.toml"
+        assert not os.path.isabs(result)
+
+    def test_add_service_persists_the_original_relative_path_through_a_legitimate_symlink(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        real_subdir = tmp_path / "real-subdir"
+        real_subdir.mkdir()
+        os.symlink(real_subdir, tmp_path / "svc-link")
+
+        config_manager.add_service("api", "svc-link/env.schema.toml")
+
+        with open("envshield.yml") as f:
+            content = f.read()
+        assert "svc-link/env.schema.toml" in content
+        assert str(real_subdir) not in content
+
+    def test_read_oriented_schema_path_cannot_escape_through_a_symlink(
+        self, tmp_path, monkeypatch
+    ):
+        """End-to-end read path: a schema entry routed through a symlink
+        must never actually be opened/parsed."""
+        monkeypatch.chdir(tmp_path)
+        outside = tmp_path.parent / "outside_schema_read"
+        outside.mkdir(exist_ok=True)
+        outside_schema = outside / "secret.schema.toml"
+        outside_schema.write_text('[SHOULD_NEVER_BE_READ]\ndescription = "x"\n')
+        os.symlink(outside, tmp_path / "schema-link")
+
+        with open("envshield.yml", "w") as f:
+            f.write("services:\n  api:\n    schema: schema-link/secret.schema.toml\n")
+
+        with pytest.raises(UnsafePathError):
+            config_manager.get_service_schema_path("api")
+
+        with pytest.raises(UnsafePathError):
+            config_manager.load_schema("api")
+
+    def test_write_oriented_local_file_cannot_escape_through_a_symlink(
+        self, tmp_path, monkeypatch
+    ):
+        """End-to-end write path: a local_file override routed through a
+        symlink must never actually be written to -- proven by the outside
+        target's absence, not merely by the exception."""
+        monkeypatch.chdir(tmp_path)
+        outside = tmp_path.parent / "outside_write_target"
+        outside.mkdir(exist_ok=True)
+        outside_file = outside / "secrets.env"
+        assert not outside_file.exists()
+        os.symlink(outside, tmp_path / "write-link")
+
+        with open("envshield.yml", "w") as f:
+            f.write(
+                "services:\n  api:\n    schema: env.schema.toml\n"
+                "    local_file: write-link/secrets.env\n"
+            )
+        with open("env.schema.toml", "w") as f:
+            f.write('[API_KEY]\ndescription = "x"\n')
+
+        with pytest.raises(UnsafePathError):
+            config_manager.get_env_paths(service_name="api")
+
+        assert not outside_file.exists()
+
+    def test_deployment_manifest_path_cannot_escape_through_a_symlink(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        outside = tmp_path.parent / "outside_manifest"
+        outside.mkdir(exist_ok=True)
+        (outside / "docker-compose.yml").write_text("services: {}\n")
+        os.symlink(outside, tmp_path / "manifest-link")
+
+        config_manager.add_service("api", "env.schema.toml")
+        with open("envshield.yml", "a") as f:
+            f.write(
+                "manifests:\n  - file: manifest-link/docker-compose.yml\n"
+                "    containers:\n      api: api\n"
+            )
+
+        with pytest.raises(UnsafePathError):
+            config_manager.get_deployment_manifests("api")
