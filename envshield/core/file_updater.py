@@ -3,6 +3,9 @@
 import re
 from typing import List
 
+from . import schema_types
+from .exceptions import EnvShieldException
+
 
 def update_variables_in_file(file_path: str, updates: List[dict]):
     """
@@ -30,6 +33,18 @@ def update_variables_in_file(file_path: str, updates: List[dict]):
     is_python = file_path.endswith(".py")
 
     def _render(key: str, value: str) -> str:
+        # 'key' is about to become a bare assignment target (a Python
+        # identifier, or the left-hand side of a dotenv 'KEY=value' line) --
+        # unlike 'value', it can't be escaped into a safe form without
+        # changing its identity (callers match on it verbatim elsewhere), so
+        # an unsafe key is rejected outright rather than sanitized.
+        if not schema_types.is_safe_variable_name(key):
+            raise EnvShieldException(
+                f"{key!r} is not a safe variable name (must match "
+                f"^[A-Za-z_][A-Za-z0-9_]*$) -- refusing to write it into "
+                f"'{file_path}'."
+            )
+
         # For Python files, format as: KEY = "VALUE" (repr() handles escaping
         # quotes/backslashes that plain string values may contain).
         if is_python:

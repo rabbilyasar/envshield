@@ -267,6 +267,18 @@ def _zod_default_literal(field_type: str, default_value: str) -> str:
     return json.dumps(default_value)
 
 
+def _escape_jsdoc_comment(text: str) -> str:
+    """
+    Neutralizes the one sequence that can terminate a /** ... */ block
+    comment early -- '*/' -- so a description can never turn into live,
+    executing TypeScript in the generated, imported module. Block comments
+    have no other special sequence: embedded newlines, quotes, backticks,
+    and `${...}` are all inert as plain comment text, so this is the whole
+    fix for this context, not a partial one.
+    """
+    return text.replace("*/", "* /")
+
+
 def _render_ts_field(key: str, details: dict[str, Any]) -> str:
     description = details.get("description", "")
     default_value = details.get("defaultValue")
@@ -298,7 +310,7 @@ def _render_ts_field(key: str, details: dict[str, Any]) -> str:
             # needs the same non-empty guarantee '.min(1)' gives by default.
             zod_type += ".min(1)"
 
-    comment = f"  /** {description} */\n" if description else ""
+    comment = f"  /** {_escape_jsdoc_comment(description)} */\n" if description else ""
     return f"{comment}  {json.dumps(key)}: {zod_type},"
 
 

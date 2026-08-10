@@ -1,11 +1,14 @@
 # envshield/tests/core/test_schema_manager.py
+import ast
 import os
 
+import pytest
 from typer.testing import CliRunner
 
 from envshield.config import manager as config_manager
 from envshield.config.manager import SCHEMA_FILE_NAME
 from envshield.core import schema_manager
+from envshield.core.exceptions import EnvShieldException
 
 runner = CliRunner()
 
@@ -533,3 +536,117 @@ def test_check_schema_against_kubernetes_manifest_flags_missing_var(mocker, tmp_
         is_in_sync = schema_manager.check_schema("deployment.yaml", service_name="app")
 
         assert is_in_sync is False
+
+
+class TestSchemaSyncGenerationInjectionIsPrevented:
+    """
+    Regression coverage for P0-5: a schema key/description is
+    repository-controlled (env.schema.toml is committed/PR-editable) and
+    lands in a generated '.env.example' or Python local-config module. A
+    key is rejected outright -- it's about to become an assignment target,
+    and can't be escaped into a safe form without changing its identity.
+    A description's embedded newline is escaped instead, since it's data:
+    a literal newline would otherwise split a single '# ...' comment into
+    an injected extra physical line.
+    """
+
+    def test_unsafe_key_is_rejected_before_writing_env_example(self, mocker, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path) as td:
+            malicious_key = "GOOD\nENVSHIELD_P0_5_SENTINEL=injected"
+            mocker.patch(
+                "envshield.config.manager.load_schema",
+                return_value={malicious_key: {"description": "x"}},
+            )
+            config_manager.add_service("app", SCHEMA_FILE_NAME)
+
+            with pytest.raises(EnvShieldException):
+                schema_manager.sync_schema(service_name="app")
+
+            assert not os.path.exists(os.path.join(td, ".env.example"))
+
+    def test_unsafe_key_is_rejected_before_writing_python_local_file(
+        self, mocker, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "alpha").mkdir(parents=True)
+        with open("envshield.yml", "w") as f:
+            f.write(
+                "services:\n  alpha:\n    schema: alpha/env.schema.toml\n"
+                "    local_file: alpha/env_config.local.py\n"
+            )
+        with open("alpha/env.schema.toml", "w") as f:
+            f.write("")
+        malicious_key = "GOOD\nimport os; os.system('true')  #"
+        mocker.patch(
+            "envshield.config.manager.load_schema",
+            return_value={malicious_key: {"description": "x", "defaultValue": "1"}},
+        )
+
+        with pytest.raises(EnvShieldException):
+            schema_manager.sync_schema(service_name="alpha")
+
+        assert not os.path.exists("alpha/env_config.local.py")
+
+    def test_description_with_embedded_newline_does_not_inject_a_line_into_env_example(
+        self, mocker, tmp_path
+    ):
+        with runner.isolated_filesystem(temp_dir=tmp_path) as td:
+            malicious_description = "normal\nENVSHIELD_P0_5_SENTINEL=injected"
+            mocker.patch(
+                "envshield.config.manager.load_schema",
+                return_value={
+                    "KEY": {"description": malicious_description, "defaultValue": "v"}
+                },
+            )
+            config_manager.add_service("app", SCHEMA_FILE_NAME)
+
+            schema_manager.sync_schema(service_name="app")
+
+            with open(os.path.join(td, ".env.example")) as f:
+                content = f.read()
+
+        lines = content.splitlines()
+        sentinel_lines = [line for line in lines if "ENVSHIELD_P0_5_SENTINEL" in line]
+        assert len(sentinel_lines) == 1
+        # Still part of the '#' comment on one physical line -- never its
+        # own standalone KEY=VALUE assignment.
+        assert sentinel_lines[0].startswith("#")
+        assert "ENVSHIELD_P0_5_SENTINEL=injected" not in lines
+
+    def test_description_with_embedded_newline_does_not_inject_a_python_statement(
+        self, mocker, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "alpha").mkdir(parents=True)
+        with open("envshield.yml", "w") as f:
+            f.write(
+                "services:\n  alpha:\n    schema: alpha/env.schema.toml\n"
+                "    local_file: alpha/env_config.local.py\n"
+            )
+        with open("alpha/env.schema.toml", "w") as f:
+            f.write("")
+        malicious_description = "normal\nENVSHIELD_P0_5_SENTINEL = True"
+        mocker.patch(
+            "envshield.config.manager.load_schema",
+            return_value={
+                "KEY": {"description": malicious_description, "defaultValue": "v"}
+            },
+        )
+
+        schema_manager.sync_schema(service_name="alpha")
+
+        with open("alpha/env_config.local.py") as f:
+            content = f.read()
+
+        # Parsed structurally, not just string-matched -- proves no extra
+        # top-level assignment was injected, not merely that "*/"-style
+        # text is absent.
+        tree = ast.parse(content)
+        top_level_names = {
+            target.id
+            for node in tree.body
+            if isinstance(node, ast.Assign)
+            for target in node.targets
+            if isinstance(target, ast.Name)
+        }
+        assert "ENVSHIELD_P0_5_SENTINEL" not in top_level_names

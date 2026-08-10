@@ -220,6 +220,20 @@ def run_setup(service_name: str, output_file: Optional[str] = None):
 
 def _write_dotenv_local_file(local_file: str, final_vars: Dict[str, str]) -> None:
     """Fully regenerates a dotenv-style local file -- safe, since it's a plain generated artifact."""
+    # Validated up front, before anything is written: a schema key is
+    # about to become the left-hand side of a 'KEY=value' line, and can't
+    # be escaped into a safe form without changing its identity, so it's
+    # rejected outright rather than sanitized. Checking every key before
+    # opening the file (rather than mid-loop) avoids leaving behind a
+    # truncated, half-written file if a later key turns out to be unsafe.
+    for key in final_vars:
+        if not schema_types.is_safe_variable_name(key):
+            raise EnvShieldException(
+                f"Schema key {key!r} is not a safe variable name (must "
+                f"match ^[A-Za-z_][A-Za-z0-9_]*$) -- refusing to write "
+                f"'{local_file}'."
+            )
+
     try:
         output_dir = os.path.dirname(local_file)
         if output_dir:
@@ -259,6 +273,18 @@ def _write_python_local_file(
     else already in the file is left completely untouched.
     """
     if not os.path.exists(local_file):
+        # Same reasoning as _write_dotenv_local_file above -- validated
+        # before anything is written, since here an unsafe key would be
+        # arbitrary injected Python source once this module is imported,
+        # not just a malformed name.
+        for key in final_vars:
+            if not schema_types.is_safe_variable_name(key):
+                raise EnvShieldException(
+                    f"Schema key {key!r} is not a safe variable name (must "
+                    f"match ^[A-Za-z_][A-Za-z0-9_]*$) -- refusing to write "
+                    f"'{local_file}'."
+                )
+
         try:
             output_dir = os.path.dirname(local_file)
             if output_dir:

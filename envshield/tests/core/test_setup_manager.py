@@ -1,12 +1,14 @@
 # envshield/tests/core/test_setup_manager.py
 import os
 
+import pytest
 from typer.testing import CliRunner
 
 from envshield.cli import app
 from envshield.config import manager as config_manager
 from envshield.config.manager import SCHEMA_FILE_NAME
 from envshield.core import setup_manager
+from envshield.core.exceptions import EnvShieldException
 
 runner = CliRunner()
 
@@ -461,3 +463,38 @@ def test_setup_retry_loop_never_prints_the_rejected_value(mocker, tmp_path):
         assert "must be a port number from 1-65535" in result.stdout
         with open(".env") as f:
             assert "API_PORT=8080" in f.read()
+
+
+class TestLocalFileGenerationInjectionIsPrevented:
+    """
+    Regression coverage for P0-5: a schema key is repository-controlled
+    (env.schema.toml is committed/PR-editable) and is about to become the
+    left-hand side of a generated 'KEY=value' or 'KEY = value' assignment.
+    Unlike a value, a key can't be escaped into a safe form without
+    changing its identity, so an unsafe one must be rejected outright --
+    and, critically, rejected before anything is written, so a bad key
+    doesn't leave behind a truncated, half-written file.
+    """
+
+    def test_dotenv_writer_rejects_an_unsafe_key_and_writes_nothing(self, tmp_path):
+        target = tmp_path / ".env"
+
+        with pytest.raises(EnvShieldException):
+            setup_manager._write_dotenv_local_file(
+                str(target),
+                {"GOOD_KEY": "1", "BAD\nENVSHIELD_P0_5_SENTINEL=injected": "2"},
+            )
+
+        assert not target.exists()
+
+    def test_python_writer_rejects_an_unsafe_key_and_writes_nothing(self, tmp_path):
+        target = tmp_path / "config.py"
+
+        with pytest.raises(EnvShieldException):
+            setup_manager._write_python_local_file(
+                str(target),
+                {"GOOD_KEY": "1", "BAD\nimport os": "2"},
+                prompted_keys=[],
+            )
+
+        assert not target.exists()

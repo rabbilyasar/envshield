@@ -29,6 +29,20 @@ KNOWN_TYPES = {"string", "int", "float", "bool", "port", "url", "email", "enum"}
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _BOOL_VALUES = {"true", "false"}
+_SAFE_VARIABLE_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def is_safe_variable_name(name: str) -> bool:
+    """
+    True if `name` is safe to emit as a bare variable name/assignment
+    target in a generated Python module or dotenv file -- the standard
+    POSIX/env-var identifier grammar, which is exactly Python's own
+    identifier grammar restricted to ASCII. Unlike a value, a name that
+    fails this can't be escaped into a safe form without changing its
+    identity (callers match on it elsewhere), so it must be rejected
+    rather than sanitized.
+    """
+    return bool(_SAFE_VARIABLE_NAME_RE.match(name))
 
 
 def resolve_field_type(field_schema: dict[str, Any]) -> str:

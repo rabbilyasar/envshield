@@ -1,7 +1,10 @@
 # envshield/tests/core/test_file_updater.py
 import ast
 
+import pytest
+
 from envshield.core import file_updater
+from envshield.core.exceptions import EnvShieldException
 
 
 def test_updates_existing_key_in_place_and_appends_missing_ones(tmp_path):
@@ -63,3 +66,37 @@ def test_updates_python_file_key_with_repr_escaping(tmp_path):
     # repr() round-trips correctly through Python's own literal syntax.
     rhs = content.split("=", 1)[1].strip()
     assert ast.literal_eval(rhs) == "has 'quotes' and \"both\""
+
+
+def test_rejects_an_unsafe_key_in_a_python_file_and_leaves_it_untouched(tmp_path):
+    """
+    Regression coverage for P0-5: 'key' is about to become a bare Python
+    assignment target -- unlike 'value', it can't be escaped into a safe
+    form without changing its identity, so an unsafe one must be rejected
+    outright, before the file is ever opened for writing.
+    """
+    target = tmp_path / "config.py"
+    original = "FOO = 'old'\n"
+    target.write_text(original)
+
+    malicious_key = "FOO = 1\nimport os; os.system('true')  #"
+    with pytest.raises(EnvShieldException):
+        file_updater.update_variables_in_file(
+            str(target), [{"key": malicious_key, "value": "x"}]
+        )
+
+    assert target.read_text() == original
+
+
+def test_rejects_an_unsafe_key_in_a_dotenv_file_and_leaves_it_untouched(tmp_path):
+    target = tmp_path / ".env"
+    original = "FOO=old\n"
+    target.write_text(original)
+
+    malicious_key = "FOO\nENVSHIELD_P0_5_SENTINEL"
+    with pytest.raises(EnvShieldException):
+        file_updater.update_variables_in_file(
+            str(target), [{"key": malicious_key, "value": "x"}]
+        )
+
+    assert target.read_text() == original

@@ -302,12 +302,28 @@ def sync_schema(service_name: str) -> bool:
 
     body = ""
     for key, details in schema.items():
+        # A schema key is repository-controlled (env.schema.toml is
+        # committed/PR-editable) and is about to become an assignment
+        # target in a generated file -- it can't be escaped into a safe
+        # form without changing its identity, so it's rejected outright
+        # rather than sanitized. description/defaultValue remain data, so
+        # they're escaped instead: a literal newline would otherwise split
+        # a single '# ...' comment or 'KEY=value' line into extra physical
+        # lines, injecting an unintended new line into the file.
+        if not schema_types.is_safe_variable_name(key):
+            raise EnvShieldException(
+                f"Schema key {key!r} is not a safe variable name (must match "
+                f"^[A-Za-z_][A-Za-z0-9_]*$) -- refusing to generate '{output_file}'."
+            )
+
         description = details.get("description")
         if description:
-            body += f"# {description}\n"
+            safe_description = description.replace("\r", "\\r").replace("\n", "\\n")
+            body += f"# {safe_description}\n"
 
-        default_value = details.get("defaultValue", "")
-        body += f"{key}={default_value}\n\n"
+        default_value = str(details.get("defaultValue", ""))
+        safe_default = default_value.replace("\r", "\\r").replace("\n", "\\n")
+        body += f"{key}={safe_default}\n\n"
 
     old_body = None
     if os.path.exists(output_file):
@@ -348,9 +364,21 @@ def _sync_python_local_file(schema: Dict[str, Any], local_file: str) -> bool:
             "# Fill in real values below -- this file is your project's local config module.\n\n",
         ]
         for key, details in schema.items():
+            # See sync_schema's dotenv branch above for why the key is
+            # rejected rather than escaped -- here it's about to become a
+            # literal Python assignment target, so an unsafe key would be
+            # arbitrary injected Python source, not just a malformed name.
+            if not schema_types.is_safe_variable_name(key):
+                raise EnvShieldException(
+                    f"Schema key {key!r} is not a safe variable name (must "
+                    f"match ^[A-Za-z_][A-Za-z0-9_]*$) -- refusing to "
+                    f"generate '{local_file}'."
+                )
+
             description = details.get("description")
             if description:
-                lines.append(f"# {description}\n")
+                safe_description = description.replace("\r", "\\r").replace("\n", "\\n")
+                lines.append(f"# {safe_description}\n")
             lines.append(f"{key} = {str(details.get('defaultValue', ''))!r}\n\n")
 
         output_dir = os.path.dirname(local_file)

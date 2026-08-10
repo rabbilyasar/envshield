@@ -1,4 +1,6 @@
 # envshield/tests/core/test_schema_types.py
+import pytest
+
 from envshield.core import schema_types
 
 
@@ -184,3 +186,37 @@ def test_is_required_now_respects_required_if_condition_not_met():
         is False
     )
     assert schema_types.is_required_now(field_schema, {}) is False
+
+
+class TestIsSafeVariableName:
+    """
+    Used to decide whether a schema key can be emitted as a bare assignment
+    target in a generated Python module or dotenv file (P0-5) -- must match
+    the standard POSIX/env-var identifier grammar, which is exactly
+    Python's own ASCII identifier grammar.
+    """
+
+    @pytest.mark.parametrize(
+        "name", ["FOO", "foo", "_foo", "FOO_BAR_2", "a", "_", "API_KEY_1"]
+    )
+    def test_accepts_ordinary_identifiers(self, name):
+        assert schema_types.is_safe_variable_name(name) is True
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "",
+            "1FOO",
+            "FOO-BAR",
+            "FOO BAR",
+            "FOO\nBAR",
+            "FOO=BAR",
+            "FOO;BAR",
+            "FOO'BAR",
+            'FOO"BAR',
+            "FOO$BAR",
+            "import os",
+        ],
+    )
+    def test_rejects_anything_that_is_not_a_bare_identifier(self, name):
+        assert schema_types.is_safe_variable_name(name) is False

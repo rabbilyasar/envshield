@@ -1,4 +1,6 @@
 # envshield/tests/core/test_generator.py
+import subprocess
+
 import pytest
 
 from envshield.core import generator
@@ -251,3 +253,119 @@ def test_generate_typescript_empty_schema():
 
     assert "const _schema = z.object({});" in content
     assert "export const env = _parsed;" in content
+
+
+def _node_check(tmp_path, script: str) -> subprocess.CompletedProcess:
+    """Syntax-only parse via a real node -- proves a comment's structure
+    wasn't broken, without needing zod or any other module installed."""
+    script_path = tmp_path / "check.js"
+    script_path.write_text(script)
+    return subprocess.run(
+        ["node", "--check", str(script_path)], capture_output=True, text=True
+    )
+
+
+class TestTypeScriptJSDocInjectionIsPrevented:
+    """
+    Regression coverage for P0-5: 'description' is repository-controlled
+    (env.schema.toml is committed/PR-editable) and lands inside a
+    '/** ... */' JSDoc block comment with no in-band escape mechanism --
+    the only sequence that matters is the literal '*/' that terminates the
+    comment early. Everything else (quotes, backticks, newlines, '${...}',
+    '<script>', a nested-looking '//'/'/*', Unicode) is inert plain text in
+    a block comment and needs no escaping at all.
+
+    Each test runs the actual escaping/rendering output through a real
+    node, either for a syntax-only parse or a real execution with a
+    sentinel side effect, rather than only asserting the string "looks"
+    escaped -- the key claim is that attacker-controlled input cannot
+    change the generated program's structure.
+    """
+
+    def test_normal_description_passes_through_unescaped(self):
+        content = generator.generate_config(
+            {"KEY": {"description": "A normal description."}}, lang="typescript"
+        )
+        assert "/** A normal description. */" in content
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            "it's got a single quote",
+            'it has a "double quote"',
+            "it has a `backtick`",
+            "line one\nline two",
+            "carriage\rreturn",
+            "a\\backslash",
+            "${1 + 1} template syntax",
+            "<script>alert(1)</script>",
+            "// a line comment lookalike",
+            "Unicode: héllo wörld 日本語 🎉",
+        ],
+    )
+    def test_benign_special_characters_produce_syntactically_valid_output(
+        self, tmp_path, payload
+    ):
+        """None of these are dangerous in a block comment on their own --
+        generation must succeed and the resulting comment, parsed by a real
+        node, must remain valid JS syntax."""
+        escaped = generator._escape_jsdoc_comment(payload)
+        script = f"/** {escaped} */\nglobalThis.__ENVSHIELD_OK__ = true;\n"
+
+        result = _node_check(tmp_path, script)
+
+        assert result.returncode == 0, result.stderr
+
+    def test_comment_terminator_is_neutralized(self):
+        payload = "ends the comment */ and starts new code"
+
+        escaped = generator._escape_jsdoc_comment(payload)
+
+        assert "*/" not in escaped
+
+    def test_unescaped_payload_would_have_executed_injected_code(self, tmp_path):
+        """
+        Demonstrates the vulnerability is real, not hypothetical: the exact
+        same payload, WITHOUT the fix applied, closes the comment early and
+        the injected statement actually runs -- proving the next test's
+        "it doesn't run" assertion is meaningful, not vacuous.
+        """
+        sentinel = tmp_path / "pwned.flag"
+        payload = f"desc */ require('fs').writeFileSync({str(sentinel)!r}, 'x'); /*"
+        unescaped_script = f"/** {payload} */\nglobalThis.__ENVSHIELD_OK__ = true;\n"
+
+        result = subprocess.run(
+            ["node", "-e", unescaped_script], capture_output=True, text=True
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert sentinel.exists()
+
+    def test_terminate_and_inject_payload_cannot_run(self, tmp_path):
+        """The security invariant itself: attacker-controlled input cannot
+        change the generated program's structure -- proven by actually
+        running the escaped output and confirming the injected statement
+        never executes."""
+        sentinel = tmp_path / "pwned.flag"
+        payload = f"desc */ require('fs').writeFileSync({str(sentinel)!r}, 'x'); /*"
+        escaped = generator._escape_jsdoc_comment(payload)
+        script = f"/** {escaped} */\nglobalThis.__ENVSHIELD_OK__ = true;\n"
+
+        result = subprocess.run(["node", "-e", script], capture_output=True, text=True)
+
+        assert result.returncode == 0, result.stderr
+        assert not sentinel.exists()
+
+    def test_generate_config_end_to_end_neutralizes_the_terminator(self):
+        """Wired into the real code path, not just the helper in isolation."""
+        payload = "desc */ globalThis.pwned = true; /*"
+
+        content = generator.generate_config(
+            {"KEY": {"description": payload}}, lang="typescript"
+        )
+
+        comment_line = next(
+            line for line in content.splitlines() if line.startswith("  /**")
+        )
+        assert comment_line.count("*/") == 1
+        assert comment_line.rstrip().endswith("*/")
