@@ -3,6 +3,7 @@ import difflib
 import fnmatch
 import os
 import re
+import shlex
 import stat
 from typing import Any, Dict, List, Optional
 
@@ -825,9 +826,25 @@ def _generate_pre_commit_hook_content() -> str:
     # shape) is the same class of bug the combined -E alternation was
     # meant to fix elsewhere: staging only 'web's schema still ran 'api's
     # check too, false-failing the commit over a service nobody touched.
+    #
+    # schema_path/name/example_file all come from envshield.yml -- a file
+    # explicitly designed to be committed and PR-edited (see
+    # config_manager.UnsafePathError's own docstring on this exact threat
+    # model). Each is assigned to a shell variable via shlex.quote() -- a
+    # single, self-contained safe shell word -- and every use after that
+    # references it as "$VAR", never re-embeds the raw value as literal
+    # script text. Double-quoted parameter expansion substitutes a
+    # variable's value as opaque data with no further shell
+    # interpretation of its content, regardless of what characters it
+    # contains -- that's what actually closes the injection here, not
+    # anything about the value's own contents being "safe-looking".
     blocks = []
     for schema_path, name in schema_to_service.items():
-        lines = [f"if git diff --cached --name-only | grep -qF '{schema_path}'; then"]
+        lines = [
+            f"_ENVSHIELD_SCHEMA_PATH={shlex.quote(schema_path)}",
+            f"_ENVSHIELD_SERVICE_NAME={shlex.quote(name)}",
+            'if git diff --cached --name-only | grep -qF "$_ENVSHIELD_SCHEMA_PATH"; then',
+        ]
 
         # 'schema sync --check' below only ever reads the template off
         # disk, not what's actually staged -- so running 'schema sync'
@@ -842,17 +859,20 @@ def _generate_pre_commit_hook_content() -> str:
             paths = config_manager.get_env_paths(service_name=name)
             if not paths["local_file"].endswith(".py"):
                 example_file = paths["example_file"]
+                lines.append(f"  _ENVSHIELD_EXAMPLE_FILE={shlex.quote(example_file)}")
                 lines.append(
-                    f"  if git diff --name-only | grep -qF '{example_file}'; then\n"
-                    f"    echo \"✗ '{example_file}' has unstaged changes -- did you "
-                    'forget \'git add\' after running \'envshield schema sync\'?"\n'
+                    '  if git diff --name-only | grep -qF "$_ENVSHIELD_EXAMPLE_FILE"; then\n'
+                    "    echo \"✗ '$_ENVSHIELD_EXAMPLE_FILE' has unstaged changes -- did you "
+                    "forget 'git add' after running 'envshield schema sync'?\"\n"
                     "    STATUS=1\n"
                     "  fi"
                 )
         except EnvShieldException:
             pass
 
-        lines.append(f"  envshield schema sync --service {name} --check || STATUS=1")
+        lines.append(
+            '  envshield schema sync --service "$_ENVSHIELD_SERVICE_NAME" --check || STATUS=1'
+        )
         lines.append("fi")
         blocks.append("\n".join(lines))
 
@@ -960,9 +980,16 @@ def _generate_post_merge_hook_content() -> str:
     # One 'if' per service, gated on grep -F matching that service's own
     # schema path only (a literal-string match -- no alternation needed,
     # unlike the old shared gate this replaces).
+    #
+    # schema_path/name come from envshield.yml, untrusted for the same
+    # reason noted in _generate_pre_commit_hook_content -- same fix here:
+    # shlex.quote() into a shell variable, referenced afterward only as
+    # "$VAR", never re-embedded as literal script text.
     checks = "\n".join(
-        f"if git diff --name-only HEAD@{{1}}..HEAD | grep -qF '{schema_path}' 2>/dev/null; then\n"
-        f"  envshield doctor --service {name} 2>/dev/null\n"
+        f"_ENVSHIELD_SCHEMA_PATH={shlex.quote(schema_path)}\n"
+        f"_ENVSHIELD_SERVICE_NAME={shlex.quote(name)}\n"
+        'if git diff --name-only HEAD@{1}..HEAD | grep -qF "$_ENVSHIELD_SCHEMA_PATH" 2>/dev/null; then\n'
+        '  envshield doctor --service "$_ENVSHIELD_SERVICE_NAME" 2>/dev/null\n'
         "fi"
         for schema_path, name in schema_to_service.items()
     )

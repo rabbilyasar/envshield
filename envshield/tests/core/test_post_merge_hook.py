@@ -5,10 +5,23 @@ import subprocess
 from envshield.core import scanner
 
 
-def _extract_if_blocks(hook_script: str) -> list[tuple[str, str]]:
-    """Returns [(grep pattern, doctor command), ...] for every per-service 'if grep ...; then ...; fi' block."""
+def _extract_if_blocks(hook_script: str) -> list[tuple[str, str, str]]:
+    """
+    Returns [(schema_path, service_name, doctor block), ...] for every
+    per-service 'if grep ...; then ...; fi' block.
+
+    schema_path/service_name are read from the _ENVSHIELD_SCHEMA_PATH /
+    _ENVSHIELD_SERVICE_NAME shell-variable assignments that now precede
+    the grep/--service usage (see P0-4) -- a plain capture is enough
+    because every fixture value these tests use is already shell-safe.
+    Adversarial values are exercised separately in
+    TestShellInjectionIsPrevented, against a real shell.
+    """
     blocks = re.findall(
-        r"if git diff --name-only HEAD@\{1\}\.\.HEAD \| grep -qF '([^']*)' 2>/dev/null; then\n(.*?)\nfi",
+        r"_ENVSHIELD_SCHEMA_PATH=(\S+)\n"
+        r"_ENVSHIELD_SERVICE_NAME=(\S+)\n"
+        r'if git diff --name-only HEAD@\{1\}\.\.HEAD \| grep -qF "\$_ENVSHIELD_SCHEMA_PATH" 2>/dev/null; then\n'
+        r"(.*?)\nfi",
         hook_script,
     )
     assert blocks, f"no per-service if-blocks found in generated hook:\n{hook_script}"
@@ -30,7 +43,7 @@ def test_post_merge_hook_grep_detects_its_own_services_schema_change(mocker):
     script = scanner._generate_post_merge_hook_content()
     blocks = _extract_if_blocks(script)
 
-    for pattern, _ in blocks:
+    for pattern, _name, _body in blocks:
         result = subprocess.run(f"echo '{pattern}' | grep -qF '{pattern}'", shell=True)
         assert result.returncode == 0, f"expected {pattern} to match itself"
 
@@ -51,8 +64,11 @@ def test_post_merge_hook_grep_detects_change_single_service(mocker):
     blocks = _extract_if_blocks(script)
 
     assert len(blocks) == 1
-    pattern, _ = blocks[0]
-    result = subprocess.run(f"echo 'env.schema.toml' | grep -qF '{pattern}'", shell=True)
+    pattern, name, _body = blocks[0]
+    assert name == "app"
+    result = subprocess.run(
+        f"echo 'env.schema.toml' | grep -qF '{pattern}'", shell=True
+    )
     assert result.returncode == 0
 
 
@@ -68,9 +84,11 @@ def test_post_merge_hook_calls_doctor_for_every_service(mocker):
     )
 
     script = scanner._generate_post_merge_hook_content()
+    blocks = _extract_if_blocks(script)
 
-    assert "envshield doctor --service api" in script
-    assert "envshield doctor --service web" in script
+    assert {name for _path, name, _body in blocks} == {"api", "web"}
+    for _path, _name, body in blocks:
+        assert 'envshield doctor --service "$_ENVSHIELD_SERVICE_NAME"' in body
 
 
 def test_post_merge_hook_only_checks_the_service_whose_schema_actually_changed(
@@ -83,6 +101,11 @@ def test_post_merge_hook_only_checks_the_service_whose_schema_actually_changed(
     schema changed in the merge, not just that service's own. Each
     service's doctor call must live inside its OWN 'if', gated on its OWN
     schema path only.
+
+    The doctor command text itself is now generic (`--service
+    "$_ENVSHIELD_SERVICE_NAME"`, see P0-4), so "did the wrong service leak
+    into this block" is checked via the shell variable each block actually
+    binds, not via a substring of the command text.
     """
     mocker.patch(
         "envshield.config.manager.load_config",
@@ -95,12 +118,12 @@ def test_post_merge_hook_only_checks_the_service_whose_schema_actually_changed(
     )
 
     script = scanner._generate_post_merge_hook_content()
-    blocks = dict(_extract_if_blocks(script))
+    blocks = {path: name for path, name, _body in _extract_if_blocks(script)}
 
     api_pattern = "services/api/env.schema.toml"
     web_pattern = "services/web/env.schema.toml"
-    assert "--service api" in blocks[api_pattern]
-    assert "--service web" in blocks[web_pattern]
+    assert blocks[api_pattern] == "api"
+    assert blocks[web_pattern] == "web"
     # Neither service's doctor call leaked into the other's block.
     assert "--service web" not in blocks[api_pattern]
     assert "--service api" not in blocks[web_pattern]
