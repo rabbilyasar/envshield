@@ -110,17 +110,6 @@ SECRET_PATTERNS: List[Dict[str, str]] = [
         "pattern": r"\bpypi-AgEIcHlwaS5vcmc[A-Za-z0-9-_]{50,1000}\b",
     },
 ]
-USAGE_PATTERNS: List[Dict[str, str]] = [
-    # Python's os.environ.get/os.getenv used to be matched here by regex --
-    # replaced by discovery.discover_python_usages (AST-based, Phase 2B
-    # Milestone 1), which is gated to .py files only and additionally
-    # catches os.environ['X'] and multi-line calls the regex couldn't.
-    # Removing these two entries also means a *non*-.py file containing
-    # literal 'os.environ.get(...)' text (e.g. a code sample in a .md) is
-    # no longer flagged -- an intentional narrowing, not preserved.
-    {"name": "Node.js process.env", "pattern": r"process\.env\.(\w+)"},
-]
-
 # Directories that are never useful to scan and are expensive/noisy to walk:
 # dependency trees, VCS internals, virtualenvs, and build artifacts. These are
 # always pruned in addition to whatever the user configures in envshield.yml.
@@ -250,6 +239,29 @@ def _get_diff_lines(file_path: str) -> Optional[set]:
         return set()
 
 
+def _record_discovered_usages(
+    undeclared_findings: List[Dict],
+    usages,
+    schema_vars: set,
+    new_lines_only: Optional[set],
+) -> None:
+    """Shared adapter for both discovery.py engines: filters by
+    new_lines_only and schema_vars, then appends in the same finding shape
+    the (now-removed) per-line regex loop always used -- callers of
+    _scan_single_file see no difference."""
+    for usage in usages:
+        if new_lines_only is not None and usage.line not in new_lines_only:
+            continue
+        if usage.variable not in schema_vars:
+            undeclared_findings.append(
+                {
+                    "file_path": usage.file_path,
+                    "line_num": usage.line,
+                    "variable_name": usage.variable,
+                }
+            )
+
+
 def _scan_single_file(
     file_path: str,
     schema_vars: set,
@@ -301,37 +313,27 @@ def _scan_single_file(
                     )
                     break
 
-            # Check for undeclared variables
-            for usage in USAGE_PATTERNS:
-                matches = re.findall(usage["pattern"], line)
-                for var_name in matches:
-                    if var_name not in schema_vars:
-                        undeclared_findings.append(
-                            {
-                                "file_path": file_path,
-                                "line_num": line_num,
-                                "variable_name": var_name,
-                            }
-                        )
-
-        # Python's os.environ.get/os.getenv/os.environ[] usages are
-        # discovered via AST (Phase 2B Milestone 1) rather than the
-        # per-line regex loop above -- gated to .py files, and run once
-        # over the whole file rather than line by line, since a call can
-        # span multiple lines. Skipped entirely when new_lines_only is an
-        # explicitly empty set: nothing could survive that filter anyway.
-        if file_path.endswith(".py") and new_lines_only != set():
-            for usage in discovery.discover_python_usages("".join(lines), file_path):
-                if new_lines_only is not None and usage.line not in new_lines_only:
-                    continue
-                if usage.variable not in schema_vars:
-                    undeclared_findings.append(
-                        {
-                            "file_path": file_path,
-                            "line_num": usage.line,
-                            "variable_name": usage.variable,
-                        }
-                    )
+        # Undeclared-variable detection for both Python and JS/TS runs once
+        # over the whole file (not per line, like the secret loop above),
+        # since a usage can span multiple lines -- see discovery.py.
+        # Skipped entirely when new_lines_only is an explicitly empty set:
+        # nothing could survive that filter anyway.
+        if new_lines_only != set():
+            full_text = "".join(lines)
+            if file_path.endswith(".py"):
+                _record_discovered_usages(
+                    undeclared_findings,
+                    discovery.discover_python_usages(full_text, file_path),
+                    schema_vars,
+                    new_lines_only,
+                )
+            elif file_path.endswith((".js", ".jsx", ".ts", ".tsx")):
+                _record_discovered_usages(
+                    undeclared_findings,
+                    discovery.discover_js_usages(full_text, file_path),
+                    schema_vars,
+                    new_lines_only,
+                )
 
     except (IOError, OSError):
         return [], []

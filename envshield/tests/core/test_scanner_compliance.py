@@ -888,3 +888,93 @@ class TestPythonAstDiscoveryViaScanner:
             "notes.md", set(), content="Example: `os.environ.get('X')`\n"
         )
         assert undeclared == []
+
+
+class TestJsTsDiscoveryViaScanner:
+    """
+    Phase 2B Milestone 2: JS/TS discovery (regex + bounded brace-matching,
+    not tree-sitter -- see discovery.py) closes the confirmed gaps
+    (bracket access, import.meta.env, destructuring including multi-line)
+    end to end through the actual `_scan_single_file` entry point.
+    """
+
+    def test_dot_access_is_still_caught(self):
+        _, undeclared = scanner._scan_single_file(
+            "app.js", set(), content="const x = process.env.UNDECLARED;\n"
+        )
+        assert len(undeclared) == 1
+        assert undeclared[0]["variable_name"] == "UNDECLARED"
+        assert undeclared[0]["file_path"] == "app.js"
+        assert undeclared[0]["line_num"] == 1
+
+    def test_bracket_access_is_now_caught(self):
+        _, undeclared = scanner._scan_single_file(
+            "app.js", set(), content="const x = process.env['UNDECLARED'];\n"
+        )
+        assert len(undeclared) == 1
+        assert undeclared[0]["variable_name"] == "UNDECLARED"
+
+    def test_import_meta_env_is_now_caught(self):
+        _, undeclared = scanner._scan_single_file(
+            "app.ts", set(), content="const x = import.meta.env.VITE_UNDECLARED;\n"
+        )
+        assert len(undeclared) == 1
+        assert undeclared[0]["variable_name"] == "VITE_UNDECLARED"
+
+    def test_multiline_destructuring_is_now_caught(self):
+        content = "const {\n  UNDECLARED,\n  ALSO_UNDECLARED,\n} = process.env;\n"
+
+        _, undeclared = scanner._scan_single_file("app.ts", set(), content=content)
+
+        assert {f["variable_name"] for f in undeclared} == {
+            "UNDECLARED",
+            "ALSO_UNDECLARED",
+        }
+        assert all(f["line_num"] == 1 for f in undeclared)
+
+    def test_declared_variable_via_destructuring_is_not_flagged(self):
+        _, undeclared = scanner._scan_single_file(
+            "app.js", {"DECLARED"}, content="const { DECLARED } = process.env;\n"
+        )
+        assert undeclared == []
+
+    def test_new_lines_only_filters_js_discovered_usages_too(self):
+        content = "const a = process.env['OLD'];\nconst b = process.env['NEW'];\n"
+
+        _, undeclared = scanner._scan_single_file(
+            "app.js", set(), content=content, new_lines_only={2}
+        )
+
+        assert len(undeclared) == 1
+        assert undeclared[0]["variable_name"] == "NEW"
+
+    def test_jsx_and_tsx_files_are_also_scanned(self):
+        _, undeclared_jsx = scanner._scan_single_file(
+            "app.jsx", set(), content="const x = process.env.UNDECLARED;\n"
+        )
+        _, undeclared_tsx = scanner._scan_single_file(
+            "app.tsx", set(), content="const x = process.env.UNDECLARED;\n"
+        )
+        assert len(undeclared_jsx) == 1
+        assert len(undeclared_tsx) == 1
+
+    def test_a_non_js_file_with_js_looking_text_is_no_longer_flagged(self):
+        """
+        Intentional narrowing, mirroring the Python one above: JS/TS
+        discovery is gated to .js/.jsx/.ts/.tsx files, and the old regex
+        that used to catch this in *any* file was removed globally.
+        """
+        _, undeclared = scanner._scan_single_file(
+            "notes.md", set(), content="Example: `process.env.UNDECLARED`\n"
+        )
+        assert undeclared == []
+
+    def test_malformed_js_does_not_crash_the_scan_or_hide_secrets(self):
+        content = "const { FOO = process.env;\nAWS_ACCESS_KEY_ID=AKIAABCDEFGHIJKLMNOP\n"
+
+        secrets, undeclared = scanner._scan_single_file(
+            "broken.js", set(), content=content
+        )
+
+        assert undeclared == []
+        assert len(secrets) == 1

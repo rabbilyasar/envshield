@@ -141,3 +141,164 @@ class TestToDict:
             "access_type": "os.environ.get",
             "confidence": "high",
         }
+
+
+def _js(content, file_path="app.js"):
+    return discovery.discover_js_usages(content, file_path)
+
+
+def _one_js(content, file_path="app.js"):
+    result = _js(content, file_path)
+    assert len(result) == 1, f"expected exactly one usage, got {result}"
+    return result[0]
+
+
+class TestProcessEnvDotAccess:
+    def test_basic(self):
+        usage = _one_js("const x = process.env.FOO;\n")
+        assert usage.variable == "FOO"
+        assert usage.access_type == "process.env."
+        assert usage.language == "javascript"
+        assert usage.confidence == "high"
+        assert usage.line == 1
+
+    def test_typescript_file_is_labeled_typescript(self):
+        usage = _one_js("const x = process.env.FOO;\n", "app.ts")
+        assert usage.language == "typescript"
+
+    def test_tsx_file_is_labeled_typescript(self):
+        usage = _one_js("const x = process.env.FOO;\n", "app.tsx")
+        assert usage.language == "typescript"
+
+    def test_jsx_file_is_labeled_javascript(self):
+        usage = _one_js("const x = process.env.FOO;\n", "app.jsx")
+        assert usage.language == "javascript"
+
+
+class TestProcessEnvBracketAccess:
+    def test_single_quoted(self):
+        usage = _one_js("const x = process.env['FOO'];\n")
+        assert usage.variable == "FOO"
+        assert usage.access_type == "process.env[]"
+
+    def test_double_quoted(self):
+        usage = _one_js('const x = process.env["FOO"];\n')
+        assert usage.variable == "FOO"
+
+    def test_mismatched_quotes_are_not_matched(self):
+        assert _js("const x = process.env['FOO\"];\n") == []
+
+
+class TestImportMetaEnv:
+    def test_dot_access(self):
+        usage = _one_js("const x = import.meta.env.VITE_FOO;\n")
+        assert usage.variable == "VITE_FOO"
+        assert usage.access_type == "import.meta.env."
+
+    def test_bracket_access(self):
+        usage = _one_js("const x = import.meta.env['VITE_FOO'];\n")
+        assert usage.variable == "VITE_FOO"
+        assert usage.access_type == "import.meta.env[]"
+
+
+class TestDestructuring:
+    def test_single_key_single_line(self):
+        usage = _one_js("const { FOO } = process.env;\n")
+        assert usage.variable == "FOO"
+        assert usage.access_type == "process.env{}"
+        assert usage.line == 1
+
+    def test_multiple_keys_single_line(self):
+        result = _js("const { FOO, BAR } = process.env;\n")
+        assert {u.variable for u in result} == {"FOO", "BAR"}
+
+    def test_multiline_reports_the_statement_start_line(self):
+        content = "const {\n  FOO,\n  BAR,\n} = process.env;\n"
+        result = _js(content)
+        assert {u.variable for u in result} == {"FOO", "BAR"}
+        assert all(u.line == 1 for u in result)
+
+    def test_renamed_reports_the_original_key_not_the_rename_target(self):
+        usage = _one_js("const { FOO: renamed } = process.env;\n")
+        assert usage.variable == "FOO"
+
+    def test_defaulted_reports_the_key_not_the_default(self):
+        usage = _one_js("const { FOO = 'fallback' } = process.env;\n")
+        assert usage.variable == "FOO"
+
+    def test_renamed_and_defaulted(self):
+        usage = _one_js("const { FOO: renamed = 'fallback' } = process.env;\n")
+        assert usage.variable == "FOO"
+
+    def test_rest_element_is_skipped(self):
+        result = _js("const { FOO, ...rest } = process.env;\n")
+        assert {u.variable for u in result} == {"FOO"}
+
+    def test_import_meta_env_destructuring(self):
+        usage = _one_js("const { VITE_FOO } = import.meta.env;\n")
+        assert usage.variable == "VITE_FOO"
+        assert usage.access_type == "import.meta.env{}"
+
+    def test_default_value_containing_a_call_does_not_break_the_split(self):
+        """A default's own parens/braces must not be mistaken for extra
+        top-level entries (depth-aware splitting)."""
+        usage = _one_js("const { FOO = someCall(1, 2) } = process.env;\n")
+        assert usage.variable == "FOO"
+
+    def test_nested_destructuring_reports_only_the_outer_key(self):
+        """Not a supported case (out of scope), but must not crash, and
+        must not fabricate a second finding for the inner name."""
+        result = _js("const { A: { B } } = process.env;\n")
+        assert {u.variable for u in result} == {"A"}
+
+    def test_oversized_span_is_not_reported(self):
+        many_keys = ", ".join(f"K{i}" for i in range(2000))
+        content = f"const {{{many_keys}}} = process.env;\n"
+        assert _js(content) == []
+
+
+class TestJsOutOfScopeByDesign:
+    def test_dynamic_key_is_not_reported(self):
+        assert _js("const x = process.env[someVar];\n") == []
+
+    def test_computed_bracket_with_a_template_literal_is_not_reported(self):
+        assert _js("const x = process.env[`FOO`];\n") == []
+
+    def test_aliased_process_env_is_not_reported(self):
+        assert _js("const env = process.env;\nconst x = env.FOO;\n") == []
+
+    def test_destructuring_from_an_aliased_source_is_not_reported(self):
+        assert _js("const env = process.env;\nconst { FOO } = env;\n") == []
+
+
+class TestJsMalformedInputNeverRaises:
+    def test_unbalanced_braces_do_not_raise(self):
+        assert _js("const { FOO = process.env;\n") == []
+
+    def test_empty_content_returns_an_empty_list(self):
+        assert _js("") == []
+
+    def test_no_relevant_usages_returns_an_empty_list(self):
+        assert _js("const x = 1;\nconst y = 'hello';\n") == []
+
+
+class TestJsPathologicalInputCompletesQuickly:
+    """
+    Concrete, not just theoretical: proves the single-pass brace-matching
+    design (plus the destructure-span cap) stays bounded on adversarially
+    shaped input, rather than degrading toward the O(n^2) a naive
+    per-match backward scan without these safeguards would hit.
+    """
+
+    def test_many_anchors_with_no_preceding_brace(self):
+        content = "x = process.env;\n" * 20000
+        assert _js(content) == []
+
+    def test_deeply_nested_braces_before_a_single_anchor(self):
+        content = "{" * 3000 + "X" + "}" * 3000 + " = process.env;\n"
+        assert _js(content) == []
+
+    def test_many_balanced_destructures_produce_correct_results_quickly(self):
+        content = "const { A, B, C } = process.env;\n" * 10000
+        result = _js(content)
+        assert len(result) == 30000
