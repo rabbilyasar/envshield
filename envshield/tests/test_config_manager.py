@@ -694,3 +694,60 @@ class TestSymlinkEscapeIsPrevented:
 
         with pytest.raises(UnsafePathError):
             config_manager.get_deployment_manifests("api")
+
+
+class TestServiceDirContains:
+    """
+    Phase 2C: mechanically extracted from scanner.py's previously-private
+    per-service directory router (_normalize_for_dir_match plus the inline
+    containment check in _build_undeclared_var_resolver) so
+    dependency_snapshot.py can reuse the exact same routing logic instead
+    of a second copy that could drift. Same behavior, new home.
+    """
+
+    def test_root_service_dir_matches_every_path(self):
+        assert config_manager.service_dir_contains("app.py", ".") is True
+        assert config_manager.service_dir_contains("nested/app.py", ".") is True
+
+    def test_file_directly_inside_the_service_dir_matches(self):
+        assert (
+            config_manager.service_dir_contains("services/api/app.py", "services/api")
+            is True
+        )
+
+    def test_the_service_dir_itself_matches(self):
+        assert (
+            config_manager.service_dir_contains("services/api", "services/api") is True
+        )
+
+    def test_sibling_service_dir_does_not_match(self):
+        assert (
+            config_manager.service_dir_contains("services/web/app.py", "services/api")
+            is False
+        )
+
+    def test_a_prefix_that_is_not_a_real_subdirectory_does_not_match(self):
+        """'services/api-extra' must not match 'services/api' just because
+        the string happens to start with it."""
+        assert (
+            config_manager.service_dir_contains(
+                "services/api-extra/app.py", "services/api"
+            )
+            is False
+        )
+
+    def test_absolute_file_path_is_normalized_against_cwd(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "services" / "api").mkdir(parents=True)
+
+        absolute = str(tmp_path / "services" / "api" / "app.py")
+
+        assert config_manager.service_dir_contains(absolute, "services/api") is True
+
+    def test_unnormalized_service_dir_is_normalized_too(self):
+        assert (
+            config_manager.service_dir_contains(
+                "services/api/app.py", "./services/api/"
+            )
+            is True
+        )

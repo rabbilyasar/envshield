@@ -180,6 +180,109 @@ def get_head_file_content(file_path: str) -> str | None:
         return None
 
 
+def revision_exists(revision: str) -> bool:
+    """
+    Whether `revision` resolves to a real commit.
+
+    'git diff'/'git show' both treat a malformed or non-existent revision
+    expression as "no output" rather than a distinguishable error in every
+    call site above that already tolerates a failure (list_changed_files
+    returns [], get_file_content_at_revision returns None) -- correct for
+    'no changes'/'file missing there', but that same silence would make an
+    outright bad revision read as "nothing changed" instead of "that
+    revision doesn't exist." This primitive exists for callers that need to
+    tell those two apart explicitly, rather than let the ambiguity stand.
+
+    Returns False outside a Git repository or if git isn't available.
+    """
+    git_root = get_git_root()
+    if not git_root:
+        return False
+    try:
+        subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", f"{revision}^{{commit}}"],
+            cwd=git_root,
+            capture_output=True,
+            check=True,
+        )
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
+
+
+def list_changed_files(revision_a: str | None, revision_b: str | None) -> list[str]:
+    """
+    Lists paths that differ between `revision_a` and `revision_b` via
+    'git diff --no-renames --name-only'. Either side may be None to mean
+    "the current working tree" (git's own single-ref diff behavior); if
+    both are None there's nothing meaningful to diff (working tree against
+    the index isn't "changed files" for this primitive's callers), so that
+    returns an empty list without shelling out at all.
+
+    '--no-renames' is explicit rather than left to the user's
+    'diff.renames' git config default: a renamed file would otherwise be
+    reported differently across environments, making a caller's "what
+    changed" answer non-deterministic. With it, a rename is deterministically
+    reported as its old path removed and its new path added.
+
+    Returns absolute paths (like get_staged_files), an empty list outside a
+    Git repository, if git itself isn't available, or if a given revision
+    doesn't resolve.
+    """
+    git_root = get_git_root()
+    if not git_root:
+        return []
+    if revision_a is None and revision_b is None:
+        return []
+
+    revisions = [r for r in (revision_a, revision_b) if r is not None]
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--no-renames", "--name-only", *revisions],
+            cwd=git_root,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return []
+
+    relative_paths = [line for line in result.stdout.splitlines() if line]
+    return [os.path.join(git_root, path) for path in relative_paths]
+
+
+def list_untracked_files() -> list[str]:
+    """
+    Lists files present on disk but not tracked by Git and not ignored, via
+    'git ls-files --others --exclude-standard'.
+
+    'git diff' never reports these under any revision pair -- an untracked
+    file has no committed or staged blob to diff against at all -- so a
+    caller comparing a revision against the live working tree needs this
+    separately to see a brand-new, not-yet-'git add'-ed file.
+
+    Returns absolute paths (like get_staged_files), or an empty list
+    outside a Git repository or if git isn't available.
+    """
+    git_root = get_git_root()
+    if not git_root:
+        return []
+
+    try:
+        result = subprocess.run(
+            ["git", "ls-files", "--others", "--exclude-standard"],
+            cwd=git_root,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return []
+
+    relative_paths = [line for line in result.stdout.splitlines() if line]
+    return [os.path.join(git_root, path) for path in relative_paths]
+
+
 def get_file_content_at_revision(file_path: str, revision: str) -> str | None:
     """
     Reads a file's content as it existed at an arbitrary Git revision (a

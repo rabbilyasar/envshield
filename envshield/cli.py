@@ -16,6 +16,8 @@ from envshield.core import importer
 from .config import manager as config_manager
 from .core import (
     contract_diff,
+    dependency_diff,
+    dependency_snapshot,
     doctor,
     generator,
     hooks_manager,
@@ -28,6 +30,7 @@ from .core import (
     setup_manager,
 )
 from .core.exceptions import EnvShieldException
+from .utils import git_utils
 
 
 # --- Main App Setup ---
@@ -691,6 +694,177 @@ def _render_contract_diff_table(
         console.print(
             "\n[bold red]This change includes breaking contract changes.[/bold red]"
         )
+
+
+_DEPENDENCY_CHANGE_CATEGORY_STYLE = {
+    "missing_declaration": ("bold red", "missing declaration"),
+    "declared": ("dim", "declared"),
+}
+
+
+def _render_dependency_change_table(
+    result: "dependency_diff.DependencyChangeReport", label_a: str, label_b: str
+) -> None:
+    if not result.changes:
+        console.print(
+            f"[dim]No new source dependencies between '{label_a}' and '{label_b}'.[/dim]"
+        )
+        return
+
+    table = Table(title=f"New source dependencies: '{label_a}' -> '{label_b}'")
+    table.add_column("Variable", style="bold cyan")
+    table.add_column("File")
+    table.add_column("Line")
+    table.add_column("Access")
+    table.add_column("Contract status")
+
+    order = {"missing_declaration": 0, "declared": 1}
+    for change in sorted(
+        result.changes, key=lambda c: (order.get(c.category, 99), c.file_path, c.line)
+    ):
+        style, label = _DEPENDENCY_CHANGE_CATEGORY_STYLE.get(
+            change.category, ("", change.category)
+        )
+        table.add_row(
+            change.variable,
+            change.file_path,
+            str(change.line),
+            change.access_type,
+            f"[{style}]{label}[/{style}]",
+        )
+
+    console.print(table)
+    if result.has_missing_declarations:
+        console.print(
+            "\n[bold red]New source dependencies are missing from the contract.[/bold red]"
+        )
+
+
+@schema_app.command("check-usages")
+def schema_check_usages(
+    rev_a: Optional[str] = typer.Argument(
+        None,
+        metavar="[REV_A]",
+        help="Baseline revision. Omit both REV_A and REV_B to compare HEAD against your current working tree (uncommitted and untracked files included).",
+    ),
+    rev_b: Optional[str] = typer.Argument(
+        None,
+        metavar="[REV_B]",
+        help="Revision to check for newly introduced dependencies.",
+    ),
+    service: Optional[str] = typer.Option(
+        None,
+        "--service",
+        "-s",
+        help="Which service's schema to check against. Required in a multi-service project unless run from inside that service's own directory.",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Print machine-readable JSON instead of a table; suppresses all other output.",
+    ),
+):
+    """
+    Finds source-code environment-variable usages introduced between two
+    revisions and reports whether each is already declared in the
+    contract. With no arguments, compares HEAD against your current
+    working tree (uncommitted and untracked files included) -- catching a
+    newly introduced dependency before you commit it.
+    """
+    if (rev_a is None) != (rev_b is None):
+        message = (
+            "pass both revisions, or neither -- 'envshield schema check-usages' "
+            "alone compares HEAD against your current working tree."
+        )
+        if json_output:
+            print(
+                json.dumps(
+                    {"has_missing_declarations": False, "error": message}, indent=2
+                )
+            )
+        else:
+            console.print(f"[bold red]Error:[/bold red] {message}")
+        raise typer.Exit(code=1)
+
+    if rev_a is None and rev_b is None:
+        revision_a = dependency_snapshot.DEFAULT_REVISION_A
+        revision_b = dependency_snapshot.DEFAULT_REVISION_B
+        label_a, label_b = "HEAD", "working tree"
+    else:
+        # The mismatched-pair case already exited above -- both are
+        # guaranteed non-None here.
+        assert rev_a is not None and rev_b is not None
+        revision_a, revision_b = rev_a, rev_b
+        label_a, label_b = rev_a, rev_b
+
+        # git diff/show both treat a bad revision as "no output," which
+        # would otherwise read as "nothing changed" rather than "that
+        # revision doesn't exist" -- a genuinely empty diff (zero changed
+        # files) skips every downstream read that would otherwise surface
+        # the problem. Explicit check, rather than let that ambiguity
+        # stand (CLAUDE.md's "prefer explicit errors over silent
+        # assumptions").
+        for candidate in (revision_a, revision_b):
+            if not git_utils.revision_exists(candidate):
+                message = f"revision '{candidate}' does not resolve to a commit."
+                if json_output:
+                    print(
+                        json.dumps(
+                            {"has_missing_declarations": False, "error": message},
+                            indent=2,
+                        )
+                    )
+                else:
+                    console.print(f"[bold red]Error:[/bold red] {message}")
+                raise typer.Exit(code=1)
+
+    try:
+        target = cast(
+            str,
+            service_manager.resolve_service(service, invocation_dir=INVOCATION_DIR),
+        )
+    except EnvShieldException as e:
+        if json_output:
+            print(
+                json.dumps(
+                    {"has_missing_declarations": False, "error": str(e)}, indent=2
+                )
+            )
+        else:
+            console.print(f"[bold red]Error:[/bold red] {e}")
+        raise typer.Exit(code=1)
+
+    try:
+        usages_a, usages_b = dependency_snapshot.discover_usages_for_service(
+            target, revision_a, revision_b
+        )
+        schema_vars = set(
+            schema_snapshot.load_schema_for_diff(target, revision_b).keys()
+        )
+        new_usages = dependency_diff.find_new_usages(usages_a, usages_b)
+        result = dependency_diff.classify_against_schema(new_usages, schema_vars)
+    except EnvShieldException as e:
+        if json_output:
+            print(
+                json.dumps(
+                    {"has_missing_declarations": False, "error": str(e)}, indent=2
+                )
+            )
+        else:
+            console.print(f"[bold red]Error:[/bold red] {e}")
+        raise typer.Exit(code=1)
+
+    if json_output:
+        entry = result.to_dict()
+        entry["service"] = target
+        entry["revision_a"] = label_a
+        entry["revision_b"] = label_b
+        print(json.dumps(entry, indent=2))
+    else:
+        _render_dependency_change_table(result, label_a, label_b)
+
+    if result.has_missing_declarations:
+        raise typer.Exit(code=1)
 
 
 @schema_app.command("diff")

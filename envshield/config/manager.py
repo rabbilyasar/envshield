@@ -441,6 +441,46 @@ def get_service_dir(service_name: str) -> str:
     return os.path.dirname(schema_path) or "."
 
 
+def normalize_path_for_service_match(file_path: str) -> str:
+    """
+    Best-effort normalization to a cwd-relative path, for comparing a file
+    (or a service's own directory, from get_service_dir) against another
+    such path. Extracted from scanner.py's per-service undeclared-variable
+    router -- mechanical move, not a rewrite -- so this same normalization
+    isn't duplicated by every caller that needs to know "is this file
+    inside that service's directory."
+    """
+    if os.path.isabs(file_path):
+        try:
+            file_path = os.path.relpath(file_path, os.getcwd())
+        except ValueError:
+            pass
+    return os.path.normpath(file_path)
+
+
+def service_dir_contains(file_path: str, service_dir: str) -> bool:
+    """
+    Whether `file_path` (absolute or relative) falls inside `service_dir`
+    (as returned by get_service_dir, normalized or not -- this normalizes
+    both sides itself). A service_dir of '.' (the project root) matches
+    every path -- the single-service catch-all, since there's no separate
+    "root schema" concept.
+
+    This is a lexical, cwd-relative containment check for routing an
+    already-discovered file to the right service's schema -- not a
+    security boundary, and deliberately not realpath-based. See
+    _ensure_within_project for the security check that validates an
+    untrusted envshield.yml path instead.
+    """
+    normalized_file = normalize_path_for_service_match(file_path)
+    normalized_dir = normalize_path_for_service_match(service_dir)
+    return (
+        normalized_dir == "."
+        or normalized_file == normalized_dir
+        or normalized_file.startswith(normalized_dir + os.sep)
+    )
+
+
 def get_env_paths(service_name: str) -> Dict[str, str]:
     """
     Resolves the 'template' (tracked, e.g. '.env.example') and 'local' (real,

@@ -436,16 +436,6 @@ def _filter_files(files: List[str], exclude_patterns: List[str]) -> List[str]:
     return final_files
 
 
-def _normalize_for_dir_match(file_path: str) -> str:
-    """Best-effort normalization to a cwd-relative path, for comparing a scanned file against a service directory."""
-    if os.path.isabs(file_path):
-        try:
-            file_path = os.path.relpath(file_path, os.getcwd())
-        except ValueError:
-            pass
-    return os.path.normpath(file_path)
-
-
 def _build_undeclared_var_resolver(service_name: Optional[str]):
     """
     Returns a function mapping a scanned file path to the schema variable
@@ -484,7 +474,9 @@ def _build_undeclared_var_resolver(service_name: Optional[str]):
     service_dirs = []
     for name in sorted(config_manager.get_services().keys()):
         try:
-            service_dir = _normalize_for_dir_match(config_manager.get_service_dir(name))
+            service_dir = config_manager.normalize_path_for_service_match(
+                config_manager.get_service_dir(name)
+            )
             schema_vars = set(config_manager.load_schema(service_name=name).keys())
         except SchemaNotFoundError:
             continue
@@ -516,13 +508,8 @@ def _build_undeclared_var_resolver(service_name: Optional[str]):
     console.print("[dim]Per-service schemas loaded for compliance check.[/dim]")
 
     def _resolve(file_path: str) -> set:
-        normalized = _normalize_for_dir_match(file_path)
         for service_dir, schema_vars in service_dirs:
-            if (
-                service_dir == "."
-                or normalized == service_dir
-                or normalized.startswith(service_dir + os.sep)
-            ):
+            if config_manager.service_dir_contains(file_path, service_dir):
                 return schema_vars
         return set()
 
