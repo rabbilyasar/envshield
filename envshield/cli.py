@@ -836,7 +836,7 @@ def schema_check_usages(
 
     try:
         usages_a, usages_b = dependency_snapshot.discover_usages_for_service(
-            target, revision_a, revision_b
+            target, revision_a, revision_b, quiet=json_output
         )
         schema_vars = set(
             schema_snapshot.load_schema_for_diff(target, revision_b).keys()

@@ -242,3 +242,49 @@ class TestUnknownService:
             )
 
             assert result.exit_code == 1
+
+
+class TestSymlinkHardening:
+    """
+    End-to-end coverage for the reproduced trust-boundary fix: a symlink
+    sitting in the working tree must never cause 'schema check-usages' to
+    read (or report a finding sourced from) content outside the project,
+    and the '--json' contract (stdout is exactly one JSON document) must
+    hold even when a symlink is skipped and warned about.
+    """
+
+    OUTSIDE_VARIABLE = "SUPER_SECRET_OUTSIDE_VAR"
+
+    def _make_outside_source_file(self, tmp_path):
+        outside_dir = tmp_path.parent / f"{tmp_path.name}_outside"
+        outside_dir.mkdir(exist_ok=True)
+        target = outside_dir / "leak.py"
+        target.write_text(
+            f"import os\n{self.OUTSIDE_VARIABLE} = os.environ.get('{self.OUTSIDE_VARIABLE}')\n"
+        )
+        return target
+
+    def test_a_symlink_never_produces_a_finding_from_outside_the_project(
+        self, tmp_path
+    ):
+        with runner.isolated_filesystem(temp_dir=tmp_path) as td:
+            _single_service_repo()
+            target = self._make_outside_source_file(tmp_path)
+            os.symlink(target, os.path.join(td, "evil.py"))
+
+            result = runner.invoke(app, ["schema", "check-usages"])
+
+            assert result.exit_code == 0
+            assert self.OUTSIDE_VARIABLE not in result.stdout
+
+    def test_json_output_stays_pure_even_when_a_symlink_is_skipped(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path) as td:
+            _single_service_repo()
+            target = self._make_outside_source_file(tmp_path)
+            os.symlink(target, os.path.join(td, "evil.py"))
+
+            result = runner.invoke(app, ["schema", "check-usages", "--json"])
+
+            payload = json.loads(result.stdout)
+            assert payload["has_missing_declarations"] is False
+            assert self.OUTSIDE_VARIABLE not in result.stdout

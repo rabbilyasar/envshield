@@ -1,4 +1,5 @@
 # envshield/tests/core/test_dependency_snapshot.py
+import os
 import subprocess
 
 import pytest
@@ -228,5 +229,263 @@ class TestTwoExplicitRevisions:
             "api", "HEAD~1", "HEAD"
         )
 
+        assert usages_a == []
+        assert {u.variable for u in usages_b} == {"FOO"}
+
+
+class TestSymlinkNeverFollowed:
+    """
+    Regression coverage for a reproduced trust-boundary violation: a
+    symlink (untracked, or a tracked one whose target changed) inside the
+    working tree must never cause dependency_snapshot to read -- and then
+    report a "dependency" sourced from -- content outside the project.
+    This is the same vulnerability class as P0-2 (scanner.py's
+    _collect_files_to_scan/_open_for_scan), reproduced here independently
+    against dependency_snapshot's own disk-read path before being fixed.
+    """
+
+    OUTSIDE_VARIABLE = "SUPER_SECRET_OUTSIDE_VAR"
+
+    def _make_outside_source_file(self, tmp_path, name="leak.py"):
+        outside_dir = tmp_path.parent / f"{tmp_path.name}_outside"
+        outside_dir.mkdir(exist_ok=True)
+        target = outside_dir / name
+        target.write_text(
+            f"import os\n{self.OUTSIDE_VARIABLE} = os.environ.get('{self.OUTSIDE_VARIABLE}')\n"
+        )
+        return target
+
+    def test_untracked_symlink_contributes_no_usages(self, tmp_path, monkeypatch):
+        _single_service_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        target = self._make_outside_source_file(tmp_path)
+        os.symlink(target, tmp_path / "evil.py")
+
+        usages_a, usages_b = dependency_snapshot.discover_usages_for_service("api")
+
+        assert usages_a == []
+        assert usages_b == []
+
+    def test_untracked_symlink_is_excluded_from_the_changed_file_list(
+        self, tmp_path, monkeypatch
+    ):
+        """Unit-level proof of the collection-time layer specifically,
+        independent of the disk-read layer -- the symlink must not even
+        reach _read_source in the first place."""
+        _single_service_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        target = self._make_outside_source_file(tmp_path)
+        symlink_path = tmp_path / "evil.py"
+        os.symlink(target, symlink_path)
+
+        files = dependency_snapshot._changed_source_files("HEAD", None, quiet=True)
+
+        assert str(symlink_path) not in files
+
+    def test_read_source_refuses_a_symlink_independent_of_collection(
+        self, tmp_path, monkeypatch
+    ):
+        """
+        Models the moment after collection where the filesystem object at
+        this path is (or has become) a symlink -- calling the read-time
+        function directly, with no collection step involved at all, proves
+        it refuses the read on its own rather than trusting an earlier
+        check that may be stale by the time this runs (the same TOCTOU
+        argument scanner.py's own _open_for_scan docstring makes).
+        """
+        target = self._make_outside_source_file(tmp_path)
+        symlink_path = tmp_path / "evil.py"
+        os.symlink(target, symlink_path)
+
+        content = dependency_snapshot._read_source(str(symlink_path), None)
+
+        assert content is None
+
+    def test_open_disk_source_raises_on_a_symlink(self, tmp_path):
+        """Unit-level proof of the mechanism itself, at the smallest
+        granularity: the open call raises, it doesn't silently succeed."""
+        target = self._make_outside_source_file(tmp_path)
+        symlink_path = tmp_path / "evil.py"
+        os.symlink(target, symlink_path)
+
+        assert dependency_snapshot._CAN_USE_O_NOFOLLOW, (
+            "this test environment is expected to support O_NOFOLLOW; "
+            "see TestONofollowFallback for the platform without it"
+        )
+        with pytest.raises(OSError):
+            dependency_snapshot._open_disk_source(str(symlink_path))
+
+    def test_open_disk_source_reads_a_regular_file_normally(self, tmp_path):
+        real_file = tmp_path / "real.py"
+        real_file.write_text("import os\nx = os.environ.get('FOO')\n")
+
+        with dependency_snapshot._open_disk_source(str(real_file)) as f:
+            content = f.read()
+
+        assert content == "import os\nx = os.environ.get('FOO')\n"
+
+    def test_a_tracked_symlink_whose_target_changed_is_also_skipped(
+        self, tmp_path, monkeypatch
+    ):
+        """
+        Not just untracked files: a symlink already committed (its target
+        is what's tracked, per Git's own symlink-as-blob model) still
+        shows up as a *changed* file if its target path string changes --
+        and the working-tree side must still refuse to follow it, exactly
+        like a brand-new untracked one.
+        """
+        _single_service_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        inside_target = tmp_path / "inside.py"
+        inside_target.write_text("import os\nx = os.environ.get('INSIDE_FOO')\n")
+        os.symlink(inside_target, tmp_path / "link.py")
+        _commit(tmp_path, "commit a symlink pointing inside the repo")
+
+        outside_target = self._make_outside_source_file(tmp_path)
+        os.remove(tmp_path / "link.py")
+        os.symlink(outside_target, tmp_path / "link.py")
+
+        usages_a, usages_b = dependency_snapshot.discover_usages_for_service("api")
+
+        assert usages_b == []
+
+    def test_symlink_skip_is_silent_when_quiet(self, tmp_path, monkeypatch, capsys):
+        _single_service_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        target = self._make_outside_source_file(tmp_path)
+        os.symlink(target, tmp_path / "evil.py")
+
+        dependency_snapshot.discover_usages_for_service("api", quiet=True)
+
+        assert capsys.readouterr().out == ""
+
+    def test_symlink_skip_warns_by_default(self, tmp_path, monkeypatch, capsys):
+        _single_service_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        target = self._make_outside_source_file(tmp_path)
+        symlink_path = tmp_path / "evil.py"
+        os.symlink(target, symlink_path)
+
+        dependency_snapshot.discover_usages_for_service("api")
+
+        out = capsys.readouterr().out
+        assert "Skipping 1 symlink" in out
+        assert str(symlink_path) in out
+
+    def test_explicit_two_revision_form_does_not_check_for_symlinks(
+        self, tmp_path, monkeypatch
+    ):
+        """
+        The collection-time filter is deliberately skipped for the
+        explicit two-revision form: neither side is a disk read there
+        (both go through git show), so a symlink's live disk state is
+        irrelevant -- checking for it would just be dead code, not an
+        additional protection.
+        """
+        _single_service_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        target = self._make_outside_source_file(tmp_path)
+        os.symlink(target, tmp_path / "evil.py")
+
+        files = dependency_snapshot._changed_source_files("HEAD", "HEAD", quiet=True)
+
+        # 'evil.py' is untracked, so it never appears in a plain git diff
+        # between two concrete revisions in the first place -- this
+        # asserts the *reason* is "not a changed file," not "filtered as
+        # a symlink," by confirming quiet=True produced no skip decision
+        # either way (nothing to skip).
+        assert files == []
+
+
+class TestONofollowFallback:
+    """
+    Coverage for platforms without os.O_NOFOLLOW (Windows). Patches the
+    module-level capability flag rather than mocking any stdlib function,
+    mirroring scanner.py's own TestONofollowFallback exactly.
+    """
+
+    def test_fallback_still_reads_regular_files_normally(self, tmp_path, mocker):
+        mocker.patch.object(dependency_snapshot, "_CAN_USE_O_NOFOLLOW", False)
+        real_file = tmp_path / "real.py"
+        real_file.write_text("import os\n")
+
+        with dependency_snapshot._open_disk_source(str(real_file)) as f:
+            content = f.read()
+
+        assert content == "import os\n"
+
+    def test_fallback_has_the_documented_residual_symlink_gap(self, tmp_path, mocker):
+        """
+        Proves the accepted limitation explicitly: without O_NOFOLLOW, a
+        symlink IS followed. A test failure here would mean the fallback
+        became *more* dangerous than documented, not less.
+        """
+        mocker.patch.object(dependency_snapshot, "_CAN_USE_O_NOFOLLOW", False)
+        outside = tmp_path.parent / f"{tmp_path.name}_outside_fallback"
+        outside.mkdir(exist_ok=True)
+        target = outside / "target.py"
+        target.write_text("import os\nx = os.environ.get('FOO')\n")
+        symlink_path = tmp_path / "linked.py"
+        os.symlink(target, symlink_path)
+
+        with dependency_snapshot._open_disk_source(str(symlink_path)) as f:
+            content = f.read()
+
+        assert content == "import os\nx = os.environ.get('FOO')\n"
+
+
+class TestServiceDirIsNotRevisionAware:
+    """
+    Locks in the accepted Milestone-1 limitation documented on
+    discover_usages_for_service: service-directory resolution always
+    reads the *live* envshield.yml, never a revision-specific one. This
+    test doesn't assert correct behavior -- it asserts the CURRENT,
+    documented, accepted-for-now behavior, so a future change can't
+    silently regress it further without this test forcing a conscious
+    decision. If this test ever needs updating, that's a deliberate design
+    change, not a bug fix landing unnoticed.
+    """
+
+    def test_a_file_that_moved_with_its_service_directory_is_wrongly_reported_as_new(
+        self, tmp_path, monkeypatch
+    ):
+        _init_repo(tmp_path)
+        _write(
+            tmp_path,
+            "envshield.yml",
+            "services:\n  api:\n    schema: old_location/env.schema.toml\n",
+        )
+        _write(tmp_path, "old_location/env.schema.toml", "")
+        _write(
+            tmp_path,
+            "old_location/app.py",
+            "import os\nx = os.environ.get('FOO')\n",
+        )
+        _commit(tmp_path, "v1: FOO lives under old_location")
+
+        (tmp_path / "old_location" / "app.py").unlink()
+        (tmp_path / "old_location" / "env.schema.toml").unlink()
+        _write(
+            tmp_path,
+            "new_location/app.py",
+            "import os\nx = os.environ.get('FOO')\n",
+        )
+        _write(tmp_path, "new_location/env.schema.toml", "")
+        _write(
+            tmp_path,
+            "envshield.yml",
+            "services:\n  api:\n    schema: new_location/env.schema.toml\n",
+        )
+        _commit(tmp_path, "v2: api's directory moves to new_location")
+        monkeypatch.chdir(tmp_path)
+
+        usages_a, usages_b = dependency_snapshot.discover_usages_for_service(
+            "api", "HEAD~1", "HEAD"
+        )
+
+        # The documented limitation: FOO already existed before the move
+        # (under old_location, which the *live* service_dir no longer
+        # matches), so it's invisible on the 'a' side and looks new on
+        # the 'b' side -- even though nothing new was actually introduced.
         assert usages_a == []
         assert {u.variable for u in usages_b} == {"FOO"}
