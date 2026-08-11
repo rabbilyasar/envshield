@@ -178,3 +178,33 @@ def get_head_file_content(file_path: str) -> str | None:
     except (subprocess.CalledProcessError, FileNotFoundError):
         # File doesn't exist in HEAD (brand new file) or git error
         return None
+
+
+def get_file_content_at_revision(file_path: str, revision: str) -> str | None:
+    """
+    Reads a file's content as it existed at an arbitrary Git revision (a
+    branch, tag, SHA, or any other ref/expression 'git show' itself
+    accepts) -- the same primitive as get_head_file_content and
+    get_staged_file_content, generalized to a caller-supplied ref instead
+    of a hardcoded 'HEAD' or the staged index.
+
+    Returns:
+        The file's content at that revision, or None if it doesn't exist
+        there, the revision itself doesn't resolve, or the blob is
+        binary/undecodable.
+    """
+    git_root = get_git_root()
+    if not git_root:
+        return None
+
+    relative_path = os.path.relpath(file_path, git_root)
+    try:
+        result = subprocess.run(
+            ["git", "show", f"{revision}:{relative_path}"],
+            cwd=git_root,
+            capture_output=True,
+            check=True,
+        )
+        return result.stdout.decode("utf-8", errors="ignore")
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None

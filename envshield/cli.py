@@ -15,12 +15,14 @@ from envshield.core import importer
 
 from .config import manager as config_manager
 from .core import (
+    contract_diff,
     doctor,
     generator,
     hooks_manager,
     inspector,
     scanner,
     schema_manager,
+    schema_snapshot,
     service_discovery,
     service_manager,
     setup_manager,
@@ -640,6 +642,161 @@ def schema_sync(
             )
         else:
             console.print("\n[dim]Nothing to do -- already in sync.[/dim]")
+
+
+_CONTRACT_DIFF_CATEGORY_STYLE = {
+    "breaking": ("bold red", "BREAKING"),
+    "security": ("bold yellow", "SECURITY"),
+    "requires_review": ("yellow", "REVIEW"),
+    "default_changed": ("cyan", "default changed"),
+    "informational": ("dim", "info"),
+    "non_breaking": ("dim", "non-breaking"),
+}
+
+
+def _render_contract_diff_table(
+    result: "contract_diff.ContractDiff", label_a: str, label_b: str
+) -> None:
+    if not result.changes:
+        console.print(
+            f"[dim]No contract changes between '{label_a}' and '{label_b}'.[/dim]"
+        )
+        return
+
+    table = Table(title=f"Contract diff: '{label_a}' -> '{label_b}'")
+    table.add_column("Variable", style="bold cyan")
+    table.add_column("Category")
+    table.add_column("Description")
+
+    # Breaking first, then security, then everything else -- the changes
+    # most likely to need action shouldn't be buried below cosmetic ones.
+    order = {
+        "breaking": 0,
+        "security": 1,
+        "requires_review": 2,
+        "default_changed": 3,
+        "informational": 4,
+        "non_breaking": 5,
+    }
+    for change in sorted(result.changes, key=lambda c: order.get(c.category, 99)):
+        style, label = _CONTRACT_DIFF_CATEGORY_STYLE.get(
+            change.category, ("", change.category)
+        )
+        table.add_row(
+            change.variable, f"[{style}]{label}[/{style}]", change.description
+        )
+
+    console.print(table)
+    if result.has_breaking_changes:
+        console.print(
+            "\n[bold red]This change includes breaking contract changes.[/bold red]"
+        )
+
+
+@schema_app.command("diff")
+def schema_diff(
+    rev_a: Optional[str] = typer.Argument(
+        None,
+        metavar="[REV_A]",
+        help="First revision. Omit both REV_A and REV_B to compare the working tree against HEAD.",
+    ),
+    rev_b: Optional[str] = typer.Argument(
+        None, metavar="[REV_B]", help="Second revision."
+    ),
+    service: Optional[str] = typer.Option(
+        None,
+        "--service",
+        "-s",
+        help="If set, diff only this service's schema (for multi-service projects).",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Print machine-readable JSON instead of a table; suppresses all other output.",
+    ),
+):
+    """
+    Compares a service's schema contract between two Git revisions --
+    added/removed/changed variables, classified as breaking, security-
+    sensitive, or informational. With no arguments, compares the current
+    working tree against HEAD (uncommitted changes, staged or not).
+    """
+    if (rev_a is None) != (rev_b is None):
+        message = (
+            "pass both revisions, or neither -- 'envshield schema diff' alone "
+            "compares the working tree against HEAD."
+        )
+        if json_output:
+            print(
+                json.dumps({"has_breaking_changes": False, "error": message}, indent=2)
+            )
+        else:
+            console.print(f"[bold red]Error:[/bold red] {message}")
+        raise typer.Exit(code=1)
+
+    if rev_a is None and rev_b is None:
+        left_revision, right_revision = None, "HEAD"
+        left_label, right_label = "working tree", "HEAD"
+    else:
+        # The mismatched-pair case already exited above -- both are
+        # guaranteed non-None here.
+        assert rev_a is not None and rev_b is not None
+        left_revision, right_revision = rev_a, rev_b
+        left_label, right_label = rev_a, rev_b
+
+    try:
+        targets = service_manager.resolve_targets(
+            service, invocation_dir=INVOCATION_DIR
+        )
+    except EnvShieldException as e:
+        if json_output:
+            print(
+                json.dumps({"has_breaking_changes": False, "error": str(e)}, indent=2)
+            )
+        else:
+            console.print(f"[bold red]Error:[/bold red] {e}")
+        raise typer.Exit(code=1)
+
+    had_error = False
+    any_breaking = False
+    results = []
+
+    for target in targets:
+        if not json_output:
+            _print_service_header(targets, target)
+        try:
+            schema_left = schema_snapshot.load_schema_for_diff(target, left_revision)
+            schema_right = schema_snapshot.load_schema_for_diff(target, right_revision)
+            result = contract_diff.diff_schemas(schema_left, schema_right)
+        except EnvShieldException as e:
+            had_error = True
+            if json_output:
+                results.append({"service": target, "error": str(e)})
+            else:
+                console.print(f"[bold red]Error:[/bold red] {e}")
+            continue
+
+        if result.has_breaking_changes:
+            any_breaking = True
+
+        if json_output:
+            entry = result.to_dict()
+            entry["service"] = target
+            entry["revision_a"] = left_label
+            entry["revision_b"] = right_label
+            results.append(entry)
+        else:
+            _render_contract_diff_table(result, left_label, right_label)
+
+    if json_output:
+        print(
+            json.dumps(
+                {"has_breaking_changes": any_breaking, "results": results}, indent=2
+            )
+        )
+
+    if had_error or any_breaking:
+        raise typer.Exit(code=1)
 
 
 _GENERATE_LANG_ALIASES = {

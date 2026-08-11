@@ -73,3 +73,75 @@ def test_install_pre_commit_hook_writes_into_configured_hooks_path(
 
     assert os.path.exists(tmp_path / ".husky" / "pre-commit")
     assert not os.path.exists(tmp_path / ".git" / "hooks" / "pre-commit")
+
+
+def _commit(path, message):
+    subprocess.run(["git", "add", "-A"], cwd=path, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", message], cwd=path, check=True)
+
+
+class TestGetFileContentAtRevision:
+    """Regression coverage for Phase 2A: generalizes get_head_file_content's
+    'git show <ref>:<path>' pattern to an arbitrary caller-supplied revision."""
+
+    def test_reads_content_at_an_older_revision(self, tmp_path, monkeypatch):
+        _init_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "file.txt").write_text("v1\n")
+        _commit(tmp_path, "v1")
+        (tmp_path / "file.txt").write_text("v2\n")
+        _commit(tmp_path, "v2")
+
+        content = git_utils.get_file_content_at_revision(
+            str(tmp_path / "file.txt"), "HEAD~1"
+        )
+
+        assert content == "v1\n"
+
+    def test_reads_content_at_head(self, tmp_path, monkeypatch):
+        _init_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "file.txt").write_text("current\n")
+        _commit(tmp_path, "current")
+
+        content = git_utils.get_file_content_at_revision(
+            str(tmp_path / "file.txt"), "HEAD"
+        )
+
+        assert content == "current\n"
+
+    def test_returns_none_for_a_path_that_does_not_exist_at_that_revision(
+        self, tmp_path, monkeypatch
+    ):
+        _init_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "a.txt").write_text("a\n")
+        _commit(tmp_path, "only a")
+
+        content = git_utils.get_file_content_at_revision(
+            str(tmp_path / "b.txt"), "HEAD"
+        )
+
+        assert content is None
+
+    def test_returns_none_for_an_unresolvable_revision(self, tmp_path, monkeypatch):
+        _init_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "a.txt").write_text("a\n")
+        _commit(tmp_path, "only a")
+
+        content = git_utils.get_file_content_at_revision(
+            str(tmp_path / "a.txt"), "not-a-real-revision"
+        )
+
+        assert content is None
+
+    def test_returns_none_outside_a_git_repository(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "a.txt").write_text("a\n")
+
+        content = git_utils.get_file_content_at_revision(
+            str(tmp_path / "a.txt"), "HEAD"
+        )
+
+        assert content is None

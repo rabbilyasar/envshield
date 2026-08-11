@@ -220,3 +220,86 @@ class TestIsSafeVariableName:
     )
     def test_rejects_anything_that_is_not_a_bare_identifier(self, name):
         assert schema_types.is_safe_variable_name(name) is False
+
+
+class TestNormalizeDefaultValue:
+    """
+    Used by Contract Diff to decide whether a defaultValue genuinely
+    changed, rather than just how TOML happened to represent an unchanged
+    one (a native int vs. a string of the same digits, a bool's casing).
+    """
+
+    @pytest.mark.parametrize(
+        "value_a,value_b",
+        [
+            (8080, "8080"),
+            ("8080", 8080),
+            (8080, 8080),
+            ("008080", 8080),
+        ],
+    )
+    def test_int_and_port_equivalent_representations_normalize_equal(
+        self, value_a, value_b
+    ):
+        assert schema_types.normalize_default_value(
+            value_a, "int"
+        ) == schema_types.normalize_default_value(value_b, "int")
+        assert schema_types.normalize_default_value(
+            value_a, "port"
+        ) == schema_types.normalize_default_value(value_b, "port")
+
+    def test_int_genuinely_different_values_normalize_unequal(self):
+        assert schema_types.normalize_default_value(
+            "8080", "int"
+        ) != schema_types.normalize_default_value("9090", "int")
+
+    @pytest.mark.parametrize(
+        "value_a,value_b",
+        [
+            (1.0, "1"),
+            ("1.50", 1.5),
+            ("1.0", "1.00"),
+        ],
+    )
+    def test_float_equivalent_representations_normalize_equal(self, value_a, value_b):
+        assert schema_types.normalize_default_value(
+            value_a, "float"
+        ) == schema_types.normalize_default_value(value_b, "float")
+
+    def test_float_genuinely_different_values_normalize_unequal(self):
+        assert schema_types.normalize_default_value(
+            "1.5", "float"
+        ) != schema_types.normalize_default_value("2.5", "float")
+
+    @pytest.mark.parametrize(
+        "value_a,value_b",
+        [
+            ("true", "TRUE"),
+            ("True", True),
+            (True, "true"),
+        ],
+    )
+    def test_bool_equivalent_representations_normalize_equal(self, value_a, value_b):
+        assert schema_types.normalize_default_value(
+            value_a, "bool"
+        ) == schema_types.normalize_default_value(value_b, "bool")
+
+    def test_bool_genuinely_different_values_normalize_unequal(self):
+        assert schema_types.normalize_default_value(
+            "true", "bool"
+        ) != schema_types.normalize_default_value("false", "bool")
+
+    def test_string_type_values_are_compared_as_is(self):
+        assert schema_types.normalize_default_value(
+            "info", "string"
+        ) == schema_types.normalize_default_value("info", "string")
+        assert schema_types.normalize_default_value(
+            "info", "string"
+        ) != schema_types.normalize_default_value("warn", "string")
+
+    def test_a_non_numeric_value_for_an_int_field_is_compared_as_is_not_crashed(self):
+        """Malformed schema data (a non-numeric default on an int-typed
+        field) must not raise -- just fail to normalize specially and
+        compare as a plain string."""
+        result = schema_types.normalize_default_value("not-a-number", "int")
+        assert result == "not-a-number"

@@ -59,6 +59,31 @@ def enum_values(field_schema: dict[str, Any]) -> list[str]:
     return [str(v) for v in field_schema.get("enum", [])]
 
 
+def normalize_default_value(default_value: Any, field_type: str) -> str:
+    """
+    Canonicalizes a defaultValue for semantic-equality comparison -- e.g.
+    TOML's native integer 8080 and the string "8080" represent the exact
+    same default and must compare equal, the same way validate_value's own
+    per-type shape checks already treat both as the same shape (an int-
+    typed value is just "matches -?\\d+", regardless of which Python type
+    parsed it out of TOML). This is a comparison concern, not a literal-
+    rendering one -- unlike generator.py's per-language literal renderers,
+    it never needs to produce valid source syntax, only a form two
+    different representations of the same default converge to.
+    """
+    value = str(default_value)
+    if field_type in ("int", "port") and re.fullmatch(r"-?\d+", value):
+        return str(int(value))
+    if field_type == "float":
+        try:
+            return repr(float(value))
+        except ValueError:
+            return value
+    if field_type == "bool":
+        return str(value.lower() == "true")
+    return value
+
+
 def validate_value(value: str, field_schema: dict[str, Any]) -> str | None:
     """
     Checks `value` against a field's declared type, enum, and/or pattern
