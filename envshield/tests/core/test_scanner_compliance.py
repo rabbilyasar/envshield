@@ -198,7 +198,11 @@ def test_scan_staged_does_not_flag_secret_removed_before_staging(tmp_path):
         os.system("git add config.py")
 
         with open("config.py", "w") as f:
-            f.write("STRIPE_KEY = os.environ['STRIPE_KEY']\n")
+            # Not an os.environ/os.getenv read on purpose -- Phase 2B's AST
+            # discovery would (correctly) flag that as a genuinely
+            # undeclared variable in this schema-less test, which isn't
+            # what this test is about.
+            f.write("# secret removed\n")
         os.system("git add config.py")
 
         result = runner.invoke(app, ["scan", "--staged"])
@@ -812,3 +816,75 @@ class TestSecretValueNeverLeaksToOutput:
                 _assert_well_formed_finding(finding)
             assert "AKIAABCDEFGHIJKLMNOP" not in result.stdout
             assert "sk_live_123456789abcdefghijklmnopqrstuv" not in result.stdout
+
+
+class TestPythonAstDiscoveryViaScanner:
+    """
+    Phase 2B Milestone 1: AST-based discovery closes two confirmed regex
+    misses (bracket access, multi-line calls) and preserves every existing
+    behavior (finding shape, diff-aware filtering, resilience to a
+    malformed file) end to end through the actual `_scan_single_file`
+    entry point -- not just at the discovery.py unit level.
+    """
+
+    def test_bracket_access_is_now_caught(self):
+        secrets, undeclared = scanner._scan_single_file(
+            "app.py", set(), content="x = os.environ['UNDECLARED']\n"
+        )
+        assert secrets == []
+        assert len(undeclared) == 1
+        assert undeclared[0]["variable_name"] == "UNDECLARED"
+        assert undeclared[0]["file_path"] == "app.py"
+        assert undeclared[0]["line_num"] == 1
+
+    def test_multiline_call_is_now_caught(self):
+        content = "x = os.environ.get(\n    'UNDECLARED',\n    'fallback',\n)\n"
+
+        _, undeclared = scanner._scan_single_file("app.py", set(), content=content)
+
+        assert len(undeclared) == 1
+        assert undeclared[0]["variable_name"] == "UNDECLARED"
+        assert undeclared[0]["line_num"] == 1
+
+    def test_declared_variable_via_bracket_access_is_not_flagged(self):
+        _, undeclared = scanner._scan_single_file(
+            "app.py", {"DECLARED"}, content="x = os.environ['DECLARED']\n"
+        )
+        assert undeclared == []
+
+    def test_new_lines_only_filters_ast_discovered_usages_too(self):
+        content = "a = os.environ['OLD']\nb = os.environ['NEW']\n"
+
+        _, undeclared = scanner._scan_single_file(
+            "app.py", set(), content=content, new_lines_only={2}
+        )
+
+        assert len(undeclared) == 1
+        assert undeclared[0]["variable_name"] == "NEW"
+
+    def test_a_syntax_error_does_not_abort_the_scan_or_hide_secrets(self):
+        """
+        A malformed .py file must not crash the scan or suppress secret
+        detection in that same file -- discovery just contributes nothing
+        for it.
+        """
+        content = "def f(:\nAWS_ACCESS_KEY_ID=AKIAABCDEFGHIJKLMNOP\n"
+
+        secrets, undeclared = scanner._scan_single_file(
+            "broken.py", set(), content=content
+        )
+
+        assert undeclared == []
+        assert len(secrets) == 1
+
+    def test_a_non_py_file_with_python_looking_text_is_no_longer_flagged(self):
+        """
+        Intentional narrowing (approved as part of the Phase 2B Milestone 1
+        plan): AST discovery is gated to .py files, and the old regex that
+        used to catch this in *any* file was removed globally, not just
+        replaced for .py files.
+        """
+        _, undeclared = scanner._scan_single_file(
+            "notes.md", set(), content="Example: `os.environ.get('X')`\n"
+        )
+        assert undeclared == []

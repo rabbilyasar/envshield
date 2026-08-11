@@ -16,6 +16,7 @@ from rich.table import Table
 from ..config import manager as config_manager
 from ..core.exceptions import EnvShieldException, SchemaNotFoundError
 from ..utils import git_utils
+from . import discovery
 
 console = Console()
 
@@ -110,11 +111,13 @@ SECRET_PATTERNS: List[Dict[str, str]] = [
     },
 ]
 USAGE_PATTERNS: List[Dict[str, str]] = [
-    {
-        "name": "Python os.environ.get",
-        "pattern": r"os\.environ\.get\s*\(\s*['\"](\w+)['\"]",
-    },
-    {"name": "Python os.getenv", "pattern": r"os\.getenv\s*\(\s*['\"](\w+)['\"]"},
+    # Python's os.environ.get/os.getenv used to be matched here by regex --
+    # replaced by discovery.discover_python_usages (AST-based, Phase 2B
+    # Milestone 1), which is gated to .py files only and additionally
+    # catches os.environ['X'] and multi-line calls the regex couldn't.
+    # Removing these two entries also means a *non*-.py file containing
+    # literal 'os.environ.get(...)' text (e.g. a code sample in a .md) is
+    # no longer flagged -- an intentional narrowing, not preserved.
     {"name": "Node.js process.env", "pattern": r"process\.env\.(\w+)"},
 ]
 
@@ -310,6 +313,25 @@ def _scan_single_file(
                                 "variable_name": var_name,
                             }
                         )
+
+        # Python's os.environ.get/os.getenv/os.environ[] usages are
+        # discovered via AST (Phase 2B Milestone 1) rather than the
+        # per-line regex loop above -- gated to .py files, and run once
+        # over the whole file rather than line by line, since a call can
+        # span multiple lines. Skipped entirely when new_lines_only is an
+        # explicitly empty set: nothing could survive that filter anyway.
+        if file_path.endswith(".py") and new_lines_only != set():
+            for usage in discovery.discover_python_usages("".join(lines), file_path):
+                if new_lines_only is not None and usage.line not in new_lines_only:
+                    continue
+                if usage.variable not in schema_vars:
+                    undeclared_findings.append(
+                        {
+                            "file_path": file_path,
+                            "line_num": usage.line,
+                            "variable_name": usage.variable,
+                        }
+                    )
 
     except (IOError, OSError):
         return [], []
