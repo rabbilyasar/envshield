@@ -357,6 +357,43 @@ class TestMultiServiceFileOwnership:
                 {"service": "web", "has_missing_declarations": False, "changes": []},
             ]
 
+    def test_a_broken_service_does_not_silence_a_healthy_ones_finding(self, tmp_path):
+        """
+        Locks down the per-service error isolation Milestone 2 introduced
+        (mirroring schema_diff's own had_error policy): one service's
+        schema failing to load must not hide another service's real
+        finding, must not be silently converted into a clean result, and
+        must still force a non-zero exit even though the other service is
+        otherwise fine.
+        """
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._multi_service_repo()
+            _write("services/web/env.schema.toml", "this is not valid toml [[[")
+            _write(
+                "services/api/app.py",
+                "import os\nx = os.environ.get('API_ONLY')\n",
+            )
+
+            result = runner.invoke(app, ["schema", "check-usages", "--json"])
+
+            assert result.exit_code == 1
+            payload = json.loads(result.stdout)
+            assert payload["has_missing_declarations"] is True
+
+            api_result = next(r for r in payload["results"] if r["service"] == "api")
+            web_result = next(r for r in payload["results"] if r["service"] == "web")
+
+            # The healthy service is still checked, finding intact.
+            assert api_result["has_missing_declarations"] is True
+            assert {c["variable"] for c in api_result["changes"]} == {"API_ONLY"}
+
+            # The broken service is represented explicitly, not swallowed
+            # into a clean result and not merged into api's entry.
+            assert "error" in web_result
+            assert web_result["error"]
+            assert "has_missing_declarations" not in web_result
+            assert "changes" not in web_result
+
     def test_single_service_project_shows_no_per_service_header(self, tmp_path):
         """
         Single-service projects must behave exactly as before Milestone 2:
