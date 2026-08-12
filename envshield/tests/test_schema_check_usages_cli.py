@@ -140,6 +140,8 @@ class TestJsonOutput:
             )
 
             payload = json.loads(result.stdout)
+            # A single-service project resolves to exactly one target, so
+            # this stays Milestone 1's exact flat shape -- no 'results' key.
             assert payload["has_missing_declarations"] is True
             assert payload["service"] == "api"
             assert payload["revision_a"] == "HEAD~1"
@@ -214,22 +216,163 @@ class TestMultiServiceFileOwnership:
             assert result.exit_code == 1
             assert "API_ONLY" in result.stdout
 
-    def test_no_service_and_no_tty_fails_clearly_instead_of_scanning_everything(
+    def test_explicit_service_in_multi_service_project_keeps_flat_json_shape(
         self, tmp_path
     ):
         """
-        Locked decision: never silently loop over every service. Without
-        --service, in a non-interactive run (no TTY, e.g. CI), this must
-        fail with a clear error rather than pick a service (or, worse,
-        check every service's files against one arbitrary schema).
+        The JSON shape is decided by how many targets actually resolve
+        (len(targets) == 1), not by project topology -- --service pins a
+        multi-service project down to one target, so it must keep
+        Milestone 1's flat contract exactly like a single-service project
+        does, never the multi-service 'results' wrapper.
         """
         with runner.isolated_filesystem(temp_dir=tmp_path):
             self._multi_service_repo()
+            _write(
+                "services/api/app.py",
+                "import os\nx = os.environ.get('API_ONLY')\n",
+            )
+
+            result = runner.invoke(
+                app, ["schema", "check-usages", "--service", "api", "--json"]
+            )
+
+            payload = json.loads(result.stdout)
+            assert "results" not in payload
+            assert payload["service"] == "api"
+            assert payload["has_missing_declarations"] is True
+            assert {c["variable"] for c in payload["changes"]} == {"API_ONLY"}
+
+    def test_single_target_failure_keeps_the_exact_milestone_one_error_shape(
+        self, tmp_path
+    ):
+        """
+        A single resolved target that fails during discovery/schema
+        loading (here: a malformed schema TOML) must reproduce Milestone
+        1's bare two-key error contract exactly -- no 'service' key, no
+        'results' wrapper -- distinct from a multi-service error entry,
+        which is keyed by service inside 'results'.
+        """
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            _init_repo()
+            _write("envshield.yml", "services:\n  api:\n    schema: env.schema.toml\n")
+            _write("env.schema.toml", "this is not valid toml [[[")
+            _commit("init")
+
+            result = runner.invoke(app, ["schema", "check-usages", "--json"])
+
+            assert result.exit_code == 1
+            payload = json.loads(result.stdout)
+            assert payload == {
+                "has_missing_declarations": False,
+                "error": payload["error"],
+            }
+            assert payload["error"]
+
+    def test_no_service_in_a_multi_service_project_now_checks_every_service(
+        self, tmp_path
+    ):
+        """
+        Milestone 2 reversal of the Milestone 1 lock (which this test used
+        to assert the opposite of): 'schema diff' already loops over every
+        configured service via service_manager.resolve_targets when
+        --service is omitted. The Milestone 1 restriction existed because
+        file-ownership filtering (service_dir_contains) didn't exist yet;
+        it does now, so looping no longer risks checking one service's
+        files against another's schema -- see
+        test_a_missing_declaration_in_one_service_is_not_attributed_to_another
+        for direct proof of that. This is a deliberate behavior change, not
+        a bug fix: omitting --service in a multi-service project used to be
+        a hard error, and now runs every service instead.
+        """
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._multi_service_repo()
+            _write(
+                "services/api/app.py",
+                "import os\nx = os.environ.get('API_ONLY')\n",
+            )
 
             result = runner.invoke(app, ["schema", "check-usages"])
 
             assert result.exit_code == 1
-            assert "--service" in result.stdout
+            assert "API_ONLY" in result.stdout
+            # Both services rendered under their own header -- proof this
+            # looped over every service rather than picking just one.
+            assert "── api ──" in result.stdout
+            assert "── web ──" in result.stdout
+
+    def test_a_missing_declaration_in_one_service_is_not_attributed_to_another(
+        self, tmp_path
+    ):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._multi_service_repo()
+            _write(
+                "services/api/app.py",
+                "import os\nx = os.environ.get('API_ONLY')\n",
+            )
+            _write(
+                "services/web/env.schema.toml",
+                '[WEB_DECLARED]\ndescription = "x"\n',
+            )
+            _write(
+                "services/web/app.py",
+                "import os\nx = os.environ.get('WEB_DECLARED')\n",
+            )
+
+            result = runner.invoke(app, ["schema", "check-usages", "--json"])
+
+            payload = json.loads(result.stdout)
+            api_result = next(r for r in payload["results"] if r["service"] == "api")
+            web_result = next(r for r in payload["results"] if r["service"] == "web")
+
+            assert {c["variable"] for c in api_result["changes"]} == {"API_ONLY"}
+            assert {c["variable"] for c in web_result["changes"]} == {"WEB_DECLARED"}
+            assert api_result["has_missing_declarations"] is True
+            assert web_result["has_missing_declarations"] is False
+
+    def test_multi_service_human_readable_output_labels_each_service(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._multi_service_repo()
+            _write(
+                "services/api/app.py",
+                "import os\nx = os.environ.get('API_ONLY')\n",
+            )
+
+            result = runner.invoke(app, ["schema", "check-usages"])
+
+            assert "── api ──" in result.stdout
+            assert "── web ──" in result.stdout
+
+    def test_has_missing_declarations_false_when_no_service_has_one(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._multi_service_repo()
+
+            result = runner.invoke(app, ["schema", "check-usages", "--json"])
+
+            payload = json.loads(result.stdout)
+            assert result.exit_code == 0
+            assert payload["has_missing_declarations"] is False
+            assert payload["results"] == [
+                {"service": "api", "has_missing_declarations": False, "changes": []},
+                {"service": "web", "has_missing_declarations": False, "changes": []},
+            ]
+
+    def test_single_service_project_shows_no_per_service_header(self, tmp_path):
+        """
+        Single-service projects must behave exactly as before Milestone 2:
+        resolve_targets degrades to the one configured service, so the
+        multi-service header (only printed when more than one target is
+        resolved) never appears.
+        """
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            _single_service_repo()
+            _write("app.py", "import os\nx = os.environ.get('FOO')\n")
+
+            result = runner.invoke(app, ["schema", "check-usages"])
+
+            # Rich's own table borders also use "──", so check for the
+            # specific service-header text rather than the character.
+            assert "── api ──" not in result.stdout
 
 
 class TestUnknownService:

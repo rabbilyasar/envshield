@@ -1,7 +1,7 @@
 # envshield/cli.py
 import json
 import os
-from typing import List, Optional, cast
+from typing import Any, Dict, List, Optional, cast
 
 import questionary
 import toml
@@ -819,9 +819,8 @@ def schema_check_usages(
                 raise typer.Exit(code=1)
 
     try:
-        target = cast(
-            str,
-            service_manager.resolve_service(service, invocation_dir=INVOCATION_DIR),
+        targets = service_manager.resolve_targets(
+            service, invocation_dir=INVOCATION_DIR
         )
     except EnvShieldException as e:
         if json_output:
@@ -834,36 +833,78 @@ def schema_check_usages(
             console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(code=1)
 
-    try:
-        usages_a, usages_b = dependency_snapshot.discover_usages_for_service(
-            target, revision_a, revision_b, quiet=json_output
-        )
-        schema_vars = set(
-            schema_snapshot.load_schema_for_diff(target, revision_b).keys()
-        )
-        new_usages = dependency_diff.find_new_usages(usages_a, usages_b)
-        result = dependency_diff.classify_against_schema(new_usages, schema_vars)
-    except EnvShieldException as e:
-        if json_output:
-            print(
-                json.dumps(
-                    {"has_missing_declarations": False, "error": str(e)}, indent=2
-                )
+    # Mirrors schema_diff's own multi-target loop exactly: a per-service
+    # failure (bad schema, missing service dir, etc.) is recorded and
+    # forces a non-zero exit, but never aborts the remaining services --
+    # one broken service shouldn't hide a real finding in another.
+    had_error = False
+    any_missing = False
+    results: List[Dict[str, Any]] = []
+
+    for target in targets:
+        if not json_output:
+            _print_service_header(targets, target)
+        try:
+            usages_a, usages_b = dependency_snapshot.discover_usages_for_service(
+                target, revision_a, revision_b, quiet=json_output
             )
+            schema_vars = set(
+                schema_snapshot.load_schema_for_diff(target, revision_b).keys()
+            )
+            new_usages = dependency_diff.find_new_usages(usages_a, usages_b)
+            result = dependency_diff.classify_against_schema(new_usages, schema_vars)
+        except EnvShieldException as e:
+            had_error = True
+            if json_output:
+                results.append({"service": target, "error": str(e)})
+            else:
+                console.print(f"[bold red]Error:[/bold red] {e}")
+            continue
+
+        if result.has_missing_declarations:
+            any_missing = True
+
+        if json_output:
+            entry = result.to_dict()
+            entry["service"] = target
+            results.append(entry)
         else:
-            console.print(f"[bold red]Error:[/bold red] {e}")
-        raise typer.Exit(code=1)
+            _render_dependency_change_table(result, label_a, label_b)
 
     if json_output:
-        entry = result.to_dict()
-        entry["service"] = target
-        entry["revision_a"] = label_a
-        entry["revision_b"] = label_b
-        print(json.dumps(entry, indent=2))
-    else:
-        _render_dependency_change_table(result, label_a, label_b)
+        # Exactly one resolved target (a single-service project with no
+        # --service, or --service NAME in a multi-service project) keeps
+        # Milestone 1's flat contract byte-for-byte -- no 'results' key.
+        # Only a genuinely new invocation pattern (multi-service, no
+        # --service) gets the 'results' wrapper. Branches on len(targets),
+        # not on whether --service was passed or on project topology, so
+        # every invocation Milestone 1 already supported keeps its exact
+        # shape regardless of how many services the project has overall.
+        if len(targets) == 1:
+            single = results[0]
+            if "error" in single:
+                payload = {
+                    "has_missing_declarations": False,
+                    "error": single["error"],
+                }
+            else:
+                payload = {
+                    "has_missing_declarations": single["has_missing_declarations"],
+                    "changes": single["changes"],
+                    "service": single["service"],
+                    "revision_a": label_a,
+                    "revision_b": label_b,
+                }
+        else:
+            payload = {
+                "has_missing_declarations": any_missing,
+                "revision_a": label_a,
+                "revision_b": label_b,
+                "results": results,
+            }
+        print(json.dumps(payload, indent=2))
 
-    if result.has_missing_declarations:
+    if had_error or any_missing:
         raise typer.Exit(code=1)
 
 
