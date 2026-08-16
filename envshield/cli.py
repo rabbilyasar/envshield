@@ -19,6 +19,7 @@ from .core import (
     dependency_diff,
     dependency_snapshot,
     doctor,
+    explain,
     generator,
     hooks_manager,
     inspector,
@@ -537,6 +538,144 @@ def doctor_command(
         raise typer.Exit(code=1)
 
 
+_EXPLAIN_REQUIREDNESS_LABEL = {
+    "required": "Yes",
+    "optional": "No (has default)",
+    "conditional": "Conditional",
+}
+
+
+def _render_explain_report(report: "explain.ExplainReport") -> None:
+    console.print(f"\n[bold cyan]{report.variable}[/bold cyan]")
+    console.print("─" * max(len(report.variable), 8))
+
+    schema = report.schema
+    console.print("\n[bold]Contract[/bold]")
+    console.print(f"  Type:       {schema['type']}")
+    console.print(
+        f"  Required:   {_EXPLAIN_REQUIREDNESS_LABEL[schema['requiredness']]}"
+    )
+    if schema["requiredness"] == "conditional":
+        condition = schema["requiredIf"] or {}
+        console.print(
+            f'              when {condition.get("var")} == '
+            f'"{condition.get("equals", "true")}"'
+        )
+    default = schema["default"]
+    console.print(f"  Default:    {default if default is not None else '—'}")
+    console.print(f"  Secret:     {'Yes' if schema['secret'] else 'No'}")
+    if schema["enum"]:
+        console.print(f"  Enum:       {', '.join(schema['enum'])}")
+    if schema["pattern"]:
+        console.print(f"  Pattern:    {schema['pattern']}")
+    if schema["description"]:
+        console.print(f"  Description: {schema['description']}")
+
+    console.print("\n[bold]Declared in[/bold]")
+    console.print(f"  {report.provenance['schema_path']}")
+    if report.provenance["inherited"] is True:
+        console.print(f"  inherited from {report.provenance['declared_in']}")
+    elif report.provenance["inherited"] is None:
+        console.print(
+            "  [dim](could not determine whether this is inherited via extends)[/dim]"
+        )
+
+    console.print("\n[bold]Used in source[/bold]")
+    if report.source_usages:
+        for usage in report.source_usages:
+            console.print(f"  {usage.file_path}:{usage.line}")
+    else:
+        console.print("  None discovered")
+        console.print(
+            "  [dim]EnvShield only recognizes os.environ/os.getenv/process.env-style "
+            "reads in Python and JS/TS -- this doesn't prove the variable is unused.[/dim]"
+        )
+
+    if report.required_by:
+        console.print("\n[bold]Required by[/bold]")
+        for entry in report.required_by:
+            condition = entry["condition"] or {}
+            console.print(f"  {entry['variable']}")
+            console.print(
+                f'    when {report.variable} == "{condition.get("equals", "true")}"'
+            )
+
+    console.print("\n[bold]Deployment[/bold]")
+    if not report.manifest_references:
+        console.print("  No deployment manifest registered for this service.")
+    else:
+        declared = [r for r in report.manifest_references if r.status == "declared"]
+        errored = [r for r in report.manifest_references if r.status == "error"]
+        if declared:
+            for ref in declared:
+                console.print(f"  {ref.path}")
+                if ref.container:
+                    console.print(f"    container: {ref.container}")
+        else:
+            checked = ", ".join(r.path for r in report.manifest_references)
+            console.print(
+                "  Not found in any registered deployment manifest "
+                f"(checked: {checked}) -- this doesn't prove it isn't deployed elsewhere."
+            )
+        if errored:
+            console.print(
+                f"  [dim]Could not check {len(errored)} manifest(s): "
+                f"{', '.join(r.path for r in errored)}[/dim]"
+            )
+
+
+@app.command(name="explain")
+def explain_command(
+    variable: str = typer.Argument(..., metavar="VARIABLE"),
+    service: Optional[str] = typer.Option(
+        None,
+        "--service",
+        "-s",
+        help="Which service's schema to explain the variable against.",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Print machine-readable JSON instead of a report; suppresses all other output.",
+    ),
+):
+    """
+    Reports what EnvShield currently knows about one environment variable:
+    its contract, where it's declared (including through 'extends'), what
+    source code reads it, which other variables' requiredIf conditions
+    reference it, and which registered deployment manifests declare it.
+    """
+    try:
+        resolved_service = service_manager.resolve_service(
+            service, invocation_dir=INVOCATION_DIR
+        )
+        assert isinstance(resolved_service, str)
+    except EnvShieldException as e:
+        if json_output:
+            print(json.dumps(explain.error_dict(variable, None, str(e)), indent=2))
+        else:
+            console.print(f"[bold red]Error:[/bold red] {e}")
+        raise typer.Exit(code=1)
+
+    try:
+        report = explain.build_report(variable, resolved_service)
+    except EnvShieldException as e:
+        if json_output:
+            print(
+                json.dumps(
+                    explain.error_dict(variable, resolved_service, str(e)), indent=2
+                )
+            )
+        else:
+            console.print(f"[bold red]Error:[/bold red] {e}")
+        raise typer.Exit(code=1)
+
+    if json_output:
+        print(json.dumps(report.to_dict(), indent=2))
+    else:
+        _render_explain_report(report)
+
+
 @app.command()
 def setup(
     output_file: Optional[str] = typer.Argument(
@@ -658,7 +797,12 @@ _CONTRACT_DIFF_CATEGORY_STYLE = {
 
 
 def _render_contract_diff_table(
-    result: "contract_diff.ContractDiff", label_a: str, label_b: str
+    result: "contract_diff.ContractDiff",
+    label_a: str,
+    label_b: str,
+    fail_on_categories: frozenset = contract_diff.DEFAULT_BLOCKING_CATEGORIES,
+    service: Optional[str] = None,
+    multi_service: bool = False,
 ) -> None:
     if not result.changes:
         console.print(
@@ -690,9 +834,24 @@ def _render_contract_diff_table(
         )
 
     console.print(table)
-    if result.has_breaking_changes:
+    blocking_changes = [
+        c for c in result.changes if contract_diff.is_blocking_change(c, fail_on_categories)
+    ]
+    if blocking_changes:
+        blocking_categories_present = sorted({c.category for c in blocking_changes})
         console.print(
-            "\n[bold red]This change includes breaking contract changes.[/bold red]"
+            f"\n[bold red]This change includes {', '.join(blocking_categories_present)} "
+            "change(s) that block under --fail-on.[/bold red]"
+        )
+        # Only a service-scoped run knows what '--service' value to suggest
+        # -- a single-service project's 'explain' call needs none, matching
+        # every other command's own "only show --service when it's
+        # genuinely ambiguous" convention (see _print_service_header).
+        service_flag = f" --service {service}" if multi_service and service else ""
+        blocking_vars = sorted({c.variable for c in blocking_changes})
+        console.print(
+            f"[dim]Inspect with 'envshield explain <VAR>{service_flag}': "
+            f"{', '.join(blocking_vars)}[/dim]"
         )
 
 
@@ -908,6 +1067,9 @@ def schema_check_usages(
         raise typer.Exit(code=1)
 
 
+_FAIL_ON_DEFAULT = ",".join(sorted(contract_diff.DEFAULT_BLOCKING_CATEGORIES))
+
+
 @schema_app.command("diff")
 def schema_diff(
     rev_a: Optional[str] = typer.Argument(
@@ -929,12 +1091,27 @@ def schema_diff(
         "--json",
         help="Print machine-readable JSON instead of a table; suppresses all other output.",
     ),
+    fail_on: str = typer.Option(
+        _FAIL_ON_DEFAULT,
+        "--fail-on",
+        help=(
+            "Comma-separated categories that cause a non-zero exit. Valid: "
+            f"{', '.join(sorted(contract_diff.CATEGORIES))}. A secret "
+            "classification that TIGHTENED (false -> true) never blocks, "
+            "even when 'security' is included -- only a WEAKENED one "
+            "(true -> false) does."
+        ),
+    ),
 ):
     """
     Compares a service's schema contract between two Git revisions --
     added/removed/changed variables, classified as breaking, security-
     sensitive, or informational. With no arguments, compares the current
     working tree against HEAD (uncommitted changes, staged or not).
+
+    Exits non-zero when any change falls in a --fail-on category (default:
+    breaking, security, requires_review) -- see 'envshield schema diff
+    --help' for the exact rule on secret-classification changes.
     """
     if (rev_a is None) != (rev_b is None):
         message = (
@@ -943,7 +1120,37 @@ def schema_diff(
         )
         if json_output:
             print(
-                json.dumps({"has_breaking_changes": False, "error": message}, indent=2)
+                json.dumps(
+                    {
+                        "has_breaking_changes": False,
+                        "has_blocking_changes": False,
+                        "error": message,
+                    },
+                    indent=2,
+                )
+            )
+        else:
+            console.print(f"[bold red]Error:[/bold red] {message}")
+        raise typer.Exit(code=1)
+
+    fail_on_categories = frozenset(c.strip() for c in fail_on.split(",") if c.strip())
+    unknown_categories = fail_on_categories - contract_diff.CATEGORIES
+    if unknown_categories:
+        message = (
+            f"unknown --fail-on categor{'y' if len(unknown_categories) == 1 else 'ies'}: "
+            f"{', '.join(sorted(unknown_categories))}. Valid: "
+            f"{', '.join(sorted(contract_diff.CATEGORIES))}."
+        )
+        if json_output:
+            print(
+                json.dumps(
+                    {
+                        "has_breaking_changes": False,
+                        "has_blocking_changes": False,
+                        "error": message,
+                    },
+                    indent=2,
+                )
             )
         else:
             console.print(f"[bold red]Error:[/bold red] {message}")
@@ -966,7 +1173,14 @@ def schema_diff(
     except EnvShieldException as e:
         if json_output:
             print(
-                json.dumps({"has_breaking_changes": False, "error": str(e)}, indent=2)
+                json.dumps(
+                    {
+                        "has_breaking_changes": False,
+                        "has_blocking_changes": False,
+                        "error": str(e),
+                    },
+                    indent=2,
+                )
             )
         else:
             console.print(f"[bold red]Error:[/bold red] {e}")
@@ -974,6 +1188,7 @@ def schema_diff(
 
     had_error = False
     any_breaking = False
+    any_blocking = False
     results = []
 
     for target in targets:
@@ -993,24 +1208,38 @@ def schema_diff(
 
         if result.has_breaking_changes:
             any_breaking = True
+        if result.has_blocking_changes(fail_on_categories):
+            any_blocking = True
 
         if json_output:
-            entry = result.to_dict()
+            entry = result.to_dict(fail_on_categories)
             entry["service"] = target
             entry["revision_a"] = left_label
             entry["revision_b"] = right_label
             results.append(entry)
         else:
-            _render_contract_diff_table(result, left_label, right_label)
+            _render_contract_diff_table(
+                result,
+                left_label,
+                right_label,
+                fail_on_categories,
+                service=target,
+                multi_service=len(targets) > 1,
+            )
 
     if json_output:
         print(
             json.dumps(
-                {"has_breaking_changes": any_breaking, "results": results}, indent=2
+                {
+                    "has_breaking_changes": any_breaking,
+                    "has_blocking_changes": any_blocking,
+                    "results": results,
+                },
+                indent=2,
             )
         )
 
-    if had_error or any_breaking:
+    if had_error or any_blocking:
         raise typer.Exit(code=1)
 
 
