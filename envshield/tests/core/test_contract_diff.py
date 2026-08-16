@@ -82,9 +82,11 @@ class TestRequirednessTransitions:
         change = _change_for(result, "V")
         assert change.category == "requires_review"
 
-    def test_a_default_value_alone_does_not_trigger_a_requiredness_change(self):
-        """Both sides are 'unconditional' regardless of default -- only the
-        default itself changed, which is its own category."""
+    def test_editing_an_existing_default_value_does_not_trigger_a_requiredness_change(
+        self,
+    ):
+        """Both sides are 'defaulted' -- only the default's value itself
+        changed, which is its own category, not a requiredness change."""
         a = {"V": {"description": "x", "defaultValue": "1"}}
         b = {"V": {"description": "x", "defaultValue": "2"}}
 
@@ -92,6 +94,65 @@ class TestRequirednessTransitions:
 
         change = _change_for(result, "V")
         assert change.category == "default_changed"
+
+    def test_losing_a_bare_default_with_no_requiredif_is_breaking(self):
+        """'optional -> required': the variable had a fallback and now has
+        none -- any config that omitted it, relying on the default, is now
+        invalid. This is provable, so it's breaking, not the softer
+        default_changed bucket."""
+        a = {"V": {"description": "x", "defaultValue": "1"}}
+        b = {"V": {"description": "x"}}
+
+        result = contract_diff.diff_schemas(a, b)
+
+        change = _change_for(result, "V")
+        assert change.category == "breaking"
+        assert result.has_breaking_changes is True
+
+    def test_gaining_a_bare_default_with_no_requiredif_is_non_breaking(self):
+        """'required -> optional': every config that already set it
+        explicitly still works, and one that didn't now has a fallback."""
+        a = {"V": {"description": "x"}}
+        b = {"V": {"description": "x", "defaultValue": "1"}}
+
+        result = contract_diff.diff_schemas(a, b)
+
+        change = _change_for(result, "V")
+        assert change.category == "non_breaking"
+        assert result.has_breaking_changes is False
+
+    def test_losing_a_default_while_gaining_a_requiredif_requires_review(self):
+        """Neither provably breaking (the condition might never hold) nor
+        provably safe (it might hold for many configs) -- schema-only diff
+        can't evaluate the condition, so this is genuinely undecidable."""
+        a = {"V": {"description": "x", "defaultValue": "1"}}
+        b = {
+            "V": {
+                "description": "x",
+                "requiredIf": {"var": "F", "equals": "true"},
+            }
+        }
+
+        result = contract_diff.diff_schemas(a, b)
+
+        change = _change_for(result, "V")
+        assert change.category == "requires_review"
+
+    def test_gaining_a_default_from_conditional_is_non_breaking(self):
+        """The variable widens from 'required under some condition' to
+        'never required' -- strictly safer."""
+        a = {
+            "V": {
+                "description": "x",
+                "requiredIf": {"var": "F", "equals": "true"},
+            }
+        }
+        b = {"V": {"description": "x", "defaultValue": "1"}}
+
+        result = contract_diff.diff_schemas(a, b)
+
+        change = _change_for(result, "V")
+        assert change.category == "non_breaking"
 
 
 class TestTypeChanges:
@@ -269,17 +330,21 @@ class TestDefaultChanges:
 
         assert _change_for(result, "V").category == "default_changed"
 
-    def test_gaining_a_default_where_there_was_none_is_still_reported(self):
-        """The None-guard path must still work after normalization was
-        introduced -- 'no default at all' must never normalize-equal to
-        'has a default'."""
+    def test_gaining_a_default_where_there_was_none_is_a_requiredness_change_not_default_changed(
+        self,
+    ):
+        """Presence/absence of a defaultValue is now fully owned by the
+        requiredness-transition axis (see TestRequirednessTransitions) --
+        _defaults_differ must not also report it as default_changed,
+        which would double-report the same underlying fact."""
         a = {"V": {"description": "x"}}
         b = {"V": {"description": "x", "defaultValue": "8080"}}
 
         result = contract_diff.diff_schemas(a, b)
 
         change = _change_for(result, "V")
-        assert change.category == "default_changed"
+        assert change.category == "non_breaking"
+        assert len(result.changes) == 1
 
 
 class TestCosmeticChangesAreNotReported:
@@ -309,3 +374,59 @@ class TestContractDiffResultShape:
 
         assert result.changes == []
         assert result.has_breaking_changes is False
+
+
+class TestBlockingChanges:
+    def test_breaking_change_blocks_under_the_default_set(self):
+        result = contract_diff.diff_schemas({}, {"NEW": {"description": "x"}})
+
+        assert result.has_blocking_changes() is True
+        as_dict = result.to_dict()
+        assert as_dict["has_blocking_changes"] is True
+        assert as_dict["changes"][0]["blocking"] is True
+
+    def test_secret_tightened_never_blocks_even_when_security_is_included(self):
+        a = {"V": {"description": "x", "secret": False}}
+        b = {"V": {"description": "x", "secret": True}}
+
+        result = contract_diff.diff_schemas(a, b)
+
+        assert result.has_blocking_changes() is False
+        as_dict = result.to_dict()
+        assert as_dict["has_blocking_changes"] is False
+        assert as_dict["changes"][0]["blocking"] is False
+
+    def test_secret_weakened_blocks_under_the_default_set(self):
+        a = {"V": {"description": "x", "secret": True}}
+        b = {"V": {"description": "x", "secret": False}}
+
+        result = contract_diff.diff_schemas(a, b)
+
+        assert result.has_blocking_changes() is True
+        as_dict = result.to_dict()
+        assert as_dict["has_blocking_changes"] is True
+        assert as_dict["changes"][0]["blocking"] is True
+
+    def test_requires_review_blocks_under_the_default_set(self):
+        a = {"V": {"description": "x", "pattern": "^v[0-9]+$"}}
+        b = {"V": {"description": "x", "pattern": "^[0-9]+$"}}
+
+        result = contract_diff.diff_schemas(a, b)
+
+        assert result.has_blocking_changes() is True
+
+    def test_default_changed_and_non_breaking_never_block_by_default(self):
+        a = {"V": {"description": "x", "defaultValue": "old"}}
+        b = {"V": {"description": "x", "defaultValue": "new"}}
+
+        result = contract_diff.diff_schemas(a, b)
+
+        assert result.has_blocking_changes() is False
+
+    def test_narrowing_the_blocking_set_excludes_requires_review(self):
+        a = {"V": {"description": "x", "pattern": "^v[0-9]+$"}}
+        b = {"V": {"description": "x", "pattern": "^[0-9]+$"}}
+
+        result = contract_diff.diff_schemas(a, b)
+
+        assert result.has_blocking_changes(frozenset({"breaking"})) is False

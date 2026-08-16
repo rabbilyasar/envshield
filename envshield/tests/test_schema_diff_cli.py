@@ -174,3 +174,220 @@ class TestSchemaDiffSecretReclassification:
             change = payload["results"][0]["changes"][0]
             assert change["category"] == "security"
             assert change["detail"]["severity"] == "weakened"
+
+    def test_secret_weakened_exits_nonzero_under_the_default_fail_on_set(
+        self, tmp_path
+    ):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            _init_repo()
+            _write("envshield.yml", "services:\n  api:\n    schema: env.schema.toml\n")
+            _write("env.schema.toml", '[API_KEY]\ndescription = "x"\nsecret = true\n')
+            _commit("v1")
+            _write("env.schema.toml", '[API_KEY]\ndescription = "x"\nsecret = false\n')
+            _commit("v2")
+
+            result = runner.invoke(app, ["schema", "diff", "HEAD~1", "HEAD"])
+
+            assert result.exit_code == 1
+
+    def test_secret_tightened_exits_zero(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            _init_repo()
+            _write("envshield.yml", "services:\n  api:\n    schema: env.schema.toml\n")
+            _write("env.schema.toml", '[API_KEY]\ndescription = "x"\nsecret = false\n')
+            _commit("v1")
+            _write("env.schema.toml", '[API_KEY]\ndescription = "x"\nsecret = true\n')
+            _commit("v2")
+
+            result = runner.invoke(app, ["schema", "diff", "HEAD~1", "HEAD"])
+
+            assert result.exit_code == 0
+
+
+class TestSchemaDiffFailOn:
+    def test_fail_on_can_narrow_out_security(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            _init_repo()
+            _write("envshield.yml", "services:\n  api:\n    schema: env.schema.toml\n")
+            _write("env.schema.toml", '[API_KEY]\ndescription = "x"\nsecret = true\n')
+            _commit("v1")
+            _write("env.schema.toml", '[API_KEY]\ndescription = "x"\nsecret = false\n')
+            _commit("v2")
+
+            result = runner.invoke(
+                app, ["schema", "diff", "HEAD~1", "HEAD", "--fail-on", "breaking"]
+            )
+
+            assert result.exit_code == 0
+
+    def test_fail_on_rejects_an_unknown_category(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            _init_repo()
+            _write("envshield.yml", "services:\n  api:\n    schema: env.schema.toml\n")
+            _write("env.schema.toml", '[X]\ndescription = "x"\n')
+            _commit("v1")
+
+            result = runner.invoke(
+                app, ["schema", "diff", "HEAD", "HEAD", "--fail-on", "bogus"]
+            )
+
+            assert result.exit_code == 1
+            assert "unknown --fail-on category" in result.stdout
+
+    def test_requires_review_blocks_by_default(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            _init_repo()
+            _write(
+                "envshield.yml", "services:\n  api:\n    schema: env.schema.toml\n"
+            )
+            _write("env.schema.toml", '[V]\ndescription = "x"\npattern = "^v[0-9]+$"\n')
+            _commit("v1")
+            _write("env.schema.toml", '[V]\ndescription = "x"\npattern = "^[0-9]+$"\n')
+            _commit("v2")
+
+            result = runner.invoke(app, ["schema", "diff", "HEAD~1", "HEAD"])
+
+            assert result.exit_code == 1
+
+    def test_requires_review_can_be_excluded_via_fail_on(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            _init_repo()
+            _write(
+                "envshield.yml", "services:\n  api:\n    schema: env.schema.toml\n"
+            )
+            _write("env.schema.toml", '[V]\ndescription = "x"\npattern = "^v[0-9]+$"\n')
+            _commit("v1")
+            _write("env.schema.toml", '[V]\ndescription = "x"\npattern = "^[0-9]+$"\n')
+            _commit("v2")
+
+            result = runner.invoke(
+                app, ["schema", "diff", "HEAD~1", "HEAD", "--fail-on", "breaking"]
+            )
+
+            assert result.exit_code == 0
+
+
+class TestSchemaDiffBlockingJson:
+    def test_json_includes_has_blocking_changes_and_per_change_blocking_flag(
+        self, tmp_path
+    ):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            _init_repo()
+            _write("envshield.yml", "services:\n  api:\n    schema: env.schema.toml\n")
+            _write("env.schema.toml", '[API_KEY]\ndescription = "x"\nsecret = true\n')
+            _commit("v1")
+            _write("env.schema.toml", '[API_KEY]\ndescription = "x"\nsecret = false\n')
+            _commit("v2")
+
+            result = runner.invoke(app, ["schema", "diff", "HEAD~1", "HEAD", "--json"])
+
+            payload = json.loads(result.stdout)
+            assert payload["has_blocking_changes"] is True
+            entry = payload["results"][0]
+            assert entry["has_blocking_changes"] is True
+            change = entry["changes"][0]
+            assert change["blocking"] is True
+
+    def test_json_blocking_flag_respects_fail_on(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            _init_repo()
+            _write("envshield.yml", "services:\n  api:\n    schema: env.schema.toml\n")
+            _write("env.schema.toml", '[API_KEY]\ndescription = "x"\nsecret = true\n')
+            _commit("v1")
+            _write("env.schema.toml", '[API_KEY]\ndescription = "x"\nsecret = false\n')
+            _commit("v2")
+
+            result = runner.invoke(
+                app,
+                [
+                    "schema",
+                    "diff",
+                    "HEAD~1",
+                    "HEAD",
+                    "--json",
+                    "--fail-on",
+                    "breaking",
+                ],
+            )
+
+            payload = json.loads(result.stdout)
+            assert payload["has_blocking_changes"] is False
+            assert payload["results"][0]["changes"][0]["blocking"] is False
+
+
+class TestSchemaDiffExplainHint:
+    def test_blocking_change_prints_an_explain_hint_naming_the_variable(
+        self, tmp_path
+    ):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            _init_repo()
+            _write("envshield.yml", "services:\n  api:\n    schema: env.schema.toml\n")
+            _write("env.schema.toml", "")
+            _commit("v1")
+            _write("env.schema.toml", '[NEW_REQUIRED]\ndescription = "x"\n')
+            _commit("v2")
+
+            result = runner.invoke(app, ["schema", "diff", "HEAD~1", "HEAD"])
+
+            assert "envshield explain <VAR>" in result.stdout
+            assert "NEW_REQUIRED" in result.stdout.split("Inspect with")[-1]
+
+    def test_single_service_hint_omits_the_service_flag(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            _init_repo()
+            _write("envshield.yml", "services:\n  api:\n    schema: env.schema.toml\n")
+            _write("env.schema.toml", "")
+            _commit("v1")
+            _write("env.schema.toml", '[NEW_REQUIRED]\ndescription = "x"\n')
+            _commit("v2")
+
+            result = runner.invoke(app, ["schema", "diff", "HEAD~1", "HEAD"])
+
+            assert "--service" not in result.stdout
+
+    def test_multi_service_hint_includes_the_service_flag(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            _init_repo()
+            _write(
+                "envshield.yml",
+                "services:\n"
+                "  api:\n    schema: api.schema.toml\n"
+                "  worker:\n    schema: worker.schema.toml\n",
+            )
+            _write("api.schema.toml", "")
+            _write("worker.schema.toml", "")
+            _commit("v1")
+            _write("api.schema.toml", '[NEW_REQUIRED]\ndescription = "x"\n')
+            _commit("v2")
+
+            result = runner.invoke(app, ["schema", "diff", "HEAD~1", "HEAD"])
+
+            assert "--service api" in result.stdout
+
+    def test_non_blocking_change_has_no_explain_hint(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            _init_repo()
+            _write("envshield.yml", "services:\n  api:\n    schema: env.schema.toml\n")
+            _write("env.schema.toml", '[X]\ndescription = "old text"\n')
+            _commit("v1")
+            _write("env.schema.toml", '[X]\ndescription = "new text"\n')
+            _commit("v2")
+
+            result = runner.invoke(app, ["schema", "diff", "HEAD~1", "HEAD"])
+
+            assert "Inspect with" not in result.stdout
+
+    def test_json_output_is_unaffected_by_the_hint(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            _init_repo()
+            _write("envshield.yml", "services:\n  api:\n    schema: env.schema.toml\n")
+            _write("env.schema.toml", "")
+            _commit("v1")
+            _write("env.schema.toml", '[NEW_REQUIRED]\ndescription = "x"\n')
+            _commit("v2")
+
+            result = runner.invoke(
+                app, ["schema", "diff", "HEAD~1", "HEAD", "--json"]
+            )
+
+            json.loads(result.stdout)  # must still be exactly one JSON document

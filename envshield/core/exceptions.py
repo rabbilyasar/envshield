@@ -59,6 +59,17 @@ class ConfigParseError(EnvShieldException):
         super().__init__(self.message)
 
 
+class VariableNotFoundError(EnvShieldException):
+    """Raised when a named variable isn't declared in a service's resolved schema."""
+
+    def __init__(self, variable: str, service_name: str):
+        self.message = (
+            f"Variable '{variable}' not found in the schema for service "
+            f"'{service_name}'."
+        )
+        super().__init__(self.message)
+
+
 class UnsafePathError(EnvShieldException):
     """
     Raised when a path taken from 'envshield.yml' (a service's schema,

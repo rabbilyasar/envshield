@@ -60,6 +60,33 @@ class ContractChange:
         }
 
 
+# The default '--fail-on' set for the CLI: compatibility-breaking changes,
+# a weakened (never a tightened -- see is_blocking_change) secret
+# classification, and anything EnvShield can't prove one way or the other.
+# default_changed/informational/non_breaking are deliberately excluded --
+# none of them can be shown to invalidate an existing config.
+DEFAULT_BLOCKING_CATEGORIES = frozenset({"breaking", "security", "requires_review"})
+
+
+def is_blocking_change(
+    change: ContractChange, blocking_categories: frozenset = DEFAULT_BLOCKING_CATEGORIES
+) -> bool:
+    """
+    Whether `change` should fail a CI/PR gate under `blocking_categories`
+    (see 'schema diff --fail-on'). 'security' is a single category
+    covering both directions of a secret-classification change, but only
+    a WEAKENED one (true -> false) blocks -- a tightened one (false ->
+    true) is a strict improvement and must never block, even when
+    'security' is in the blocking set. Every other category is a plain
+    membership check.
+    """
+    if change.category not in blocking_categories:
+        return False
+    if change.category == "security":
+        return change.detail.get("severity") == "weakened"
+    return True
+
+
 @dataclass
 class ContractDiff:
     changes: List[ContractChange]
@@ -68,10 +95,21 @@ class ContractDiff:
     def has_breaking_changes(self) -> bool:
         return any(c.category == "breaking" for c in self.changes)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def has_blocking_changes(
+        self, blocking_categories: frozenset = DEFAULT_BLOCKING_CATEGORIES
+    ) -> bool:
+        return any(is_blocking_change(c, blocking_categories) for c in self.changes)
+
+    def to_dict(
+        self, blocking_categories: frozenset = DEFAULT_BLOCKING_CATEGORIES
+    ) -> Dict[str, Any]:
         return {
             "has_breaking_changes": self.has_breaking_changes,
-            "changes": [c.to_dict() for c in self.changes],
+            "has_blocking_changes": self.has_blocking_changes(blocking_categories),
+            "changes": [
+                {**c.to_dict(), "blocking": is_blocking_change(c, blocking_categories)}
+                for c in self.changes
+            ],
         }
 
 
@@ -107,13 +145,25 @@ def diff_schemas(schema_a: Dict[str, Any], schema_b: Dict[str, Any]) -> Contract
 
 def _requiredness_state(field_schema: Dict[str, Any]) -> str:
     """
-    'unconditional': presence is always required (no requiredIf, or has a
-    defaultValue regardless of requiredIf -- schema_types.should_be_present
-    already treats a defaulted field as needing to be present, not exempt).
-    'conditional': presence depends on requiredIf's condition, which this
-    module has no config data to evaluate.
+    Three mutually exclusive states, matching schema_types.is_required_now
+    exactly:
+
+    'defaulted': has a defaultValue -- never required, regardless of
+    requiredIf (is_required_now checks this first and returns False
+    unconditionally).
+    'conditional': no defaultValue, requiredIf present -- required only
+    when that condition holds, which this module has no config data to
+    evaluate.
+    'unconditional': no defaultValue, no requiredIf -- always required.
+
+    Distinguishing 'defaulted' from 'unconditional' (both were folded into
+    one 'unconditional' state before this) matters because gaining or
+    losing a bare defaultValue is itself a requiredness change -- see
+    _classify_requiredness_transition -- not merely a default-value edit.
     """
-    if field_schema.get("requiredIf") and "defaultValue" not in field_schema:
+    if "defaultValue" in field_schema:
+        return "defaulted"
+    if field_schema.get("requiredIf"):
         return "conditional"
     return "unconditional"
 
@@ -201,6 +251,13 @@ def _diff_field(key: str, a: Dict[str, Any], b: Dict[str, Any]) -> List[Contract
 
 def _defaults_differ(default_a: Any, default_b: Any, type_a: str, type_b: str) -> bool:
     """
+    Only compares when both sides actually have a defaultValue -- gaining
+    or losing one entirely (None on either side) is a requiredness change,
+    owned by _requiredness_state's 'defaulted' state and
+    _classify_requiredness_transition, not this function. Splitting it
+    this way means a variable that gains a default is reported exactly
+    once (as the non_breaking requiredness transition), not twice.
+
     Compares through schema_types.normalize_default_value rather than raw
     equality -- otherwise TOML's native int 8080 vs. the string "8080" (or
     'TRUE' vs. 'true' for a bool-typed default) would report a
@@ -210,35 +267,59 @@ def _defaults_differ(default_a: Any, default_b: Any, type_a: str, type_b: str) -
     *because* the field's type also changed still compares correctly.
     """
     if default_a is None or default_b is None:
-        return default_a != default_b
+        return False
     return schema_types.normalize_default_value(
         default_a, type_a
     ) != schema_types.normalize_default_value(default_b, type_b)
 
 
+# One entry per reachable (before, after) pair among the three
+# _requiredness_state values -- same-state pairs never reach this function
+# (the '_diff_field' call site only invokes it when req_a != req_b).
+_REQUIREDNESS_TRANSITIONS: Dict[tuple, tuple] = {
+    ("defaulted", "conditional"): (
+        "requires_review",
+        "'{key}' lost its default and gained a requiredIf condition -- "
+        "whether this breaks an existing config depends on whether that "
+        "condition currently holds, which schema-only diff can't see.",
+    ),
+    ("defaulted", "unconditional"): (
+        "breaking",
+        "'{key}' lost its default and is now always required -- a config "
+        "that validly omitted it, relying on the default, is now invalid.",
+    ),
+    ("conditional", "defaulted"): (
+        "non_breaking",
+        "'{key}' gained a default -- every config valid before is still valid.",
+    ),
+    ("conditional", "unconditional"): (
+        "breaking",
+        "'{key}' requiredness changed from conditional to always required "
+        "-- a config that validly omitted it while the old condition was "
+        "unmet is now invalid.",
+    ),
+    ("unconditional", "defaulted"): (
+        "non_breaking",
+        "'{key}' gained a default -- every config valid before is still valid.",
+    ),
+    ("unconditional", "conditional"): (
+        "non_breaking",
+        "'{key}' requiredness relaxed from always-required to conditional "
+        "-- every config that satisfied the stricter old rule still "
+        "satisfies the relaxed one.",
+    ),
+}
+
+
 def _classify_requiredness_transition(
     key: str, req_a: str, req_b: str
 ) -> ContractChange:
-    if req_a == "conditional" and req_b == "unconditional":
-        return ContractChange(
-            variable=key,
-            category="breaking",
-            description=(
-                f"'{key}' requiredness changed from conditional to always "
-                "required -- a config that validly omitted it while the old "
-                "condition was unmet is now invalid."
-            ),
-            detail={"before": "conditional", "after": "unconditional"},
-        )
+    category, description_template = _REQUIREDNESS_TRANSITIONS[(req_a, req_b)]
     return ContractChange(
         variable=key,
-        category="non_breaking",
-        description=(
-            f"'{key}' requiredness relaxed from always-required to "
-            "conditional -- every config that satisfied the stricter old "
-            "rule still satisfies the relaxed one."
-        ),
-        detail={"before": "unconditional", "after": "conditional"},
+        category=category,
+        description=description_template.format(key=key),
+        detail={"before": req_a, "after": req_b},
     )
 
 

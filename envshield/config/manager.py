@@ -227,6 +227,53 @@ def _load_schema_file(
     return merged
 
 
+def resolve_field_provenance(
+    schema_path: str, _visited: Optional[frozenset] = None
+) -> Dict[str, str]:
+    """
+    Mirrors _load_schema_file's extends-merge exactly (same recursion, same
+    circular-extends detection, same within-project path validation), but
+    returns {variable_name: contributing_schema_path} instead of the
+    merged field values -- which schema file's own declaration of each key
+    actually won the merge (whole-field-replace: a variable redeclared
+    both in a base schema and the schema that extends it always resolves
+    to the *child*, exactly matching _load_schema_file's own last-write-
+    wins semantics -- see 'merged.update(raw)' there).
+
+    Additive only: does not change how schemas are loaded or merged
+    anywhere else. Used by 'envshield explain' to report where a field
+    actually came from -- never guessed at from anything but this same
+    resolution path.
+    """
+    visited = _visited or frozenset()
+    real_path = os.path.abspath(schema_path)
+    if real_path in visited:
+        raise SchemaParseError(schema_path, "circular 'extends' chain detected")
+    visited = visited | {real_path}
+
+    raw = load_toml_schema(schema_path)
+    extends = raw.pop("extends", None)
+
+    provenance: Dict[str, str] = {}
+    if extends:
+        base_refs = [extends] if isinstance(extends, str) else list(extends)
+        base_dir = os.path.dirname(schema_path) or "."
+        for base_ref in base_refs:
+            base_path = _ensure_within_project(
+                os.path.normpath(os.path.join(base_dir, base_ref)),
+                f"'extends' reference in '{schema_path}'",
+            )
+            if not os.path.exists(base_path):
+                raise SchemaNotFoundError(
+                    f"'{schema_path}' extends '{base_path}', which doesn't exist. "
+                    f"Fix the 'extends' path in {schema_path}, or create the missing file."
+                )
+            provenance.update(resolve_field_provenance(base_path, _visited=visited))
+
+    provenance.update({key: schema_path for key in raw.keys()})
+    return provenance
+
+
 def get_services() -> Dict[str, Dict[str, Any]]:
     """
     Returns the services defined in envshield.yml, or an empty dict if the
