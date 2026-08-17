@@ -169,7 +169,20 @@ def _requiredness_state(field_schema: Dict[str, Any]) -> str:
 
 
 def _classify_added(key: str, field_schema: Dict[str, Any]) -> ContractChange:
-    if _requiredness_state(field_schema) == "conditional":
+    state = _requiredness_state(field_schema)
+    if state == "defaulted":
+        return ContractChange(
+            variable=key,
+            category="non_breaking",
+            description=(
+                f"'{key}' was added with a default value -- never required "
+                "(is_required_now returns False unconditionally whenever a "
+                "defaultValue is present), so every config valid before is "
+                "still valid."
+            ),
+            detail={"added": True},
+        )
+    if state == "conditional":
         return ContractChange(
             variable=key,
             category="informational",

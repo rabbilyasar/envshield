@@ -6,8 +6,19 @@ import re
 from typing import Any
 
 from . import schema_types
+from .importer import PUBLIC_KEY_PREFIXES
 
 SUPPORTED_LANGUAGES = ("python", "typescript")
+
+
+def _is_client_var(key: str) -> bool:
+    """
+    True for a variable named under a bundler's public-var convention
+    (VITE_, NEXT_PUBLIC_, ...) -- these are inlined into the client bundle
+    at build time and read from `import.meta.env`, never `process.env`,
+    regardless of what a Node-oriented schema's other variables use.
+    """
+    return key.upper().startswith(PUBLIC_KEY_PREFIXES)
 
 # --- Python (pydantic-settings) ---
 
@@ -314,37 +325,61 @@ def _render_ts_field(key: str, details: dict[str, Any]) -> str:
     return f"{comment}  {json.dumps(key)}: {zod_type},"
 
 
+def _build_zod_object(schema: dict[str, Any], keys: list[str]) -> str:
+    field_lines = [_render_ts_field(key, schema[key]) for key in keys]
+    return "z.object({\n" + "\n".join(field_lines) + "\n})"
+
+
 def _generate_typescript(schema: dict[str, Any]) -> str:
     """
     Renders a schema dict into a zod-validated TypeScript module. Secret variables
     are wrapped in a local `Secret<T>` type so their values are masked wherever
     they'd otherwise leak (`console.log`, template strings, `JSON.stringify`).
+
+    A schema can legitimately mix server-only variables (read via
+    `process.env`, e.g. a shared full-stack app's `DATABASE_URL`) with
+    bundler-public client variables (read via `import.meta.env`, e.g.
+    `VITE_PUBLIC_ANALYTICS_ID`) -- the two are validated against separate
+    zod objects, parsed from their own correct global, and merged into one
+    `env` export. A schema with no client vars renders identically to
+    before this split existed.
     """
     lines = [_TS_HEADER]
 
     if not schema:
         lines.append("const _schema = z.object({});")
-    else:
-        field_lines = [
-            _render_ts_field(key, details) for key, details in schema.items()
-        ]
-        lines.append("const _schema = z.object({\n" + "\n".join(field_lines) + "\n});")
+        lines.extend(["", "const _parsed = _schema.parse(process.env);", ""])
+        lines.append("export const env = _parsed;")
+        lines.append("")
+        return "\n".join(lines)
 
-    lines.extend(["", "const _parsed = _schema.parse(process.env);", ""])
+    client_keys = [key for key in schema if _is_client_var(key)]
+    client_key_set = set(client_keys)
+    server_keys = [key for key in schema if key not in client_key_set]
+
+    if server_keys:
+        lines.append(f"const _schema = {_build_zod_object(schema, server_keys)};")
+        lines.extend(["", "const _parsed = _schema.parse(process.env);", ""])
+    if client_keys:
+        lines.append(
+            "// Bundler-public vars (VITE_, NEXT_PUBLIC_, ...) -- inlined into the\n"
+            "// client bundle at build time, read from import.meta.env rather than\n"
+            "// process.env.\n"
+            f"const _clientSchema = {_build_zod_object(schema, client_keys)};"
+        )
+        lines.extend(["", "const _clientParsed = _clientSchema.parse(import.meta.env);", ""])
 
     secret_keys = {key for key, details in schema.items() if details.get("secret")}
     export_lines = []
     for key in schema:
         prop = json.dumps(key)
+        source = "_clientParsed" if key in client_key_set else "_parsed"
         if key in secret_keys:
-            export_lines.append(f"  {prop}: new Secret(_parsed[{prop}]),")
+            export_lines.append(f"  {prop}: new Secret({source}[{prop}]),")
         else:
-            export_lines.append(f"  {prop}: _parsed[{prop}],")
+            export_lines.append(f"  {prop}: {source}[{prop}],")
 
-    if export_lines:
-        lines.append("export const env = {\n" + "\n".join(export_lines) + "\n};")
-    else:
-        lines.append("export const env = _parsed;")
+    lines.append("export const env = {\n" + "\n".join(export_lines) + "\n};")
     lines.append("")
 
     return "\n".join(lines)
