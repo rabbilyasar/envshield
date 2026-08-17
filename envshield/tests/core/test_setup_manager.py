@@ -507,8 +507,11 @@ class TestNewLocalFilesGetRestrictivePermissions:
     used to inherit whatever the process umask produced instead of being
     explicitly restricted -- landing world-readable (0644) on a
     permissive-umask or shared multi-user host. Both writers must
-    guarantee 0600 for a genuinely new file, regardless of umask, while
-    never touching the permissions of a file that already exists there.
+    guarantee 0600 for a genuinely new file, regardless of umask -- and,
+    per the follow-up fix below, must also tighten a pre-existing file's
+    permissions whenever they write into it, since a hand-created or
+    otherwise loosely-permissioned '.env'/config module is exactly the
+    common case in an existing-project onboarding.
     """
 
     def test_dotenv_writer_creates_a_fresh_file_as_0600(self, tmp_path):
@@ -527,17 +530,38 @@ class TestNewLocalFilesGetRestrictivePermissions:
 
         assert stat.S_IMODE(os.stat(target).st_mode) == 0o600
 
-    def test_dotenv_writer_does_not_widen_permissions_of_an_existing_file(
-        self, tmp_path
-    ):
+    def test_dotenv_writer_tightens_permissions_of_a_pre_existing_file(self, tmp_path):
         target = tmp_path / ".env"
         target.write_text("OLD=value\n")
         os.chmod(target, 0o644)
 
         setup_manager._write_dotenv_local_file(str(target), {"API_KEY": "abc123"})
 
-        # Regenerating an existing file is documented, intentional
-        # behavior (see _write_dotenv_local_file's own docstring) --
-        # P1-1 only changes what permissions a *new* file gets, not
-        # whether an existing one's permissions get silently narrowed.
-        assert stat.S_IMODE(os.stat(target).st_mode) == 0o644
+        # open_new_secret_file's 0600 guarantee only applies to a file it
+        # actually creates (POSIX open() semantics), which would otherwise
+        # leave a pre-existing, loosely-permissioned '.env' (e.g. hand-
+        # created before EnvShield was ever introduced to a project)
+        # untouched even though this function fully regenerates its
+        # content -- _write_dotenv_local_file takes explicit responsibility
+        # for the permission outcome itself instead of relying on that.
+        assert stat.S_IMODE(os.stat(target).st_mode) == 0o600
+
+    def test_python_writer_tightens_permissions_when_patching_an_existing_file(
+        self, tmp_path
+    ):
+        """
+        Covers the *other* real writer path: _write_python_local_file's
+        patch-an-existing-file branch (via file_updater.update_variables_in_file)
+        is a separate code path from the fresh-file branch above and was not
+        covered by open_new_secret_file's guarantee at all, since it never
+        calls it.
+        """
+        target = tmp_path / "config.py"
+        target.write_text("API_KEY = ''\n")
+        os.chmod(target, 0o644)
+
+        setup_manager._write_python_local_file(
+            str(target), {"API_KEY": "abc123"}, prompted_keys=["API_KEY"]
+        )
+
+        assert stat.S_IMODE(os.stat(target).st_mode) == 0o600

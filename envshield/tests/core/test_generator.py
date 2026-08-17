@@ -121,6 +121,50 @@ def test_generate_typescript_infers_types_from_default_values():
     assert 'new Secret(_parsed["LOG_LEVEL"])' not in content
 
 
+def test_generate_typescript_reads_bundler_public_vars_from_import_meta_env():
+    """
+    Regression: a Vite/Next/CRA-style bundler-public variable is inlined
+    into the client bundle at build time and is only ever available via
+    `import.meta.env`, never `process.env` -- the generator used to emit a
+    single schema parsed unconditionally against `process.env` for every
+    field, which would throw at import time in real browser/Vite client
+    code for a var like VITE_PUBLIC_ANALYTICS_ID.
+    """
+    schema = {
+        "DATABASE_URL": {"description": "DB connection string.", "secret": True},
+        "VITE_PUBLIC_ANALYTICS_ID": {
+            "description": "Client-side analytics ID.",
+            "secret": False,
+        },
+    }
+
+    content = generator.generate_config(schema, lang="typescript")
+
+    assert "const _parsed = _schema.parse(process.env);" in content
+    assert (
+        "const _clientParsed = _clientSchema.parse(import.meta.env);" in content
+    )
+    # The server-only schema must not declare the client var, and vice versa.
+    assert '"DATABASE_URL": z.string().min(1),' in content
+    assert '"VITE_PUBLIC_ANALYTICS_ID": z.string().min(1),' in content
+    assert '"DATABASE_URL": new Secret(_parsed["DATABASE_URL"]),' in content
+    assert (
+        '"VITE_PUBLIC_ANALYTICS_ID": _clientParsed["VITE_PUBLIC_ANALYTICS_ID"],'
+        in content
+    )
+
+
+def test_generate_typescript_schema_with_no_public_vars_is_unaffected():
+    """A schema with no bundler-public vars renders exactly as before this split existed -- no _clientSchema/_clientParsed at all."""
+    schema = {"DATABASE_URL": {"description": "DB connection string.", "secret": True}}
+
+    content = generator.generate_config(schema, lang="typescript")
+
+    assert "_clientSchema" not in content
+    assert "_clientParsed" not in content
+    assert "import.meta.env" not in content
+
+
 def test_generate_config_explicit_enum_type_python():
     schema = {
         "LOG_LEVEL": {

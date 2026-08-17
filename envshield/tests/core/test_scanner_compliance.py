@@ -978,3 +978,75 @@ class TestJsTsDiscoveryViaScanner:
 
         assert undeclared == []
         assert len(secrets) == 1
+
+
+class TestDatabaseConnectionStringPatternCoversPostgresql:
+    """
+    Regression coverage for a P0 finding: the pattern used to match only
+    the bare 'postgres://' scheme. 'postgresql://' -- the scheme
+    SQLAlchemy, Django, and psycopg all require -- silently fell through to
+    no match at all, meaning a real embedded-credential connection string
+    using the single most common real-world scheme was never recognized as
+    secret-shaped by value. This matters beyond scan() itself: import/init's
+    _classify_variable (envshield/core/importer.py) checks the exact same
+    SECRET_PATTERNS list before falling back to a name-keyword heuristic,
+    so this same gap let a real password get written as a schema
+    defaultValue -- see test_importer.py's companion regression test.
+    """
+
+    def test_postgresql_scheme_with_embedded_credentials_is_secret_shaped(self):
+        value = "postgresql://appuser:sup3rsecret@db.internal.prod:5432/appdb"
+        matched = any(
+            re.search(p["pattern"], value) for p in scanner.SECRET_PATTERNS
+        )
+        assert matched
+
+    def test_bare_postgres_scheme_still_matches(self):
+        """Guards against a fix that narrows the pattern instead of widening it."""
+        value = "postgres://appuser:sup3rsecret@db.internal.prod:5432/appdb"
+        matched = any(
+            re.search(p["pattern"], value) for p in scanner.SECRET_PATTERNS
+        )
+        assert matched
+
+    def test_postgresql_url_with_no_credentials_does_not_false_positive(self):
+        """A connection string with no embedded user:pass is not secret-shaped by this pattern."""
+        value = "postgresql://db.internal.prod:5432/appdb"
+        matched = any(
+            re.search(p["pattern"], value) for p in scanner.SECRET_PATTERNS
+        )
+        assert not matched
+
+
+class TestDsnStyleUrlWithEmbeddedApiKeyIsCaught:
+    """
+    Regression: a single-token DSN-style URL (a Sentry DSN's real shape --
+    a long generated key directly before '@', no ':pass' pair) fell through
+    both the Database Connection String pattern above (which requires a
+    user:pass PAIR) and importer.py's DATABASE_URL/SENTRY_DSN name-keyword
+    heuristic, confirmed via real onboarding testing to let a real key get
+    written as a schema defaultValue into both env.schema.toml AND the
+    committed .env.example template.
+    """
+
+    def test_realistic_sentry_dsn_shape_is_secret_shaped(self):
+        value = "https://a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6@o123456.ingest.sentry.io/7890123"
+        matched = any(
+            re.search(p["pattern"], value) for p in scanner.SECRET_PATTERNS
+        )
+        assert matched
+
+    def test_ordinary_url_with_a_short_username_does_not_false_positive(self):
+        """A short, human-readable username (e.g. a git remote's 'user@host') is not secret-shaped."""
+        value = "https://git@github.com/example/repo.git"
+        matched = any(
+            re.search(p["pattern"], value) for p in scanner.SECRET_PATTERNS
+        )
+        assert not matched
+
+    def test_url_with_no_userinfo_segment_does_not_false_positive(self):
+        value = "https://o123456.ingest.sentry.io/7890123"
+        matched = any(
+            re.search(p["pattern"], value) for p in scanner.SECRET_PATTERNS
+        )
+        assert not matched

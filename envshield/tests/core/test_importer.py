@@ -235,8 +235,12 @@ def test_generate_schema_from_file_includes_inferred_types(tmp_path):
     assert "type" not in schema["LOG_LEVEL"]
 
 
-def test_generate_schema_from_file_does_not_infer_a_type_for_secrets(tmp_path):
-    """A secret's value shape (e.g. a URL-shaped connection string) must never drive a non-secret type constraint."""
+def test_generate_schema_from_file_still_infers_a_type_for_secrets(tmp_path):
+    """A secret still gets a shape constraint (e.g. type = "url") from its
+    sample value -- inferring type never exposes the value itself, only its
+    shape, so a secret field isn't left with zero validation. defaultValue
+    is the one field that would actually leak the value, and that must
+    still never be set for a secret."""
     env_file = tmp_path / ".env"
     env_file.write_text("DATABASE_URL=postgres://user:pass@localhost/db\n")
 
@@ -244,7 +248,30 @@ def test_generate_schema_from_file_does_not_infer_a_type_for_secrets(tmp_path):
     schema = toml.loads(schema_content)
 
     assert schema["DATABASE_URL"]["secret"] is True
-    assert "type" not in schema["DATABASE_URL"]
+    assert schema["DATABASE_URL"]["type"] == "url"
+    assert "defaultValue" not in schema["DATABASE_URL"]
+
+
+def test_generate_schema_from_file_does_not_leak_a_postgresql_password(tmp_path):
+    """
+    P0 regression: a real embedded-credential 'postgresql://' connection
+    string (the SQLAlchemy/Django/psycopg scheme, as opposed to the shorter
+    'postgres://') used to fall through both the SECRET_PATTERNS value
+    check and the DATABASE_URL name-keyword heuristic, getting classified
+    non-secret with its literal password written into the generated schema
+    as defaultValue -- a file explicitly designed to be committed to git.
+    """
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "DATABASE_URL=postgresql://appuser:sup3rsecret@db.internal.prod:5432/appdb\n"
+    )
+
+    schema_content = importer.generate_schema_from_file(str(env_file))
+    schema = toml.loads(schema_content)
+
+    assert schema["DATABASE_URL"]["secret"] is True
+    assert "sup3rsecret" not in schema_content
+    assert "defaultValue" not in schema["DATABASE_URL"]
 
 
 def test_generate_schema_from_file_interactive_overrides_existing_declaration_for_a_rescanned_var(
@@ -319,6 +346,27 @@ def test_merge_variables_from_other_sources_adds_only_new_keys(tmp_path):
     assert schema_dict["SECRET_KEY"] == {"description": "x", "secret": True}
     assert schema_dict["LOG_LEVEL"]["defaultValue"] == "info"
     assert schema_dict["DEBUG"]["type"] == "bool"
+
+
+def test_generate_schema_from_file_does_not_leak_a_sentry_style_dsn(tmp_path):
+    """
+    Regression, confirmed via real onboarding testing: a DSN-style value
+    (a single long key before '@', no ':pass' pair -- e.g. a real Sentry
+    DSN) used to fall through both the SECRET_PATTERNS value check and the
+    SENTRY_DSN name-keyword heuristic, getting classified non-secret with
+    the literal key written into the generated schema as defaultValue.
+    """
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "SENTRY_DSN=https://a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6@o123456.ingest.sentry.io/7890123\n"
+    )
+
+    schema_content = importer.generate_schema_from_file(str(env_file))
+    schema = toml.loads(schema_content)
+
+    assert schema["SENTRY_DSN"]["secret"] is True
+    assert "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6" not in schema_content
+    assert "defaultValue" not in schema["SENTRY_DSN"]
 
 
 def test_merge_variables_from_other_sources_no_op_when_nothing_new(tmp_path):

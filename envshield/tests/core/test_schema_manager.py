@@ -121,6 +121,40 @@ def test_sync_schema_generates_perfect_file(mocker, tmp_path):
         assert expected_content in content
 
 
+def test_sync_schema_warns_before_replacing_pre_existing_non_envshield_example(
+    mocker, tmp_path, capsys
+):
+    """
+    Regression, confirmed via real onboarding testing: sync_schema's
+    dotenv branch always fully regenerates '.env.example' by design (see
+    its own docstring -- it's a pure generated artifact), but a
+    pre-existing file that predates EnvShield (no prior EnvShield header)
+    used to be replaced with zero signal that hand-written content
+    (comments, an intentionally-kept extra variable) was about to be lost.
+    A file EnvShield already owns from a prior run should not re-warn on
+    every subsequent sync.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path) as td:
+        schema_data = {"DATABASE_URL": {"description": "DB URL", "secret": True}}
+        mocker.patch("envshield.config.manager.load_schema", return_value=schema_data)
+        config_manager.add_service("app", SCHEMA_FILE_NAME)
+
+        output_file = os.path.join(td, ".env.example")
+        with open(output_file, "w") as f:
+            f.write("# hand-written comment\nDATABASE_URL=\nOLD_FLAG=\n")
+
+        schema_manager.sync_schema(service_name="app")
+
+        warning = capsys.readouterr().out
+        assert "already existed" in warning
+        assert "will be replaced" in warning
+
+        # A second sync against the now-EnvShield-owned file must not warn again.
+        capsys.readouterr()
+        schema_manager.sync_schema(service_name="app")
+        assert "already existed" not in capsys.readouterr().out
+
+
 def test_sync_schema_scopes_env_example_to_service_directory(tmp_path, monkeypatch):
     """
     Regression: multiple services syncing from the repo root used to all
@@ -233,6 +267,28 @@ def test_diff_against_schema_reports_clean_result():
 
     assert diff.is_clean is True
     assert diff.summary() == ""
+
+
+def test_diff_against_schema_does_not_flag_an_unresolved_value_as_invalid():
+    """
+    Regression, part of the DI-2 fix: a value a parser can't statically
+    know (BaseParser.UNRESOLVED_VALUE -- an env_file reference, a bare
+    shell pass-through, a Kubernetes secretRef, or an unresolvable Compose
+    interpolation) must never be validated against a declared type/enum/
+    pattern -- the placeholder string itself would fail any real
+    constraint, misreporting a legitimately-unknown value as invalid
+    every time a manifest used one of these forms for a typed variable.
+    """
+    from envshield.parsers._base import BaseParser
+
+    schema = {"API_BASE_URL": {"description": "x", "type": "url"}}
+
+    diff = schema_manager.diff_against_schema(
+        schema, {"API_BASE_URL": BaseParser.UNRESOLVED_VALUE}
+    )
+
+    assert diff.is_clean is True
+    assert diff.invalid == {}
 
 
 def test_diff_against_schema_flags_defaulted_vars_missing_from_local():
@@ -429,6 +485,36 @@ def test_check_schema_against_docker_compose_file(mocker, tmp_path):
 
         # REDIS_URL is genuinely missing from the manifest.
         assert is_in_sync is False
+
+
+def test_check_schema_against_docker_compose_with_interpolated_values(
+    mocker, tmp_path
+):
+    """
+    End-to-end DI-2 regression, reproducing exactly the false positive
+    found against a real multi-service project: a Compose file using
+    '${VAR:-default}' interpolation for a typed variable used to fail
+    validation against the literal, un-interpolated template text.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        mocker.patch(
+            "envshield.config.manager.load_schema",
+            return_value={"API_BASE_URL": {"type": "url"}},
+        )
+        with open("docker-compose.yml", "w") as f:
+            f.write(
+                "services:\n"
+                "  frontend:\n"
+                "    image: myorg/frontend\n"
+                "    environment:\n"
+                "      - API_BASE_URL=${API_BASE_URL:-https://api.internal}\n"
+            )
+
+        is_in_sync = schema_manager.check_schema(
+            "docker-compose.yml", service_name="app"
+        )
+
+        assert is_in_sync is True
 
 
 def test_check_schema_against_docker_compose_requires_container_when_ambiguous(

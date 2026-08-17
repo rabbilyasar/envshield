@@ -66,6 +66,27 @@ def test_dotenv_parser_strips_surrounding_quotes(mocker):
     }
 
 
+def test_dotenv_parser_strips_a_leading_quote_with_no_matching_close(mocker):
+    """
+    Regression: an unterminated quote (SECRET_KEY="abc, never closed) used
+    to fall through the matched-pair check above and be returned with the
+    leading quote character baked into the value as if it were real
+    content -- corrupting the value (a secret's actual value would then
+    silently differ from whatever every command validates against it,
+    with 'check' still reporting the file as perfectly in sync).
+    """
+    mock_file_content = 'SECRET_KEY="unterminatedvalue\nOTHER=fine\n'
+    mocker.patch("builtins.open", mocker.mock_open(read_data=mock_file_content))
+    mocker.patch("os.path.exists", return_value=True)
+
+    parser = DotenvParser()
+    variables = parser.get_vars("dummy/path/.env", get_values=True)
+
+    assert variables["SECRET_KEY"] == "unterminatedvalue"
+    assert not variables["SECRET_KEY"].startswith('"')
+    assert variables["OTHER"] == "fine"
+
+
 def test_dotenv_parser_handles_export_prefix(mocker):
     """
     Regression: shell-style '.env'/'.envrc' files often prefix declarations

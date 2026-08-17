@@ -18,16 +18,17 @@ class TestAddedVariables:
         assert change.category == "breaking"
         assert result.has_breaking_changes is True
 
-    def test_new_variable_with_a_default_is_still_breaking(self):
-        """A defaulted field still must be present per should_be_present's
-        current rule -- a default doesn't exempt it from the breaking
-        classification the way it might naively seem to."""
+    def test_new_variable_with_a_default_is_non_breaking(self):
+        """A defaulted field is never required (is_required_now returns
+        False unconditionally whenever defaultValue is present, matching
+        _requiredness_state's 'defaulted' state) -- adding one can't
+        invalidate any config that was valid before."""
         result = contract_diff.diff_schemas(
             {}, {"NEW": {"description": "x", "defaultValue": "y"}}
         )
 
         change = _change_for(result, "NEW")
-        assert change.category == "breaking"
+        assert change.category == "non_breaking"
 
     def test_new_conditionally_required_variable_is_informational_not_breaking(self):
         result = contract_diff.diff_schemas(
