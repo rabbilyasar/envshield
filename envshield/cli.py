@@ -128,7 +128,16 @@ def init(
         help="Overwrite existing EnvShield configuration files.",
     ),
 ):
-    """Initializes EnvShield -- builds env.schema.toml from your real config if one is found, otherwise a framework-aware template."""
+    """Initializes EnvShield -- builds env.schema.toml from your real config if one is found, otherwise a framework-aware template.
+
+    Whole-project setup: also writes envshield.yml, registers a deployment
+    manifest if one is found, updates .gitignore, and offers to install Git
+    hooks. Use this whenever 'envshield.yml' doesn't exist yet -- including
+    on an already-existing project, since it detects and imports real
+    config the same way 'import' does. For re-deriving a single already-
+    registered service's schema only (no project-wide setup), use
+    'envshield import' instead.
+    """
     console.print(
         Panel(
             "[bold cyan]Welcome to EnvShield! Setting up your secure foundation...[/bold cyan]",
@@ -1595,7 +1604,15 @@ def import_command(
         help="If set, import to this service's schema path (for multi-service projects).",
     ),
 ):
-    """Generates an env.schema.toml from an existing .env file."""
+    """Generates an env.schema.toml from an existing .env file.
+
+    Narrower than 'init': only (re)writes one schema, from one file --
+    no envshield.yml, .gitignore, or hook changes. Use this to refresh an
+    already-registered service's schema from a changed config file. If
+    'envshield.yml' doesn't exist yet for this project at all, use
+    'envshield init' instead -- it does the whole-project setup 'import'
+    intentionally skips.
+    """
     try:
         if service:
             service_manager.resolve_service(service, invocation_dir=INVOCATION_DIR)
