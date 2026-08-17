@@ -1,11 +1,21 @@
 # envshield/parsers/_docker_compose.py
 import os
+import re
 
 import yaml
 
 from ..core.exceptions import EnvShieldException
 from ._base import BaseParser
 from ._dotenv import DotenvParser
+
+# Matches a value that is ENTIRELY one Compose variable-substitution
+# reference -- '${VAR}' or '${VAR:-default}'. A reference embedded inside a
+# larger string ('prefix-${VAR}-suffix') is intentionally left as literal
+# text: resolving a partial substitution would require modeling Compose's
+# full shell-style expansion grammar, which is out of scope here. The
+# common real-world case -- the whole value is one reference, e.g.
+# 'DB_PORT=${DB_PORT:-3307}' -- is what this closes.
+_INTERPOLATION_RE = re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)(:-(.*))?\}$")
 
 
 class DockerComposeParser(BaseParser):
@@ -22,8 +32,6 @@ class DockerComposeParser(BaseParser):
     missing or blank, since the real value legitimately lives outside this
     file.
     """
-
-    UNRESOLVED_VALUE = "<value not visible in this file>"
 
     def __init__(self, container: str | None = None, prefer: str | None = None):
         self.container = container
@@ -83,16 +91,32 @@ class DockerComposeParser(BaseParser):
         environment = service_def.get("environment")
         if isinstance(environment, dict):
             for key, value in environment.items():
-                variables[key] = (
-                    str(value) if value is not None else self.UNRESOLVED_VALUE
-                )
+                raw = str(value) if value is not None else self.UNRESOLVED_VALUE
+                variables[key] = self._resolve_interpolation(raw)
         elif isinstance(environment, list):
             for entry in environment:
                 entry = str(entry)
                 if "=" in entry:
                     key, value = entry.split("=", 1)
-                    variables[key.strip()] = value
+                    variables[key.strip()] = self._resolve_interpolation(value)
                 else:
                     variables[entry.strip()] = self.UNRESOLVED_VALUE
 
         return variables if get_values else set(variables.keys())
+
+    def _resolve_interpolation(self, value: str) -> str:
+        """
+        Resolves a value that is entirely one '${VAR}'/'${VAR:-default}'
+        Compose variable-substitution reference. With a fallback, the
+        fallback is the value this container actually receives absent a
+        real shell environment -- the same reasoning schema.defaultValue
+        already uses elsewhere. Without one, the real value legitimately
+        lives outside this file, so it's reported the same way as any other
+        statically-unknowable value (see UNRESOLVED_VALUE) rather than as
+        the literal, un-interpolated template text.
+        """
+        match = _INTERPOLATION_RE.match(value.strip())
+        if not match:
+            return value
+        _var_name, has_default, default = match.groups()
+        return default if has_default else self.UNRESOLVED_VALUE

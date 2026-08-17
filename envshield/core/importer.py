@@ -175,7 +175,15 @@ def generate_schema_from_file(
 
     for key, value in variables.items():
         is_secret, default_value = _classify_variable(key, value)
-        inferred_type = None if is_secret else _infer_type(key, value)
+        # Inferring a type is safe regardless of secret status -- it only
+        # records the *shape* a valid value must have (e.g. type = "url"),
+        # never the value itself. defaultValue is the one field that would
+        # actually leak a secret's value, and that's already withheld
+        # below/via _classify_variable (a secret classification always
+        # returns default_value=None) -- so there's nothing this loses by
+        # inferring type unconditionally, and a secret field otherwise got
+        # zero shape validation at all.
+        inferred_type = _infer_type(key, value)
 
         if interactive:
             console.print(
@@ -193,8 +201,6 @@ def generate_schema_from_file(
                     default_value = value
                 else:
                     default_value = None
-            else:
-                inferred_type = None
 
         schema_dict[key] = {"description": "TODO: Add description."}
         if is_secret:
@@ -205,9 +211,9 @@ def generate_schema_from_file(
             if default_value is not None:
                 schema_dict[key]["defaultValue"] = default_value
                 defaults_found += 1
-            if inferred_type:
-                schema_dict[key]["type"] = inferred_type
-                types_found += 1
+        if inferred_type:
+            schema_dict[key]["type"] = inferred_type
+            types_found += 1
 
     preserved = 0
     if existing_schema:
@@ -287,15 +293,14 @@ def merge_variables_from_other_sources(
             if key in schema_dict:
                 continue
             is_secret, default_value = _classify_variable(key, value)
-            inferred_type = None if is_secret else _infer_type(key, value)
+            inferred_type = _infer_type(key, value)
 
             entry: Dict[str, Any] = {"description": "TODO: Add description."}
             entry["secret"] = is_secret
-            if not is_secret:
-                if default_value is not None:
-                    entry["defaultValue"] = default_value
-                if inferred_type:
-                    entry["type"] = inferred_type
+            if not is_secret and default_value is not None:
+                entry["defaultValue"] = default_value
+            if inferred_type:
+                entry["type"] = inferred_type
 
             schema_dict[key] = entry
             added.setdefault(path, []).append(key)

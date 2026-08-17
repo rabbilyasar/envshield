@@ -56,4 +56,18 @@ class DotenvParser(BaseParser):
         ):
             return raw_value[1:-1]
 
+        if raw_value[:1] in ("'", '"'):
+            # An opening quote with no matching close (e.g. SECRET_KEY="abc,
+            # never terminated) -- the two branches above only handle a
+            # correctly *matched* pair, so this would otherwise fall through
+            # to the plain-value path below and be returned with the
+            # leading quote character baked into it as if it were real
+            # content, corrupting the value (a secret's actual value would
+            # then differ from what every command validates against it,
+            # with nothing ever flagging the mismatch). Stripping the
+            # leading quote is the same best-effort correction already
+            # applied by the matched-pair case above, just without a
+            # trailing quote to also remove.
+            return raw_value[1:]
+
         return _INLINE_COMMENT_RE.sub("", raw_value).strip()

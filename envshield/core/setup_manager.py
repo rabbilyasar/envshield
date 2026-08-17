@@ -255,6 +255,15 @@ def _write_dotenv_local_file(local_file: str, final_vars: Dict[str, str]) -> Non
                     f.write(f'{key}="{safe_value}"\n')
                 else:
                     f.write(f"{key}={safe_value}\n")
+        # open_new_secret_file only guarantees 0600 when this call is what
+        # actually creates the file (POSIX open() semantics -- see its
+        # docstring); this function fully regenerates the file's content
+        # regardless of whether it pre-existed, so it takes equal
+        # responsibility for the file's permissions here rather than
+        # silently inheriting whatever an already-existing file happened to
+        # have (e.g. a hand-created '.env' from before EnvShield was ever
+        # introduced to the project).
+        os.chmod(local_file, 0o600)
         console.print(
             f"\n[bold green]✓ Successfully created your [magenta]{local_file}[/magenta] file![/bold green]"
         )
@@ -314,6 +323,12 @@ def _write_python_local_file(
 
     updates = [{"key": key, "value": final_vars[key]} for key in keys_needing_write]
     file_updater.update_variables_in_file(local_file, updates)
+    # update_variables_in_file is shared with schema_manager.sync_schema's
+    # non-secret '.env.example' template updates, so it can't unconditionally
+    # tighten permissions itself -- this call site is specifically patching a
+    # local secrets file, so it takes responsibility for 0600 here, the same
+    # way _write_dotenv_local_file does for its own write path.
+    os.chmod(local_file, 0o600)
     console.print(
         f"\n[bold green]✓ Updated [magenta]{local_file}[/magenta] with {len(updates)} value(s): {', '.join(sorted(keys_needing_write))}[/bold green]"
     )

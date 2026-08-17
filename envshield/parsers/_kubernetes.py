@@ -43,8 +43,6 @@ class KubernetesParser(BaseParser):
     presence check, not a content check).
     """
 
-    UNRESOLVED_VALUE = "<value not visible in this file>"
-
     def __init__(self, container: str | None = None, prefer: str | None = None):
         self.container = container
         # A soft hint (typically the --service name), tried only when the

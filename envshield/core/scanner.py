@@ -47,7 +47,27 @@ SECRET_PATTERNS: List[Dict[str, str]] = [
     },
     {
         "name": "Database Connection String",
-        "pattern": r"(?i)(postgres|mysql|mongodb(?:\+srv)?|redis)://[^:]+:[^@]+@",
+        # "postgres(?:ql)?" -- SQLAlchemy/Django/psycopg and most modern
+        # Python drivers require the "postgresql://" scheme specifically;
+        # "postgres://" alone (the shorter, older/node-style form) used to
+        # be the only variant this matched, silently missing the single most
+        # common real-world connection-string scheme.
+        "pattern": r"(?i)(postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis)://[^:]+:[^@]+@",
+    },
+    {
+        "name": "URL with Embedded API Key (DSN-style)",
+        # Generalizes the same "credential embedded in a URL's userinfo
+        # segment" concept above to a DSN-style URL that carries a single
+        # long token instead of a user:pass pair (e.g. a Sentry DSN:
+        # https://<32-hex-char key>@o123456.ingest.sentry.io/789). Confirmed
+        # via real onboarding testing: this shape fell through both this
+        # file's own patterns and importer.py's DATABASE_URL/SENTRY_DSN-
+        # style name-keyword heuristic, letting a real key get written as a
+        # schema defaultValue into both env.schema.toml and .env.example.
+        # The 20+ hex-char minimum is what keeps this from matching an
+        # ordinary 'https://user@host' URL, where the userinfo segment is a
+        # short, human-readable name rather than a generated token.
+        "pattern": r"(?i)https?://[0-9a-f]{20,64}@[a-z0-9.-]+\.[a-z]{2,}",
     },
     {
         "name": "AWS Access Key ID",

@@ -9,6 +9,7 @@ from rich.table import Table
 from envshield.config import manager as config_manager
 from envshield.core import file_updater, schema_types
 from envshield.core.exceptions import EnvShieldException
+from envshield.parsers._base import BaseParser
 from envshield.parsers.factory import get_parser
 
 console = Console()
@@ -106,7 +107,14 @@ def diff_against_schema(
 
     invalid: Dict[str, str] = {}
     for key, value in local_values.items():
-        if key in schema and value:
+        # A manifest parser reports a value it can't statically know (an
+        # env_file reference, a bare shell pass-through, a Kubernetes
+        # secretRef, an unresolvable interpolation) as BaseParser's shared
+        # UNRESOLVED_VALUE placeholder rather than as missing -- validating
+        # that placeholder string against a declared type/enum/pattern would
+        # otherwise always fail, misreporting a legitimately-unknown value
+        # as an invalid one.
+        if key in schema and value and value != BaseParser.UNRESOLVED_VALUE:
             error = schema_types.validate_value(value, schema[key])
             if error:
                 invalid[key] = error
@@ -326,13 +334,33 @@ def sync_schema(service_name: str) -> bool:
         body += f"{key}={safe_default}\n\n"
 
     old_body = None
+    pre_existing_non_envshield_content = False
     if os.path.exists(output_file):
         try:
             with open(output_file, "r") as f:
                 old_content = f.read()
+            # header_marker only appears in a file EnvShield itself wrote on
+            # a prior run -- its absence here means this call is about to
+            # wholesale-replace content that predates EnvShield ever
+            # touching this project (hand-authored comments, an orphaned
+            # variable kept for a reason, etc.), which is otherwise silent:
+            # the function is always allowed to overwrite (see this
+            # function's own docstring -- '.env.example' is a generated
+            # artifact by design), but the first such replacement deserves
+            # to be visible, not just inferable after the fact from the
+            # new file's own "DO NOT EDIT" header.
+            pre_existing_non_envshield_content = header_marker not in old_content
             old_body = old_content.split(header_marker, 1)[-1]
         except OSError:
             old_body = None
+
+    if pre_existing_non_envshield_content and old_body != body:
+        console.print(
+            f"[bold yellow]Note:[/bold yellow] '{output_file}' already existed "
+            "and will be replaced with a version generated from the schema -- "
+            "any hand-written content (comments, variables not in the schema) "
+            "will not be carried over."
+        )
 
     if old_body == body:
         console.print(f"[green]✓[/green] '{output_file}' is already up to date.")

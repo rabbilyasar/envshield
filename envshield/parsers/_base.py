@@ -11,6 +11,17 @@ class BaseParser(ABC):
     Ensures that every parser implements a 'get_vars' method.
     """
 
+    # Shared sentinel for "this variable is declared here, but its real
+    # value legitimately lives outside this file" -- an env_file reference,
+    # a bare pass-through-from-shell entry, a Kubernetes secretRef, or an
+    # unresolvable interpolation. Every parser that can produce this uses
+    # the exact same string (rather than each defining its own copy) so
+    # schema_manager.diff_against_schema can recognize it by identity and
+    # skip type/enum/pattern validation -- validating a placeholder string
+    # against a declared type would otherwise always fail, misreporting a
+    # legitimately-unknown value as an invalid one.
+    UNRESOLVED_VALUE = "<value not visible in this file>"
+
     @abstractmethod
     def get_vars(
         self, file_path: str, get_values: bool = False
