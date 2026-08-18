@@ -116,6 +116,54 @@ def test_parser_supports_mapping_style_environment(tmp_path):
     assert variables == {"FOO": "bar", "COUNT": "3"}
 
 
+def test_parser_raises_clean_error_for_multi_document_yaml(tmp_path):
+    """
+    yaml.safe_load only ever handles a single YAML document and raises
+    ComposerError (uncaught) if the file contains more than one
+    '---'-separated document -- must surface as a clean EnvShieldException,
+    not a raw YAML library crash.
+    """
+    f = tmp_path / "docker-compose.yml"
+    f.write_text(
+        "services:\n  api:\n    image: x\n---\nservices:\n  worker:\n    image: y\n"
+    )
+
+    with pytest.raises(EnvShieldException, match="multiple YAML documents"):
+        DockerComposeParser().get_vars(str(f))
+
+
+class TestEnvFileLongForm:
+    """
+    Regression coverage for the Compose Spec long-form 'env_file:' entry
+    ({path: ..., required: ...}), which used to crash with a TypeError from
+    os.path.join(base_dir, {"path": ...}) -- the loop assumed every entry
+    was a plain string.
+    """
+
+    def test_dict_entry_with_existing_file_loads_variables(self, tmp_path):
+        (tmp_path / ".env").write_text("FOO=bar\n")
+        f = tmp_path / "docker-compose.yml"
+        f.write_text(
+            "services:\n  api:\n    env_file:\n      - path: .env\n        required: true\n"
+        )
+
+        variables = DockerComposeParser().get_vars(str(f), get_values=True)
+
+        assert variables == {"FOO": "bar"}
+
+    def test_dict_entry_with_missing_optional_file_is_skipped_not_crashed(
+        self, tmp_path
+    ):
+        f = tmp_path / "docker-compose.yml"
+        f.write_text(
+            "services:\n  api:\n    env_file:\n      - path: .env.missing\n        required: false\n"
+        )
+
+        variables = DockerComposeParser().get_vars(str(f), get_values=True)
+
+        assert variables == {}
+
+
 class TestVariableInterpolation:
     """
     Regression coverage for DI-2: a value using Compose's own
@@ -167,9 +215,7 @@ class TestVariableInterpolation:
         assert variables["FLASK_APP"] == "app"
         assert variables["QUEUE_URL"] == DockerComposeParser.UNRESOLVED_VALUE
 
-    def test_embedded_reference_inside_a_larger_string_is_left_literal(
-        self, tmp_path
-    ):
+    def test_embedded_reference_inside_a_larger_string_is_left_literal(self, tmp_path):
         """
         Out of scope by design: resolving a partial reference embedded in a
         larger string would require modeling Compose's full shell-style

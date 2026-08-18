@@ -49,7 +49,14 @@ class DockerComposeParser(BaseParser):
             raise FileNotFoundError(f"File not found: {file_path}")
 
         with open(file_path, "r") as f:
-            doc = yaml.safe_load(f) or {}
+            try:
+                doc = yaml.safe_load(f) or {}
+            except yaml.YAMLError as e:
+                raise EnvShieldException(
+                    f"Could not parse '{file_path}': {e}. If this file contains "
+                    "multiple YAML documents ('---'-separated), only a single "
+                    "document is supported."
+                )
 
         services = doc.get("services") if isinstance(doc, dict) else None
         if not isinstance(services, dict) or not services:
@@ -79,6 +86,10 @@ class DockerComposeParser(BaseParser):
             if isinstance(env_files, str):
                 env_files = [env_files]
             for env_file in env_files:
+                if isinstance(env_file, dict):
+                    env_file = env_file.get("path")
+                if not env_file:
+                    continue
                 env_file_path = os.path.join(base_dir, env_file)
                 if os.path.exists(env_file_path):
                     try:
