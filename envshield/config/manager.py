@@ -303,6 +303,12 @@ def get_service_schema_path(service_name: str) -> Optional[str]:
         return _ensure_within_project(
             service_config["schema"], f"service '{service_name}' schema path"
         )
+    if isinstance(service_config, dict) and "path" in service_config:
+        raise SchemaNotFoundError(
+            f"Service '{service_name}' uses the legacy 'path:' key in "
+            "envshield.yml, which was renamed to 'schema:' in 4.5.0. "
+            "Rename it to 'schema:' to continue."
+        )
     return None
 
 

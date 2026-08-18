@@ -170,6 +170,34 @@ def test_get_service_schema_path_rejects_schema_path_escaping_project(
         config_manager.get_service_schema_path("api")
 
 
+def test_get_service_schema_path_reports_legacy_path_key_distinctly(
+    tmp_path, monkeypatch
+):
+    """
+    A pre-4.5.0 service entry uses 'path:' instead of 'schema:' (a breaking,
+    no-shim rename -- see CHANGELOG). Before this fix, get_service_schema_path
+    returned None for this case exactly as it would for a nonexistent
+    service, so load_schema's error read "Service 'api' not found...
+    Available: api" -- self-contradicting, since 'api' is right there in its
+    own available list.
+    """
+    monkeypatch.chdir(tmp_path)
+    with open("envshield.yml", "w") as f:
+        f.write("services:\n  api:\n    path: api/env.schema.toml\n")
+
+    with pytest.raises(SchemaNotFoundError, match="legacy 'path:' key"):
+        config_manager.get_service_schema_path("api")
+
+
+def test_load_schema_reports_legacy_path_key_distinctly(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with open("envshield.yml", "w") as f:
+        f.write("services:\n  api:\n    path: api/env.schema.toml\n")
+
+    with pytest.raises(SchemaNotFoundError, match="legacy 'path:' key"):
+        config_manager.load_schema("api")
+
+
 def test_add_service_rejects_schema_path_escaping_project(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
