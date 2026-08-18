@@ -30,7 +30,7 @@ class DotenvParser(BaseParser):
             raise FileNotFoundError(f"File not found: {file_path}")
 
         variables = {}
-        with open(file_path, "r") as f:
+        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
                 line = line.strip()
                 if not line or line.startswith("#"):

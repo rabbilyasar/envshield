@@ -115,6 +115,22 @@ def test_dotenv_parser_sad_path_file_not_found(mocker):
         parser.get_vars("non_existent_file.env")
 
 
+def test_dotenv_parser_handles_non_utf8_bytes_without_crashing(tmp_path):
+    """
+    Regression: a non-UTF-8 byte anywhere in the file used to raise
+    UnicodeDecodeError and abort the whole check/doctor/setup run --
+    variables elsewhere in the same file must still be discoverable.
+    """
+    env_file = tmp_path / ".env"
+    env_file.write_bytes(b"NAME=Caf\xe9\nOTHER=fine\n")
+
+    parser = DotenvParser()
+    variables = parser.get_vars(str(env_file), get_values=True)
+
+    assert variables["OTHER"] == "fine"
+    assert "NAME" in variables
+
+
 def test_dotenv_parser_sad_path_empty_file(mocker):
     """Tests that the parser returns an empty set for an empty file."""
     mocker.patch("builtins.open", mocker.mock_open(read_data=""))
