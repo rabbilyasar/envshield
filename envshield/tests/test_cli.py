@@ -748,9 +748,7 @@ def test_init_force_preserves_a_hand_corrected_secret_classification(tmp_path, m
         assert "secret = true" in content
 
 
-def test_init_merges_a_variable_only_present_in_another_config_source(
-    tmp_path, mocker
-):
+def test_init_merges_a_variable_only_present_in_another_config_source(tmp_path, mocker):
     """
     Real incident this reproduces: '.env' is (and stays) the pinned
     config_source, but 'config/settings.py' gains LOG_LEVEL that never
@@ -805,9 +803,7 @@ def test_init_force_offers_to_repin_once_the_recorded_source_is_envshield_genera
     with runner.isolated_filesystem(temp_dir=tmp_path):
         os.system("git init -q")
         mocker.patch("questionary.confirm").return_value.ask.return_value = True
-        mocker.patch(
-            "envshield.core.hooks_manager._is_interactive", return_value=True
-        )
+        mocker.patch("envshield.core.hooks_manager._is_interactive", return_value=True)
         with open(".env", "w") as f:
             f.write("SECRET_KEY=x\n")
         runner.invoke(app, ["init"])
@@ -840,9 +836,7 @@ def test_init_force_keeps_the_recorded_source_when_repin_prompt_is_declined(
     """Declining the repin prompt must keep reusing the recorded config_source -- no silent repin."""
     with runner.isolated_filesystem(temp_dir=tmp_path):
         os.system("git init -q")
-        mocker.patch(
-            "envshield.core.hooks_manager._is_interactive", return_value=True
-        )
+        mocker.patch("envshield.core.hooks_manager._is_interactive", return_value=True)
         with open(".env", "w") as f:
             f.write("SECRET_KEY=x\n")
         confirm = mocker.patch("questionary.confirm")
@@ -959,9 +953,7 @@ def test_init_warns_and_cancels_when_declining_a_detected_multi_service_layout(
     """
     with runner.isolated_filesystem(temp_dir=tmp_path):
         os.system("git init -q")
-        mocker.patch(
-            "envshield.core.hooks_manager._is_interactive", return_value=True
-        )
+        mocker.patch("envshield.core.hooks_manager._is_interactive", return_value=True)
         os.makedirs("api")
         with open("api/.env", "w") as f:
             f.write("API_KEY=abc\n")
@@ -983,9 +975,7 @@ def test_init_proceeds_with_generic_template_when_confirming_anyway(tmp_path, mo
     """Confirming 'continue anyway' still produces the generic fallback template, same as before this check existed."""
     with runner.isolated_filesystem(temp_dir=tmp_path):
         os.system("git init -q")
-        mocker.patch(
-            "envshield.core.hooks_manager._is_interactive", return_value=True
-        )
+        mocker.patch("envshield.core.hooks_manager._is_interactive", return_value=True)
         os.makedirs("api")
         with open("api/.env", "w") as f:
             f.write("API_KEY=abc\n")
@@ -1162,6 +1152,54 @@ def test_doctor_json_reports_structured_checks(tmp_path):
         assert "Configuration Files" in names
         assert "Local Environment Sync" in names
         assert "[bold" not in result.stdout
+
+
+def test_doctor_reports_legacy_path_key(tmp_path):
+    """
+    A pre-4.5.0 'path:' key (renamed to 'schema:' in 4.5.0, no shim) must be
+    flagged explicitly, not silently treated as if the service didn't exist.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.system("git init -q")
+        with open(CONFIG_FILE_NAME, "w") as f:
+            f.write("services:\n  api:\n    path: api/env.schema.toml\n")
+
+        result = runner.invoke(app, ["doctor", "--json"])
+
+        payload = json.loads(result.stdout)
+        checks = {c["name"]: c for c in payload["results"][0]["checks"]}
+        assert "Legacy Configuration Keys" in checks
+        assert checks["Legacy Configuration Keys"]["passed"] is False
+        assert "'path:' key" in checks["Legacy Configuration Keys"]["message"]
+
+
+def test_doctor_reports_legacy_deployment_manifest_key(tmp_path):
+    """
+    A pre-4.2.0 per-service 'deployment_manifest:' key is never read by
+    get_deployment_manifests (which only reads the top-level 'manifests:'
+    list) -- manifest validation for that service silently never runs.
+    doctor must surface this instead of staying silent.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.system("git init -q")
+        os.makedirs("api", exist_ok=True)
+        with open(CONFIG_FILE_NAME, "w") as f:
+            f.write(
+                "services:\n"
+                "  api:\n"
+                "    schema: api/env.schema.toml\n"
+                "    deployment_manifest: docker-compose.yml\n"
+            )
+        with open("api/env.schema.toml", "w") as f:
+            f.write('[API_KEY]\ndescription = "Test"\n')
+
+        result = runner.invoke(app, ["doctor", "--json", "--service", "api"])
+
+        payload = json.loads(result.stdout)
+        checks = {c["name"]: c for c in payload["results"][0]["checks"]}
+        assert "Legacy Configuration Keys" in checks
+        assert checks["Legacy Configuration Keys"]["passed"] is False
+        assert "deployment_manifest" in checks["Legacy Configuration Keys"]["message"]
 
 
 def test_doctor_json_and_fix_together_is_rejected(tmp_path):

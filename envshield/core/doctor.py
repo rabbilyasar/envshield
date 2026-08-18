@@ -248,6 +248,36 @@ def _check_config_source_drift(service_name: str):
     return True, "No variables found in other sources beyond what's already declared."
 
 
+def _check_legacy_configuration_keys(service_name: str):
+    """
+    Two breaking, no-shim renames (see CHANGELOG) left behind keys that are
+    now silently never read: a service still using 'path:' (pre-4.5.0,
+    renamed to 'schema:') or 'deployment_manifest:' (pre-4.2.0, moved to a
+    top-level 'manifests:' list) gets no error and no validation for
+    whatever depended on that key -- surfaced here rather than left silent.
+    """
+    services = config_manager.get_services()
+    service_config = services.get(service_name)
+    if not isinstance(service_config, dict):
+        return True, "No legacy configuration keys found."
+
+    issues = []
+    if "path" in service_config and "schema" not in service_config:
+        issues.append(
+            "uses the legacy 'path:' key -- rename it to 'schema:' in envshield.yml (renamed in 4.5.0)"
+        )
+    if "deployment_manifest" in service_config:
+        issues.append(
+            "uses the legacy per-service 'deployment_manifest:' key -- move it into a top-level "
+            "'manifests:' entry in envshield.yml (moved in 4.2.0); until then, no deployment "
+            "manifest is being validated for this service"
+        )
+
+    if issues:
+        return False, "; ".join(issues)
+    return True, "No legacy configuration keys found."
+
+
 def _check_config_source_reads_environment(service_name: str):
     """
     'check'/'doctor' can only ever compare '.env' against the schema --
@@ -338,6 +368,11 @@ def _build_checks(service_name: str) -> List[HealthCheck]:
             lambda: _check_config_files(service_name),
             fix_func=_run_init_fix,
             fix_description="No config found. Run 'envshield init' to create them?",
+        ),
+        HealthCheck(
+            "Legacy Configuration Keys",
+            lambda: _check_legacy_configuration_keys(service_name),
+            fix_func=None,
         ),
         HealthCheck(
             "Local Environment Sync",
