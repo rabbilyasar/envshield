@@ -109,7 +109,7 @@ def _discover_current_usages(
 class ManifestReference:
     path: str
     container: Optional[str]
-    status: str  # "declared" | "not_declared" | "error"
+    status: str  # "declared" | "not_declared" | "unresolved" | "error"
     detail: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
@@ -147,7 +147,17 @@ def _manifest_references(
                 )
             )
             continue
-        status = "declared" if variable in declared_vars else "not_declared"
+        if variable in declared_vars:
+            status = "declared"
+        elif parser.has_unresolved_source:
+            # Not found directly, but this manifest also references an
+            # external ConfigMap/Secret EnvShield can't inspect -- "not
+            # declared" would be a confident claim of absence this parser
+            # can't actually back up, the exact false negative this
+            # command's docstring already promises never to make.
+            status = "unresolved"
+        else:
+            status = "not_declared"
         references.append(
             ManifestReference(path=path, container=container, status=status)
         )

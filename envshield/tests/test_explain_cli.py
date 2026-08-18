@@ -164,6 +164,70 @@ class TestExplainNoEvidenceIsNotAbsenceProof:
             assert "Not found in any registered deployment manifest" in result.stdout
             assert "doesn't prove" in result.stdout
 
+    def test_manifest_with_unresolved_env_from_says_cannot_confirm_not_not_declared(
+        self, tmp_path
+    ):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            _write(
+                "envshield.yml",
+                "services:\n  api:\n    schema: env.schema.toml\n"
+                "manifests:\n  - file: deployment.yaml\n    containers:\n      api: api\n",
+            )
+            _write("env.schema.toml", '[DATABASE_URL]\ndescription = "x"\n')
+            _write(
+                "deployment.yaml",
+                "apiVersion: apps/v1\n"
+                "kind: Deployment\n"
+                "metadata:\n  name: api\n"
+                "spec:\n"
+                "  template:\n"
+                "    spec:\n"
+                "      containers:\n"
+                "        - name: api\n"
+                "          envFrom:\n"
+                "            - secretRef:\n"
+                "                name: externally-managed-secret\n",
+            )
+
+            result = runner.invoke(app, ["explain", "DATABASE_URL"])
+
+            assert "Cannot confirm" in result.stdout
+            assert (
+                "Not found in any registered deployment manifest" not in result.stdout
+            )
+
+    def test_manifest_with_unresolved_env_from_reports_unresolved_status_in_json(
+        self, tmp_path
+    ):
+        """Same fixture as the Rich test above, via --json -- both paths must agree."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            _write(
+                "envshield.yml",
+                "services:\n  api:\n    schema: env.schema.toml\n"
+                "manifests:\n  - file: deployment.yaml\n    containers:\n      api: api\n",
+            )
+            _write("env.schema.toml", '[DATABASE_URL]\ndescription = "x"\n')
+            _write(
+                "deployment.yaml",
+                "apiVersion: apps/v1\n"
+                "kind: Deployment\n"
+                "metadata:\n  name: api\n"
+                "spec:\n"
+                "  template:\n"
+                "    spec:\n"
+                "      containers:\n"
+                "        - name: api\n"
+                "          envFrom:\n"
+                "            - secretRef:\n"
+                "                name: externally-managed-secret\n",
+            )
+
+            result = runner.invoke(app, ["explain", "DATABASE_URL", "--json"])
+
+            payload = json.loads(result.stdout)
+            manifest_ref = payload["manifest_references"][0]
+            assert manifest_ref["status"] == "unresolved"
+
 
 class TestExplainJsonShape:
     def test_json_shape_is_evidence_oriented_and_stable(self, tmp_path):

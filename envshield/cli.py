@@ -614,17 +614,34 @@ def _render_explain_report(report: "explain.ExplainReport") -> None:
         console.print("  No deployment manifest registered for this service.")
     else:
         declared = [r for r in report.manifest_references if r.status == "declared"]
+        not_declared = [
+            r for r in report.manifest_references if r.status == "not_declared"
+        ]
+        unresolved = [r for r in report.manifest_references if r.status == "unresolved"]
         errored = [r for r in report.manifest_references if r.status == "error"]
         if declared:
             for ref in declared:
                 console.print(f"  {ref.path}")
                 if ref.container:
                     console.print(f"    container: {ref.container}")
-        else:
+        elif not_declared:
+            # Only claim "not found" when at least one manifest positively
+            # doesn't declare it -- printing this alongside "Cannot
+            # confirm" below (when every non-declared reference is
+            # actually unresolved) would read as EnvShield confidently
+            # asserting absence in the same breath it admits it can't
+            # tell.
             checked = ", ".join(r.path for r in report.manifest_references)
             console.print(
                 "  Not found in any registered deployment manifest "
                 f"(checked: {checked}) -- this doesn't prove it isn't deployed elsewhere."
+            )
+        if unresolved:
+            console.print(
+                f"  [yellow]Cannot confirm for {len(unresolved)} manifest(s): "
+                f"{', '.join(r.path for r in unresolved)} -- references an external "
+                f"ConfigMap/Secret not included in the manifest; '{report.variable}' "
+                "may be supplied from there.[/yellow]"
             )
         if errored:
             console.print(

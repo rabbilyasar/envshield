@@ -206,6 +206,41 @@ class TestManifestReferences:
 
         assert report.manifest_references[0].status == "not_declared"
 
+    def test_a_manifest_with_an_unresolved_env_from_is_unresolved_not_not_declared(
+        self, tmp_path, monkeypatch
+    ):
+        """
+        Regression, same root cause as the check/doctor fix: a Kubernetes
+        manifest referencing an external ConfigMap/Secret EnvShield can't
+        inspect must not be reported as 'not_declared' -- that's a
+        confident claim of absence this parser can't back up, exactly the
+        false negative this command's own docstring already promises
+        never to make.
+        """
+        monkeypatch.chdir(tmp_path)
+        _write_root_service()
+        config_manager.add_manifest("deployment.yaml", {"app": "app"})
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[DATABASE_URL]\ndescription = "x"\n')
+        with open("deployment.yaml", "w") as f:
+            f.write(
+                "apiVersion: apps/v1\n"
+                "kind: Deployment\n"
+                "metadata:\n  name: app\n"
+                "spec:\n"
+                "  template:\n"
+                "    spec:\n"
+                "      containers:\n"
+                "        - name: app\n"
+                "          envFrom:\n"
+                "            - secretRef:\n"
+                "                name: externally-managed-secret\n"
+            )
+
+        report = explain.build_report("DATABASE_URL", "app")
+
+        assert report.manifest_references[0].status == "unresolved"
+
     def test_no_manifests_registered_reports_an_empty_list(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         _write_root_service()
