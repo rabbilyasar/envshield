@@ -874,7 +874,7 @@ def _generate_pre_commit_hook_content() -> str:
         lines = [
             f"_ENVSHIELD_SCHEMA_PATH={shlex.quote(schema_path)}",
             f"_ENVSHIELD_SERVICE_NAME={shlex.quote(name)}",
-            'if git diff --cached --name-only | grep -qF "$_ENVSHIELD_SCHEMA_PATH"; then',
+            'if git diff --cached --name-only | grep -qxF "$_ENVSHIELD_SCHEMA_PATH"; then',
         ]
 
         # 'schema sync --check' below only ever reads the template off
@@ -892,7 +892,7 @@ def _generate_pre_commit_hook_content() -> str:
                 example_file = paths["example_file"]
                 lines.append(f"  _ENVSHIELD_EXAMPLE_FILE={shlex.quote(example_file)}")
                 lines.append(
-                    '  if git diff --name-only | grep -qF "$_ENVSHIELD_EXAMPLE_FILE"; then\n'
+                    '  if git diff --name-only | grep -qxF "$_ENVSHIELD_EXAMPLE_FILE"; then\n'
                     "    echo \"✗ '$_ENVSHIELD_EXAMPLE_FILE' has unstaged changes -- did you "
                     "forget 'git add' after running 'envshield schema sync'?\"\n"
                     "    STATUS=1\n"
@@ -1019,7 +1019,7 @@ def _generate_post_merge_hook_content() -> str:
     checks = "\n".join(
         f"_ENVSHIELD_SCHEMA_PATH={shlex.quote(schema_path)}\n"
         f"_ENVSHIELD_SERVICE_NAME={shlex.quote(name)}\n"
-        'if git diff --name-only HEAD@{1}..HEAD | grep -qF "$_ENVSHIELD_SCHEMA_PATH" 2>/dev/null; then\n'
+        'if git diff --name-only HEAD@{1}..HEAD | grep -qxF "$_ENVSHIELD_SCHEMA_PATH" 2>/dev/null; then\n'
         '  envshield doctor --service "$_ENVSHIELD_SERVICE_NAME" 2>/dev/null\n'
         "fi"
         for schema_path, name in schema_to_service.items()

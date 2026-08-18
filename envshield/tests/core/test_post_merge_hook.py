@@ -20,7 +20,7 @@ def _extract_if_blocks(hook_script: str) -> list[tuple[str, str, str]]:
     blocks = re.findall(
         r"_ENVSHIELD_SCHEMA_PATH=(\S+)\n"
         r"_ENVSHIELD_SERVICE_NAME=(\S+)\n"
-        r'if git diff --name-only HEAD@\{1\}\.\.HEAD \| grep -qF "\$_ENVSHIELD_SCHEMA_PATH" 2>/dev/null; then\n'
+        r'if git diff --name-only HEAD@\{1\}\.\.HEAD \| grep -qxF "\$_ENVSHIELD_SCHEMA_PATH" 2>/dev/null; then\n'
         r"(.*?)\nfi",
         hook_script,
     )
@@ -44,11 +44,11 @@ def test_post_merge_hook_grep_detects_its_own_services_schema_change(mocker):
     blocks = _extract_if_blocks(script)
 
     for pattern, _name, _body in blocks:
-        result = subprocess.run(f"echo '{pattern}' | grep -qF '{pattern}'", shell=True)
+        result = subprocess.run(f"echo '{pattern}' | grep -qxF '{pattern}'", shell=True)
         assert result.returncode == 0, f"expected {pattern} to match itself"
 
     result = subprocess.run(
-        "echo 'unrelated/file.py' | grep -qF 'services/api/env.schema.toml'",
+        "echo 'unrelated/file.py' | grep -qxF 'services/api/env.schema.toml'",
         shell=True,
     )
     assert result.returncode == 1
@@ -67,7 +67,7 @@ def test_post_merge_hook_grep_detects_change_single_service(mocker):
     pattern, name, _body = blocks[0]
     assert name == "app"
     result = subprocess.run(
-        f"echo 'env.schema.toml' | grep -qF '{pattern}'", shell=True
+        f"echo 'env.schema.toml' | grep -qxF '{pattern}'", shell=True
     )
     assert result.returncode == 0
 

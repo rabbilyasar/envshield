@@ -28,7 +28,7 @@ def _extract_if_blocks(hook_script: str) -> list[tuple[str, str, str]]:
     blocks = re.findall(
         r"_ENVSHIELD_SCHEMA_PATH=(\S+)\n"
         r"_ENVSHIELD_SERVICE_NAME=(\S+)\n"
-        r'if git diff --cached --name-only \| grep -qF "\$_ENVSHIELD_SCHEMA_PATH"; then\n'
+        r'if git diff --cached --name-only \| grep -qxF "\$_ENVSHIELD_SCHEMA_PATH"; then\n'
         r"(.*?)\n^fi$",
         hook_script,
         re.DOTALL | re.MULTILINE,
@@ -68,11 +68,11 @@ def test_pre_commit_hook_grep_detects_its_own_services_schema_change(mocker):
     blocks = _extract_if_blocks(script)
 
     for pattern, _name, _body in blocks:
-        result = subprocess.run(f"echo '{pattern}' | grep -qF '{pattern}'", shell=True)
+        result = subprocess.run(f"echo '{pattern}' | grep -qxF '{pattern}'", shell=True)
         assert result.returncode == 0, f"expected {pattern} to match itself"
 
     result = subprocess.run(
-        "echo 'unrelated/file.py' | grep -qF 'services/api/env.schema.toml'",
+        "echo 'unrelated/file.py' | grep -qxF 'services/api/env.schema.toml'",
         shell=True,
     )
     assert result.returncode == 1
@@ -184,7 +184,7 @@ def test_pre_commit_hook_flags_a_template_with_unstaged_changes_per_service(mock
     assert "services/api/.env.example" not in web_block
 
     result = subprocess.run(
-        "echo 'services/api/.env.example' | grep -qF 'services/api/.env.example'",
+        "echo 'services/api/.env.example' | grep -qxF 'services/api/.env.example'",
         shell=True,
     )
     assert result.returncode == 0
