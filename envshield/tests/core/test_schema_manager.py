@@ -363,6 +363,136 @@ def test_check_result_json_flags_defaulted_vars_missing_from_local(
     assert result["missing"] == ["LOG_LEVEL"]
 
 
+class TestUnresolvedSource:
+    """
+    Regression coverage for the Kubernetes envFrom external-reference gap:
+    a required variable this source's own unresolved envFrom reference
+    might supply must be reported as unresolved -- neither confidently
+    satisfied (it's not in local_values at all) nor confidently missing
+    (the reference could be supplying it right now).
+    """
+
+    def test_a_required_var_absent_with_an_unresolved_source_is_unresolved_not_missing(
+        self,
+    ):
+        """Requirement #5 and #6: not confidently satisfied, and not reported as definitely absent."""
+        schema = {"DATABASE_URL": {"description": "x"}}
+
+        diff = schema_manager.diff_against_schema(
+            schema, {}, has_unresolved_source=True
+        )
+
+        assert diff.is_clean is False  # not confidently satisfied
+        assert diff.missing == set()  # not reported as definitely absent
+        assert diff.unresolved == {"DATABASE_URL"}
+        assert "DATABASE_URL" in diff.summary()
+        assert "Missing" not in diff.summary()
+        assert "Cannot confirm" in diff.summary()
+
+    def test_the_same_scenario_without_an_unresolved_source_is_still_plain_missing(
+        self,
+    ):
+        """Default (has_unresolved_source=False) behavior is completely unaffected -- every other parser."""
+        schema = {"DATABASE_URL": {"description": "x"}}
+
+        diff = schema_manager.diff_against_schema(schema, {})
+
+        assert diff.missing == {"DATABASE_URL"}
+        assert diff.unresolved == set()
+
+    def test_a_variable_actually_present_is_not_marked_unresolved_even_with_an_unresolved_source(
+        self,
+    ):
+        """An unresolved reference elsewhere doesn't cast doubt on a variable EnvShield DOES see."""
+        schema = {"DATABASE_URL": {"description": "x"}}
+
+        diff = schema_manager.diff_against_schema(
+            schema, {"DATABASE_URL": "postgres://x"}, has_unresolved_source=True
+        )
+
+        assert diff.unresolved == set()
+        assert diff.is_clean is True
+
+    def test_unresolved_does_not_affect_blank_or_invalid_classification(self):
+        """A required var present but blank is still 'blank', not 'unresolved' -- EnvShield DOES know its state."""
+        schema = {"DATABASE_URL": {"description": "x"}}
+
+        diff = schema_manager.diff_against_schema(
+            schema, {"DATABASE_URL": ""}, has_unresolved_source=True
+        )
+
+        assert diff.blank == {"DATABASE_URL"}
+        assert diff.unresolved == set()
+
+
+def test_check_result_json_reports_unresolved_for_a_kubernetes_external_env_from(
+    tmp_path, monkeypatch
+):
+    """
+    End-to-end requirement #9: --json surfaces the same unresolved state
+    the Rich path does, via an additive 'unresolved' key.
+    """
+    monkeypatch.chdir(tmp_path)
+    config_manager.add_service("api", SCHEMA_FILE_NAME)
+    with open(SCHEMA_FILE_NAME, "w") as f:
+        f.write('[DATABASE_URL]\ndescription = "x"\n')
+    with open("deployment.yaml", "w") as f:
+        f.write(
+            "apiVersion: apps/v1\n"
+            "kind: Deployment\n"
+            "metadata:\n  name: api\n"
+            "spec:\n"
+            "  template:\n"
+            "    spec:\n"
+            "      containers:\n"
+            "        - name: api\n"
+            "          envFrom:\n"
+            "            - secretRef:\n"
+            "                name: externally-managed-secret\n"
+        )
+
+    result = schema_manager.check_result("deployment.yaml", service_name="api")
+
+    assert result["clean"] is False
+    assert result["unresolved"] == ["DATABASE_URL"]
+    assert result["missing"] == []
+
+
+def test_check_schema_rich_output_reports_cannot_confirm_not_missing(
+    tmp_path, monkeypatch, capsys
+):
+    """
+    End-to-end requirement #9: the Rich table path renders the same
+    unresolved state as the JSON path, via a distinct 'Cannot Confirm'
+    row rather than 'Missing in Local'.
+    """
+    monkeypatch.chdir(tmp_path)
+    config_manager.add_service("api", SCHEMA_FILE_NAME)
+    with open(SCHEMA_FILE_NAME, "w") as f:
+        f.write('[DATABASE_URL]\ndescription = "x"\n')
+    with open("deployment.yaml", "w") as f:
+        f.write(
+            "apiVersion: apps/v1\n"
+            "kind: Deployment\n"
+            "metadata:\n  name: api\n"
+            "spec:\n"
+            "  template:\n"
+            "    spec:\n"
+            "      containers:\n"
+            "        - name: api\n"
+            "          envFrom:\n"
+            "            - secretRef:\n"
+            "                name: externally-managed-secret\n"
+        )
+
+    is_in_sync = schema_manager.check_schema("deployment.yaml", service_name="api")
+
+    output = capsys.readouterr().out
+    assert is_in_sync is False
+    assert "Cannot Confirm" in output
+    assert "Missing in Local" not in output
+
+
 def test_diff_against_schema_reports_every_category():
     schema = {
         "MISSING": {"description": "x"},

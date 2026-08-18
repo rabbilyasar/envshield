@@ -129,6 +129,47 @@ def test_check_auto_validates_a_registered_deployment_manifest_too(tmp_path):
         assert "MANIFEST_ONLY" in result.stdout
 
 
+def test_doctor_reports_unresolved_for_a_kubernetes_manifest_with_an_external_env_from(
+    tmp_path,
+):
+    """
+    End-to-end: doctor's 'Deployment Manifest' check must surface the same
+    unresolved state check/check_result do, via the shared
+    diff_against_schema computation -- not report a clean pass, and not
+    claim the variable is definitely missing either.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_root_service()
+        config_manager.add_manifest("deployment.yaml", {"app": "app"})
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[DATABASE_URL]\ndescription = "x"\n')
+        with open(".env", "w") as f:
+            f.write("")
+        with open("deployment.yaml", "w") as f:
+            f.write(
+                "apiVersion: apps/v1\n"
+                "kind: Deployment\n"
+                "metadata:\n  name: app\n"
+                "spec:\n"
+                "  template:\n"
+                "    spec:\n"
+                "      containers:\n"
+                "        - name: app\n"
+                "          envFrom:\n"
+                "            - secretRef:\n"
+                "                name: externally-managed-secret\n"
+            )
+
+        result = runner.invoke(app, ["doctor", "--json"])
+
+        payload = json.loads(result.stdout)
+        checks = {c["name"]: c for c in payload["results"][0]["checks"]}
+        manifest_check = checks["Deployment Manifest"]
+        assert manifest_check["passed"] is False
+        assert "Cannot confirm" in manifest_check["message"]
+        assert "Missing variables" not in manifest_check["message"]
+
+
 def test_check_with_explicit_file_does_not_also_check_the_registered_manifest(tmp_path):
     """An explicit file argument means 'check exactly this' -- the auto-check is only the default-file convenience."""
     with runner.isolated_filesystem(temp_dir=tmp_path):
@@ -1045,6 +1086,7 @@ def test_check_json_reports_clean_state(tmp_path):
                     "blank": [],
                     "invalid": {},
                     "extra": [],
+                    "unresolved": [],
                 }
             ],
         }

@@ -30,15 +30,26 @@ class SchemaDiff:
         blank: set,
         invalid: Dict[str, str],
         extra: set,
+        unresolved: Optional[set] = None,
     ):
         self.missing = missing
         self.blank = blank
         self.invalid = invalid
         self.extra = extra
+        # Required variables this source's own unresolved envFrom-style
+        # reference *might* supply -- distinct from `missing` (which means
+        # EnvShield positively knows the variable isn't there). Counted
+        # against is_clean for the same reason `missing` is: EnvShield
+        # cannot confirm the variable is satisfied, so it must not report
+        # a clean pass, but the reporting below never claims the variable
+        # is absent -- only that it can't be confirmed.
+        self.unresolved = unresolved if unresolved is not None else set()
 
     @property
     def is_clean(self) -> bool:
-        return not (self.missing or self.blank or self.invalid or self.extra)
+        return not (
+            self.missing or self.blank or self.invalid or self.extra or self.unresolved
+        )
 
     def summary(self) -> str:
         # Each category names its own fix -- "here's what's wrong" without
@@ -68,11 +79,20 @@ class SchemaDiff:
                 f"Extra variables: {', '.join(sorted(self.extra))} "
                 "(remove them if unused, or add them to the schema if they're meant to be there)"
             )
+        if self.unresolved:
+            messages.append(
+                f"Cannot confirm: {', '.join(sorted(self.unresolved))} "
+                "(required, but this manifest references an external ConfigMap/Secret "
+                "not included in it -- it may already be supplied from there; verify "
+                "manually, or include it in the manifest to let EnvShield check it)"
+            )
         return "; ".join(messages)
 
 
 def diff_against_schema(
-    schema: Dict[str, Any], local_values: Dict[str, str]
+    schema: Dict[str, Any],
+    local_values: Dict[str, str],
+    has_unresolved_source: bool = False,
 ) -> SchemaDiff:
     """
     Compares `local_values` (as read from a .env file, a deployment
@@ -87,6 +107,17 @@ def diff_against_schema(
     back at all, so its own copy has to be explicit rather than implied. A
     present, non-blank value still needs to match its declared
     type/enum/pattern.
+
+    `has_unresolved_source` (default False, so every caller that has no
+    such concept -- a dotenv file, a Python module, a Compose file -- is
+    completely unaffected): the parser that produced `local_values`
+    reported an unresolvable external reference (currently: a Kubernetes
+    envFrom.configMapRef/secretRef whose ConfigMap/Secret isn't in the
+    supplied manifest, see BaseParser.has_unresolved_source) that could
+    supply variable names this parser had no way to enumerate. A required
+    variable not found in `local_values` is then reported as `unresolved`
+    rather than `missing` -- EnvShield genuinely doesn't know whether it's
+    supplied, and must not claim either way.
     """
     local_vars = set(local_values.keys())
     schema_vars_all = set(schema.keys())
@@ -99,9 +130,13 @@ def diff_against_schema(
 
     missing = set()
     blank = set()
+    unresolved = set()
     for key in schema_vars_required:
         if key not in local_values:
-            missing.add(key)
+            if has_unresolved_source:
+                unresolved.add(key)
+            else:
+                missing.add(key)
         elif not local_values[key]:
             blank.add(key)
 
@@ -126,6 +161,7 @@ def diff_against_schema(
         blank=blank,
         invalid=invalid,
         extra=extra,
+        unresolved=unresolved,
     )
 
 
@@ -177,7 +213,9 @@ def check_schema(
         console.print(f"[red]Error:[/red] {e}")
         return False
 
-    diff = diff_against_schema(schema, local_values)
+    diff = diff_against_schema(
+        schema, local_values, has_unresolved_source=parser.has_unresolved_source
+    )
 
     if diff.is_clean:
         console.print(
@@ -204,6 +242,13 @@ def check_schema(
         for var in sorted(diff.extra):
             table.add_row("[yellow]Extra in Local[/yellow]", var, file_path)
 
+        for var in sorted(diff.unresolved):
+            table.add_row(
+                "[yellow]Cannot Confirm[/yellow]",
+                var,
+                f"{file_path} (external ConfigMap/Secret reference)",
+            )
+
         console.print(table)
         suggestions = []
         if diff.missing or diff.blank or diff.invalid:
@@ -213,6 +258,11 @@ def check_schema(
         if diff.extra:
             suggestions.append(
                 "Remove extra variables if unused, or add them to the schema if they're meant to be there."
+            )
+        if diff.unresolved:
+            suggestions.append(
+                "Verify the 'Cannot Confirm' variables manually, or include the "
+                "referenced ConfigMap/Secret in the manifest so EnvShield can check it."
             )
         console.print("\n[bold]Suggestion:[/bold] " + " ".join(suggestions))
 
@@ -257,7 +307,9 @@ def check_result(
             "error": str(e),
         }
 
-    diff = diff_against_schema(schema, local_values)
+    diff = diff_against_schema(
+        schema, local_values, has_unresolved_source=parser.has_unresolved_source
+    )
     return {
         "file": file_path,
         "service": service_name,
@@ -266,6 +318,7 @@ def check_result(
         "blank": sorted(diff.blank),
         "invalid": dict(diff.invalid),
         "extra": sorted(diff.extra),
+        "unresolved": sorted(diff.unresolved),
     }
 
 

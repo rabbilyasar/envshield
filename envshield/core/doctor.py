@@ -138,7 +138,9 @@ def _check_deployment_manifest(service_name: str):
                 continue
             local_values = parser.get_vars(manifest["path"], get_values=True)
 
-            diff = schema_manager.diff_against_schema(schema, local_values)
+            diff = schema_manager.diff_against_schema(
+                schema, local_values, has_unresolved_source=parser.has_unresolved_source
+            )
             if diff.is_clean:
                 messages.append(f"'{manifest['path']}' is in sync with schema.")
             else:
