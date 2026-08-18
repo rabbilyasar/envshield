@@ -141,9 +141,7 @@ def test_generate_typescript_reads_bundler_public_vars_from_import_meta_env():
     content = generator.generate_config(schema, lang="typescript")
 
     assert "const _parsed = _schema.parse(process.env);" in content
-    assert (
-        "const _clientParsed = _clientSchema.parse(import.meta.env);" in content
-    )
+    assert "const _clientParsed = _clientSchema.parse(import.meta.env);" in content
     # The server-only schema must not declare the client var, and vice versa.
     assert '"DATABASE_URL": z.string().min(1),' in content
     assert '"VITE_PUBLIC_ANALYTICS_ID": z.string().min(1),' in content

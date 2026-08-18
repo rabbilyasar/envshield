@@ -17,10 +17,10 @@ class TestVariableFound:
         _write_root_service()
         with open(SCHEMA_FILE_NAME, "w") as f:
             f.write(
-                '[DATABASE_URL]\n'
+                "[DATABASE_URL]\n"
                 'description = "Primary DB"\n'
                 'type = "url"\n'
-                'secret = true\n'
+                "secret = true\n"
             )
 
         report = explain.build_report("DATABASE_URL", "app")

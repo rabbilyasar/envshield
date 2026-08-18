@@ -303,9 +303,7 @@ def test_generate_schema_from_file_interactive_overrides_existing_declaration_fo
     )
     schema = toml.loads(schema_content)
 
-    assert (
-        schema["DATABASE_URL"]["defaultValue"] == "postgres://user:pass@localhost/db"
-    )
+    assert schema["DATABASE_URL"]["defaultValue"] == "postgres://user:pass@localhost/db"
     # STRIPE_API wasn't in this scan at all -- still preserved unchanged.
     assert schema["STRIPE_API"] == existing_schema["STRIPE_API"]
 

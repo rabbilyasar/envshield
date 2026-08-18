@@ -191,7 +191,9 @@ def check_schema(
         table.add_column("Source", style="white")
 
         for var in sorted(diff.missing):
-            table.add_row("[red]Missing in Local[/red]", var, _source_label(var, schema))
+            table.add_row(
+                "[red]Missing in Local[/red]", var, _source_label(var, schema)
+            )
 
         for var in sorted(diff.blank):
             table.add_row("[red]Blank in Local[/red]", var, _source_label(var, schema))

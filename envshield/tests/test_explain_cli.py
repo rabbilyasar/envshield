@@ -19,7 +19,9 @@ class TestExplainNotFound:
             _write("envshield.yml", "services:\n  api:\n    schema: env.schema.toml\n")
             _write("env.schema.toml", '[X]\ndescription = "x"\n')
 
-            result = runner.invoke(app, ["explain", "DOES_NOT_EXIST", "--service", "api"])
+            result = runner.invoke(
+                app, ["explain", "DOES_NOT_EXIST", "--service", "api"]
+            )
 
             assert result.exit_code == 1
             assert "DOES_NOT_EXIST" in result.stdout

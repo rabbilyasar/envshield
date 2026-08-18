@@ -20,6 +20,7 @@ def _is_client_var(key: str) -> bool:
     """
     return key.upper().startswith(PUBLIC_KEY_PREFIXES)
 
+
 # --- Python (pydantic-settings) ---
 
 _PYTHON_HEADER_TEMPLATE = (
@@ -367,7 +368,9 @@ def _generate_typescript(schema: dict[str, Any]) -> str:
             "// process.env.\n"
             f"const _clientSchema = {_build_zod_object(schema, client_keys)};"
         )
-        lines.extend(["", "const _clientParsed = _clientSchema.parse(import.meta.env);", ""])
+        lines.extend(
+            ["", "const _clientParsed = _clientSchema.parse(import.meta.env);", ""]
+        )
 
     secret_keys = {key for key, details in schema.items() if details.get("secret")}
     export_lines = []

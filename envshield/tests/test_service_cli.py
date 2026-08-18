@@ -83,7 +83,9 @@ def test_service_remove_omits_next_step_hint_when_other_services_remain(tmp_path
 
         assert result.exit_code == 0
         assert "Next step" not in result.stdout
-        assert config_manager.get_services() == {"web": {"schema": "web/env.schema.toml"}}
+        assert config_manager.get_services() == {
+            "web": {"schema": "web/env.schema.toml"}
+        }
 
 
 def test_service_add_warns_when_no_schema_was_created(tmp_path):

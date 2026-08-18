@@ -237,9 +237,7 @@ class TestSchemaDiffFailOn:
     def test_requires_review_blocks_by_default(self, tmp_path):
         with runner.isolated_filesystem(temp_dir=tmp_path):
             _init_repo()
-            _write(
-                "envshield.yml", "services:\n  api:\n    schema: env.schema.toml\n"
-            )
+            _write("envshield.yml", "services:\n  api:\n    schema: env.schema.toml\n")
             _write("env.schema.toml", '[V]\ndescription = "x"\npattern = "^v[0-9]+$"\n')
             _commit("v1")
             _write("env.schema.toml", '[V]\ndescription = "x"\npattern = "^[0-9]+$"\n')
@@ -252,9 +250,7 @@ class TestSchemaDiffFailOn:
     def test_requires_review_can_be_excluded_via_fail_on(self, tmp_path):
         with runner.isolated_filesystem(temp_dir=tmp_path):
             _init_repo()
-            _write(
-                "envshield.yml", "services:\n  api:\n    schema: env.schema.toml\n"
-            )
+            _write("envshield.yml", "services:\n  api:\n    schema: env.schema.toml\n")
             _write("env.schema.toml", '[V]\ndescription = "x"\npattern = "^v[0-9]+$"\n')
             _commit("v1")
             _write("env.schema.toml", '[V]\ndescription = "x"\npattern = "^[0-9]+$"\n')
@@ -316,9 +312,7 @@ class TestSchemaDiffBlockingJson:
 
 
 class TestSchemaDiffExplainHint:
-    def test_blocking_change_prints_an_explain_hint_naming_the_variable(
-        self, tmp_path
-    ):
+    def test_blocking_change_prints_an_explain_hint_naming_the_variable(self, tmp_path):
         with runner.isolated_filesystem(temp_dir=tmp_path):
             _init_repo()
             _write("envshield.yml", "services:\n  api:\n    schema: env.schema.toml\n")
@@ -386,8 +380,6 @@ class TestSchemaDiffExplainHint:
             _write("env.schema.toml", '[NEW_REQUIRED]\ndescription = "x"\n')
             _commit("v2")
 
-            result = runner.invoke(
-                app, ["schema", "diff", "HEAD~1", "HEAD", "--json"]
-            )
+            result = runner.invoke(app, ["schema", "diff", "HEAD~1", "HEAD", "--json"])
 
             json.loads(result.stdout)  # must still be exactly one JSON document

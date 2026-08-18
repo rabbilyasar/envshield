@@ -487,9 +487,7 @@ def test_check_schema_against_docker_compose_file(mocker, tmp_path):
         assert is_in_sync is False
 
 
-def test_check_schema_against_docker_compose_with_interpolated_values(
-    mocker, tmp_path
-):
+def test_check_schema_against_docker_compose_with_interpolated_values(mocker, tmp_path):
     """
     End-to-end DI-2 regression, reproducing exactly the false positive
     found against a real multi-service project: a Compose file using

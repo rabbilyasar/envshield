@@ -996,25 +996,19 @@ class TestDatabaseConnectionStringPatternCoversPostgresql:
 
     def test_postgresql_scheme_with_embedded_credentials_is_secret_shaped(self):
         value = "postgresql://appuser:sup3rsecret@db.internal.prod:5432/appdb"
-        matched = any(
-            re.search(p["pattern"], value) for p in scanner.SECRET_PATTERNS
-        )
+        matched = any(re.search(p["pattern"], value) for p in scanner.SECRET_PATTERNS)
         assert matched
 
     def test_bare_postgres_scheme_still_matches(self):
         """Guards against a fix that narrows the pattern instead of widening it."""
         value = "postgres://appuser:sup3rsecret@db.internal.prod:5432/appdb"
-        matched = any(
-            re.search(p["pattern"], value) for p in scanner.SECRET_PATTERNS
-        )
+        matched = any(re.search(p["pattern"], value) for p in scanner.SECRET_PATTERNS)
         assert matched
 
     def test_postgresql_url_with_no_credentials_does_not_false_positive(self):
         """A connection string with no embedded user:pass is not secret-shaped by this pattern."""
         value = "postgresql://db.internal.prod:5432/appdb"
-        matched = any(
-            re.search(p["pattern"], value) for p in scanner.SECRET_PATTERNS
-        )
+        matched = any(re.search(p["pattern"], value) for p in scanner.SECRET_PATTERNS)
         assert not matched
 
 
@@ -1030,23 +1024,19 @@ class TestDsnStyleUrlWithEmbeddedApiKeyIsCaught:
     """
 
     def test_realistic_sentry_dsn_shape_is_secret_shaped(self):
-        value = "https://a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6@o123456.ingest.sentry.io/7890123"
-        matched = any(
-            re.search(p["pattern"], value) for p in scanner.SECRET_PATTERNS
+        value = (
+            "https://a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6@o123456.ingest.sentry.io/7890123"
         )
+        matched = any(re.search(p["pattern"], value) for p in scanner.SECRET_PATTERNS)
         assert matched
 
     def test_ordinary_url_with_a_short_username_does_not_false_positive(self):
         """A short, human-readable username (e.g. a git remote's 'user@host') is not secret-shaped."""
         value = "https://git@github.com/example/repo.git"
-        matched = any(
-            re.search(p["pattern"], value) for p in scanner.SECRET_PATTERNS
-        )
+        matched = any(re.search(p["pattern"], value) for p in scanner.SECRET_PATTERNS)
         assert not matched
 
     def test_url_with_no_userinfo_segment_does_not_false_positive(self):
         value = "https://o123456.ingest.sentry.io/7890123"
-        matched = any(
-            re.search(p["pattern"], value) for p in scanner.SECRET_PATTERNS
-        )
+        matched = any(re.search(p["pattern"], value) for p in scanner.SECRET_PATTERNS)
         assert not matched

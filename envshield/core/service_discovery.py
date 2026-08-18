@@ -83,6 +83,7 @@ def looks_like_it_reads_the_environment(path: str) -> bool:
         return True  # unreadable -- don't invent a false alarm
     return bool(_ENV_READING_RE.search(content))
 
+
 # Conventional docker-compose filenames, newest naming convention first
 # (plain 'compose.yaml' is the current Compose Spec name; 'docker-compose.yml'
 # is the long-standing, still far more common one in the wild).
@@ -354,9 +355,7 @@ def _candidate_dirs(root: str) -> List[str]:
             continue
 
         if not detect_env_style(full_path)["format"]:
-            nested_services = [
-                d for d in nested_dirs if detect_env_style(d)["format"]
-            ]
+            nested_services = [d for d in nested_dirs if detect_env_style(d)["format"]]
             if len(nested_services) >= 2:
                 dirs.extend(nested_dirs)
                 continue

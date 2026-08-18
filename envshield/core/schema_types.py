@@ -158,7 +158,9 @@ def is_required_now(field_schema: dict[str, Any], local_values: dict[str, str]) 
     return local_values.get(other_var) == expected
 
 
-def should_be_present(field_schema: dict[str, Any], local_values: dict[str, str]) -> bool:
+def should_be_present(
+    field_schema: dict[str, Any], local_values: dict[str, str]
+) -> bool:
     """
     Whether a field must have an explicit, non-blank value in the target
     file -- broader than is_required_now (used for setup's prompt-or-fill
