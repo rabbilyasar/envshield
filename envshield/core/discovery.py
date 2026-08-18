@@ -115,7 +115,7 @@ class _UsageVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_Subscript(self, node: ast.Subscript) -> None:
-        if _is_os_environ(node.value):
+        if _is_os_environ(node.value) and isinstance(node.ctx, ast.Load):
             key = _literal_str(node.slice)
             if key is not None:
                 self._record(key, node.lineno, "os.environ[]")
@@ -166,6 +166,14 @@ _JS_META_DOT_ACCESS_RE = re.compile(r"import\.meta\.env\.(\w+)")
 _JS_META_BRACKET_ACCESS_RE = re.compile(r"import\.meta\.env\[\s*(['\"])(\w+)\1\s*\]")
 _JS_DESTRUCTURE_SOURCE_RE = re.compile(r"=\s*(process\.env|import\.meta\.env)\b")
 _JS_IDENTIFIER_RE = re.compile(r"[A-Za-z_$][\w$]*")
+
+# A plain '=' immediately following a dot/bracket-access match (not part of
+# '==='/'=='), possibly after whitespace -- the match is an assignment
+# target (a write), not a read. Deliberately narrow, matching this milestone's
+# regex-based scope: compound assignment ('+=', '-=', etc.) is not
+# recognized as a write and is still reported as a read, an accepted
+# under-detection rather than a false negative on the far more common case.
+_JS_ASSIGNMENT_TARGET_RE = re.compile(r"\s*=(?!=)")
 
 # A single-level object-destructuring pattern in real code is never
 # anywhere close to this long -- this is defense-in-depth against a
@@ -330,6 +338,8 @@ def discover_js_usages(content: str, file_path: str) -> List[DiscoveredVariableU
         (_JS_META_BRACKET_ACCESS_RE, 2, "import.meta.env[]"),
     ):
         for m in pattern.finditer(content):
+            if _JS_ASSIGNMENT_TARGET_RE.match(content, m.end()):
+                continue
             usages.append(
                 DiscoveredVariableUsage(
                     variable=m.group(group),

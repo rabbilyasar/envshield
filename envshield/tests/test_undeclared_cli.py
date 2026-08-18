@@ -1,4 +1,4 @@
-# envshield/tests/test_schema_check_usages_cli.py
+# envshield/tests/test_undeclared_cli.py
 import json
 import os
 import subprocess
@@ -39,7 +39,7 @@ class TestRevisionPairing:
         with runner.isolated_filesystem(temp_dir=tmp_path):
             _single_service_repo()
 
-            result = runner.invoke(app, ["schema", "check-usages", "HEAD"])
+            result = runner.invoke(app, ["undeclared", "HEAD"])
 
             assert result.exit_code == 1
             assert "both revisions, or neither" in result.stdout
@@ -51,7 +51,7 @@ class TestDefaultComparisonIsHeadVsWorkingTree:
             _single_service_repo()
             _write("app.py", "import os\nx = os.environ.get('FOO')\n")  # uncommitted
 
-            result = runner.invoke(app, ["schema", "check-usages"])
+            result = runner.invoke(app, ["undeclared"])
 
             assert result.exit_code == 1
             assert "FOO" in result.stdout
@@ -62,7 +62,7 @@ class TestDefaultComparisonIsHeadVsWorkingTree:
             _single_service_repo()
             _write("brand_new.py", "import os\nx = os.environ.get('UNTRACKED')\n")
 
-            result = runner.invoke(app, ["schema", "check-usages"])
+            result = runner.invoke(app, ["undeclared"])
 
             assert result.exit_code == 1
             assert "UNTRACKED" in result.stdout
@@ -75,7 +75,7 @@ class TestDefaultComparisonIsHeadVsWorkingTree:
             _commit("init")
             _write("app.py", "import os\nx = os.environ.get('FOO')\n")
 
-            result = runner.invoke(app, ["schema", "check-usages"])
+            result = runner.invoke(app, ["undeclared"])
 
             assert result.exit_code == 0
             assert "FOO" in result.stdout
@@ -85,7 +85,7 @@ class TestDefaultComparisonIsHeadVsWorkingTree:
         with runner.isolated_filesystem(temp_dir=tmp_path):
             _single_service_repo()
 
-            result = runner.invoke(app, ["schema", "check-usages"])
+            result = runner.invoke(app, ["undeclared"])
 
             assert result.exit_code == 0
             assert "No new source dependencies" in result.stdout
@@ -100,7 +100,7 @@ class TestExplicitTwoRevisionForm:
             _write("app.py", "import os\nx = os.environ.get('FOO')\n")
             _commit("v2: adds FOO")
 
-            result = runner.invoke(app, ["schema", "check-usages", "HEAD~1", "HEAD"])
+            result = runner.invoke(app, ["undeclared", "HEAD~1", "HEAD"])
 
             assert result.exit_code == 1
             assert "FOO" in result.stdout
@@ -111,17 +111,37 @@ class TestExplicitTwoRevisionForm:
             _write("app.py", "import os\nx = os.environ.get('FOO')\n")
             _commit("has FOO")
 
-            result = runner.invoke(app, ["schema", "check-usages", "HEAD", "HEAD"])
+            result = runner.invoke(app, ["undeclared", "HEAD", "HEAD"])
 
             assert result.exit_code == 0
+
+    def test_a_file_move_does_not_falsely_report_its_usages_as_new(self, tmp_path):
+        """
+        Regression: git_utils.list_changed_files passes --no-renames, so a
+        moved file shows up as its old path deleted and its new path
+        added. Before the variable-only identity fix, every usage in the
+        moved file was reported as newly introduced even though nothing
+        about the dependency itself changed.
+        """
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            _single_service_repo()
+            _write("old_location/app.py", "import os\nx = os.environ.get('FOO')\n")
+            _commit("v1: FOO used in old_location/app.py")
+            os.makedirs("new_location", exist_ok=True)
+            os.rename("old_location/app.py", "new_location/app.py")
+            os.rmdir("old_location")
+            _commit("v2: moved to new_location/app.py")
+
+            result = runner.invoke(app, ["undeclared", "HEAD~1", "HEAD"])
+
+            assert result.exit_code == 0
+            assert "No new source dependencies" in result.stdout
 
     def test_unresolvable_revision_exits_nonzero_with_clear_error(self, tmp_path):
         with runner.isolated_filesystem(temp_dir=tmp_path):
             _single_service_repo()
 
-            result = runner.invoke(
-                app, ["schema", "check-usages", "not-a-real-revision", "HEAD"]
-            )
+            result = runner.invoke(app, ["undeclared", "not-a-real-revision", "HEAD"])
 
             assert result.exit_code == 1
 
@@ -135,9 +155,7 @@ class TestJsonOutput:
             _write("app.py", "import os\nx = os.environ.get('FOO')\n")
             _commit("v2: adds FOO")
 
-            result = runner.invoke(
-                app, ["schema", "check-usages", "HEAD~1", "HEAD", "--json"]
-            )
+            result = runner.invoke(app, ["undeclared", "HEAD~1", "HEAD", "--json"])
 
             payload = json.loads(result.stdout)
             # A single-service project resolves to exactly one target, so
@@ -154,7 +172,7 @@ class TestJsonOutput:
         with runner.isolated_filesystem(temp_dir=tmp_path):
             _single_service_repo()
 
-            result = runner.invoke(app, ["schema", "check-usages", "--json"])
+            result = runner.invoke(app, ["undeclared", "--json"])
 
             json.loads(result.stdout)
 
@@ -166,9 +184,7 @@ class TestJsonOutput:
             _write("app.py", "import os\nx = os.environ.get('SECRET_KEY')\n")
             _commit("v2")
 
-            result = runner.invoke(
-                app, ["schema", "check-usages", "HEAD~1", "HEAD", "--json"]
-            )
+            result = runner.invoke(app, ["undeclared", "HEAD~1", "HEAD", "--json"])
 
             payload = json.loads(result.stdout)
             change = payload["changes"][0]
@@ -198,7 +214,7 @@ class TestMultiServiceFileOwnership:
                 "import os\nx = os.environ.get('WEB_ONLY')\n",
             )
 
-            result = runner.invoke(app, ["schema", "check-usages", "--service", "api"])
+            result = runner.invoke(app, ["undeclared", "--service", "api"])
 
             assert result.exit_code == 0
             assert "WEB_ONLY" not in result.stdout
@@ -211,7 +227,7 @@ class TestMultiServiceFileOwnership:
                 "import os\nx = os.environ.get('API_ONLY')\n",
             )
 
-            result = runner.invoke(app, ["schema", "check-usages", "--service", "api"])
+            result = runner.invoke(app, ["undeclared", "--service", "api"])
 
             assert result.exit_code == 1
             assert "API_ONLY" in result.stdout
@@ -233,9 +249,7 @@ class TestMultiServiceFileOwnership:
                 "import os\nx = os.environ.get('API_ONLY')\n",
             )
 
-            result = runner.invoke(
-                app, ["schema", "check-usages", "--service", "api", "--json"]
-            )
+            result = runner.invoke(app, ["undeclared", "--service", "api", "--json"])
 
             payload = json.loads(result.stdout)
             assert "results" not in payload
@@ -259,7 +273,7 @@ class TestMultiServiceFileOwnership:
             _write("env.schema.toml", "this is not valid toml [[[")
             _commit("init")
 
-            result = runner.invoke(app, ["schema", "check-usages", "--json"])
+            result = runner.invoke(app, ["undeclared", "--json"])
 
             assert result.exit_code == 1
             payload = json.loads(result.stdout)
@@ -292,7 +306,7 @@ class TestMultiServiceFileOwnership:
                 "import os\nx = os.environ.get('API_ONLY')\n",
             )
 
-            result = runner.invoke(app, ["schema", "check-usages"])
+            result = runner.invoke(app, ["undeclared"])
 
             assert result.exit_code == 1
             assert "API_ONLY" in result.stdout
@@ -319,7 +333,7 @@ class TestMultiServiceFileOwnership:
                 "import os\nx = os.environ.get('WEB_DECLARED')\n",
             )
 
-            result = runner.invoke(app, ["schema", "check-usages", "--json"])
+            result = runner.invoke(app, ["undeclared", "--json"])
 
             payload = json.loads(result.stdout)
             api_result = next(r for r in payload["results"] if r["service"] == "api")
@@ -338,7 +352,7 @@ class TestMultiServiceFileOwnership:
                 "import os\nx = os.environ.get('API_ONLY')\n",
             )
 
-            result = runner.invoke(app, ["schema", "check-usages"])
+            result = runner.invoke(app, ["undeclared"])
 
             assert "── api ──" in result.stdout
             assert "── web ──" in result.stdout
@@ -347,7 +361,7 @@ class TestMultiServiceFileOwnership:
         with runner.isolated_filesystem(temp_dir=tmp_path):
             self._multi_service_repo()
 
-            result = runner.invoke(app, ["schema", "check-usages", "--json"])
+            result = runner.invoke(app, ["undeclared", "--json"])
 
             payload = json.loads(result.stdout)
             assert result.exit_code == 0
@@ -374,7 +388,7 @@ class TestMultiServiceFileOwnership:
                 "import os\nx = os.environ.get('API_ONLY')\n",
             )
 
-            result = runner.invoke(app, ["schema", "check-usages", "--json"])
+            result = runner.invoke(app, ["undeclared", "--json"])
 
             assert result.exit_code == 1
             payload = json.loads(result.stdout)
@@ -405,7 +419,7 @@ class TestMultiServiceFileOwnership:
             _single_service_repo()
             _write("app.py", "import os\nx = os.environ.get('FOO')\n")
 
-            result = runner.invoke(app, ["schema", "check-usages"])
+            result = runner.invoke(app, ["undeclared"])
 
             # Rich's own table borders also use "──", so check for the
             # specific service-header text rather than the character.
@@ -417,9 +431,7 @@ class TestUnknownService:
         with runner.isolated_filesystem(temp_dir=tmp_path):
             _single_service_repo()
 
-            result = runner.invoke(
-                app, ["schema", "check-usages", "--service", "does-not-exist"]
-            )
+            result = runner.invoke(app, ["undeclared", "--service", "does-not-exist"])
 
             assert result.exit_code == 1
 
@@ -427,7 +439,7 @@ class TestUnknownService:
 class TestSymlinkHardening:
     """
     End-to-end coverage for the reproduced trust-boundary fix: a symlink
-    sitting in the working tree must never cause 'schema check-usages' to
+    sitting in the working tree must never cause 'undeclared' to
     read (or report a finding sourced from) content outside the project,
     and the '--json' contract (stdout is exactly one JSON document) must
     hold even when a symlink is skipped and warned about.
@@ -452,7 +464,7 @@ class TestSymlinkHardening:
             target = self._make_outside_source_file(tmp_path)
             os.symlink(target, os.path.join(td, "evil.py"))
 
-            result = runner.invoke(app, ["schema", "check-usages"])
+            result = runner.invoke(app, ["undeclared"])
 
             assert result.exit_code == 0
             assert self.OUTSIDE_VARIABLE not in result.stdout
@@ -463,7 +475,7 @@ class TestSymlinkHardening:
             target = self._make_outside_source_file(tmp_path)
             os.symlink(target, os.path.join(td, "evil.py"))
 
-            result = runner.invoke(app, ["schema", "check-usages", "--json"])
+            result = runner.invoke(app, ["undeclared", "--json"])
 
             payload = json.loads(result.stdout)
             assert payload["has_missing_declarations"] is False

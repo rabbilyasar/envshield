@@ -65,8 +65,7 @@ def _discoverable_files(service_dir: str) -> List[str]:
     excluded-dir-pruned, mirroring scanner.py's own file-collection walk.
     Always the live working tree (like 'doctor'/'check'), never a Git
     revision -- a developer explaining one variable right now wants the
-    current state, not history (that's 'schema check-usages'/'schema
-    diff's job).
+    current state, not history (that's 'undeclared'/'schema diff's job).
     """
     if os.path.islink(service_dir):
         return []
@@ -83,7 +82,7 @@ def _discoverable_files(service_dir: str) -> List[str]:
             # service_dir of "." would otherwise report every usage's
             # file_path with a "./" prefix, unlike every other path this
             # command shows (schema_path, manifest paths) or unlike what
-            # 'schema check-usages' reports for the same file via git.
+            # 'undeclared' reports for the same file via git.
             files.append(os.path.normpath(file_path))
     return files
 
@@ -184,9 +183,7 @@ def _describe_field(field_schema: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _reverse_required_by(
-    schema: Dict[str, Any], variable: str
-) -> List[Dict[str, Any]]:
+def _reverse_required_by(schema: Dict[str, Any], variable: str) -> List[Dict[str, Any]]:
     return [
         {"variable": key, "condition": other["requiredIf"]}
         for key, other in schema.items()
@@ -222,9 +219,7 @@ class ExplainReport:
         }
 
 
-def error_dict(
-    variable: str, service: Optional[str], message: str
-) -> Dict[str, Any]:
+def error_dict(variable: str, service: Optional[str], message: str) -> Dict[str, Any]:
     """
     The canonical 'explain --json' error shape -- matches
     schema_manager.check_result's own convention exactly: keep the

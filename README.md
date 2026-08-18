@@ -38,6 +38,7 @@ It works the same way whether you have one repo with one `.env` file, or a monor
   - [Core commands](#core-commands)
   - [Monorepo: managing multiple services (monorepo)](#monorepo-managing-multiple-services)
 - [Machine-readable output (`--json`)](#machine-readable-output---json)
+- [Contract diffing and CI enforcement](#contract-diffing-and-ci-enforcement)
 - [Typed config code generation](#typed-config-code-generation)
 - [Validating deployment manifests](#validating-deployment-manifests)
 - [Secret scanning and git hooks](#secret-scanning-and-git-hooks)
@@ -310,9 +311,12 @@ Everything a single-service project ever needs. `--service` shows up on most of 
 | `envshield init [--force/-f]` | Detects your framework and builds `env.schema.toml` from a real config source if it finds one, otherwise a framework-aware template. A real dotenv file only counts if it isn't itself EnvShield-generated (see below); a genuine Python config module is preferred over one that is. Also scaffolds `envshield.yml`, updates `.gitignore`, and offers to install git hooks. Auto-registers a root-level `docker-compose.yml` as the project's deployment manifest if it finds one. `--force` re-runs on a project that already has a config (with a confirmation before overwriting) — it reuses the same config source recorded from the first run rather than re-detecting one (see [Maintaining EnvShield over time](#maintaining-envshield-over-time)), and only ever adds to the existing schema, never silently drops or reclassifies a variable it already declares. Either way, it also checks every other real config source it finds alongside the pinned one and merges in any variable that one declares but the schema doesn't yet. If the recorded source has itself since become EnvShield-generated, `--force` notices and asks whether to re-detect a real one instead (see below) — no separate flag needed. "Already has a config" means at least one real service is registered, not just that `envshield.yml` exists on disk — a config file left with zero services (e.g. right after `service remove` takes the last one) is treated the same as no config at all, so bare `init` works without `--force`. |
 | `envshield import <file> [--output/-o PATH] [--force/-f] [--interactive] [--service NAME]` | Runs the same real-variable analysis `init` does automatically, as its own command — for re-importing after your code gains new variables, pointing at a file `init` wouldn't have found, or adding `--interactive` to confirm each secret/type classification by hand instead of accepting the automatic guess. `--output` changes where the schema is written (defaults to `env.schema.toml`, or the target service's schema path with `--service`). |
 | `envshield check [file] [--service NAME] [--container NAME] [--json]` | Validates a local file (or, if omitted, the project's/service's default local file *and* its registered deployment manifest, if any) against the schema. `file` can be a plain `.env`, a Python config module, a docker-compose file, or a Kubernetes manifest. `--container` picks which service/container to check in a manifest that declares more than one (tried against `--service`'s name automatically first). Exits non-zero on any drift — safe to use as a CI gate. `--json` prints a machine-readable result instead (see below) and never falls into an interactive service picker. |
+| `envshield explain <VARIABLE> [--service NAME] [--json]` | Reports what EnvShield currently knows about one variable: its contract (type, requiredness, default, secret, enum/pattern), where it's declared (including through `extends`), what source code reads it, which other variables' `requiredIf` conditions reference it, and which registered deployment manifests declare it. Only reports relationships EnvShield can actually prove — absence of a source usage or a manifest reference is never presented as proof the variable is unused or undeployed. Errors clearly (non-zero exit) if the variable isn't in the resolved schema at all, rather than returning an empty result. |
 | `envshield doctor [--fix] [--service NAME] [--json]` | Runs every health check at once (see below) and reports a summary. `--fix` interactively offers to fix whatever it can — re-running `init`, regenerating the template, installing the git hooks, or running `setup` to fill in missing/invalid local values. Exits non-zero if anything's still broken afterward. `--json` is incompatible with `--fix` (an interactive confirm prompt makes no sense in a machine-readable mode). |
 | `envshield setup [output_file] [--service NAME]` | Interactive onboarding wizard: walks through every variable that's missing, blank, or has an existing value the schema no longer allows, prompting with the variable's description, masking secret input, and offering a picker for `enum` fields. Leaves everything already correct untouched. Pressing Enter with nothing typed is rejected for a variable that has to be present (required, or has a `defaultValue`) — accepting it silently would let `setup` produce the exact "Blank in Local" failure `check`/`doctor` exist to catch. It's still accepted for a genuinely optional variable that only needed re-prompting because its existing value was invalid — blank is a legitimate way to clear that. |
 | `envshield schema sync [--service NAME] [--check]` | Regenerates `.env.example` from the schema (a dotenv project), or patches a Python-module local file in place to declare any schema variable it's missing (never rewrites it wholesale — only appends/patches the specific lines it owns). `import` already calls this automatically for you when it changes a project's/service's real schema, so you'll rarely need to run it by hand except after a manual schema edit. `--check` writes nothing — it reports whether the tracked template already matches the schema, exiting non-zero if not (what the pre-commit hook runs, see [Git hooks](#git-hooks)). |
+| `envshield schema diff [REV_A] [REV_B] [--service NAME] [--json] [--fail-on CATEGORIES]` | Compares a service's schema contract between two Git revisions (working tree vs. `HEAD` if omitted) and classifies each change: `breaking`, `security`, `requires_review`, `default_changed`, `informational`, or `non_breaking`. Exits non-zero when any change falls in `--fail-on` (default: `breaking,security,requires_review`) — a secret classification that *tightened* (`false → true`) never blocks even when `security` is included, only one that *weakened* (`true → false`) does. See [Contract diffing and CI enforcement](#contract-diffing-and-ci-enforcement). |
+| `envshield undeclared [REV_A] [REV_B] [--service NAME] [--json]` | A revision-scoped guard for newly introduced configuration dependencies: finds environment-variable usages newly introduced in source code between two revisions (working tree vs. `HEAD` if omitted) and reports whether each is already declared in the schema. Exits non-zero if any new usage is undeclared. |
 | `envshield generate [output_file] [--lang/-l python\|typescript] [--force/-f] [--service NAME]` | Compiles the schema into a typed, validated config module. `--lang` is auto-detected from your project (Next.js/Vite/Node.js → TypeScript; Python/Django/Flask, or nothing detected → Python) if omitted. A detected ecosystem with no codegen target at all (currently: Go) errors and asks for `--lang` explicitly, rather than silently guessing Python. Defaults to writing `config.py`/`config.ts`; `--force` overwrites an existing output file. See [Typed config code generation](#typed-config-code-generation). |
 | `envshield scan [paths...] [--staged] [--config/-c PATH] [--exclude/-e PATTERN] [--service NAME] [--json]` | Scans code for hardcoded secrets and for env vars used in code (`os.getenv`, `os.environ.get`, `process.env.X`) but never declared in the schema. `--staged` scans only what's staged for the next commit (what the pre-commit hook runs); `--exclude` (repeatable) adds glob patterns to skip, on top of whatever `secret_scanning.exclude_files` is set in `envshield.yml`. See [Secret scanning and git hooks](#secret-scanning-and-git-hooks). |
 | `envshield hook install [--yes/-y]` / `envshield hook status` / `envshield hook remove [--yes/-y]` | Installs both git hooks by hand, after confirming (`--yes` skips the prompt, for scripting); reports which hooks are currently installed; or removes any EnvShield-installed hook after confirming (leaving alone anything EnvShield didn't install — Husky, a hand-written script). `--yes` also covers the separate case of a pre-existing hook that isn't EnvShield's own: rather than prompting a second time (or, with no terminal, hitting undefined input), it warns and leaves the foreign hook untouched — an already-EnvShield hook is always regenerated silently either way, no warning needed. The old flat `envshield install-hook` still works, identically to `hook install`. |
@@ -396,6 +400,124 @@ Note that `missing` includes `LOG_LEVEL` even though it has a `defaultValue` in 
   "skipped_files": []
 }
 ```
+
+---
+
+## Contract diffing and CI enforcement
+
+`envshield schema diff` treats `env.schema.toml` the way an API-contract diff
+tool treats an OpenAPI spec: it compares the resolved schema at two Git
+revisions and classifies every change by compatibility impact, not just by
+text.
+
+```bash
+# Working tree vs. HEAD -- catches a change before you even commit it.
+envshield schema diff
+
+# Two explicit revisions -- e.g. the PR's base branch vs. its head.
+envshield schema diff origin/main HEAD
+```
+
+```
+Contract diff: 'origin/main' -> 'HEAD'
+┌───────────────┬──────────────────┬──────────────────────────────────────────┐
+│ Variable      │ Category         │ Description                              │
+├───────────────┼──────────────────┼──────────────────────────────────────────┤
+│ DATABASE_URL  │ breaking         │ 'DATABASE_URL' lost its default and is    │
+│               │                  │ now always required...                   │
+│ STRIPE_KEY    │ security         │ 'STRIPE_KEY' secret classification        │
+│               │                  │ WEAKENED (true -> false)...              │
+│ LOG_LEVEL     │ default_changed  │ 'LOG_LEVEL' default changed from 'info'   │
+│               │                  │ to 'debug'...                            │
+└───────────────┴──────────────────┴──────────────────────────────────────────┘
+
+This change includes breaking, security change(s) that block under --fail-on.
+```
+
+**Exit code and `--fail-on`.** By default, `schema diff` exits non-zero if any
+change is `breaking`, `security` (specifically a *weakened* secret
+classification — a *tightened* one never blocks), or `requires_review`
+(EnvShield genuinely can't prove the change is safe, e.g. a changed regex
+pattern). `default_changed`, `informational`, and plain `non_breaking`
+changes never block. Narrow or widen the set with `--fail-on`:
+
+```bash
+envshield schema diff origin/main HEAD --fail-on breaking
+```
+
+**CI is the enforcement point, not a local git hook.** A breaking or
+security-sensitive schema change is exactly the kind of thing a *reviewer*
+should see on the pull request, not something that silently blocks a local
+`git commit` before anyone else has looked at it — so EnvShield does not
+install a blocking pre-commit check for this. Add it to your PR pipeline
+instead:
+
+```yaml
+# .github/workflows/envshield-contract.yml
+name: EnvShield contract check
+on: pull_request
+jobs:
+  contract-diff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # schema diff needs the base branch's history
+      - run: pip install envshield
+      - run: |
+          BASE=$(git merge-base "origin/${{ github.base_ref }}" HEAD)
+          envshield schema diff "$BASE" HEAD
+```
+
+Diff against the **merge-base**, not `origin/<base_ref>` directly — the base
+branch can advance while this PR is open, and diffing against its
+current tip would attribute someone else's later, unrelated schema change
+to this PR. `git merge-base` finds the actual commit this branch diverged
+from, regardless of what's landed on the base branch since.
+
+The job fails exactly when `schema diff` would locally — no separate GitHub
+Action, bot, or PR-comment integration required. `--json` gives the same
+result as a single machine-readable document if you want to post a custom
+summary instead of relying on the job's own pass/fail status:
+
+```bash
+envshield schema diff origin/main HEAD --json
+```
+
+```json
+{
+  "has_breaking_changes": true,
+  "has_blocking_changes": true,
+  "results": [
+    {
+      "service": "api",
+      "revision_a": "origin/main",
+      "revision_b": "HEAD",
+      "has_breaking_changes": true,
+      "has_blocking_changes": true,
+      "changes": [
+        {
+          "variable": "DATABASE_URL",
+          "category": "breaking",
+          "description": "'DATABASE_URL' lost its default and is now always required -- a config that validly omitted it, relying on the default, is now invalid.",
+          "detail": {"before": "defaulted", "after": "unconditional"},
+          "blocking": true
+        }
+      ]
+    }
+  ]
+}
+```
+
+`has_breaking_changes` is kept for backward compatibility; `has_blocking_changes`
+and each change's `blocking` flag reflect whatever `--fail-on` set was
+actually used for that invocation, so a CI script branching on the JSON gets
+the same answer the process exit code already gave it.
+
+If you want a local preview before you even open a PR, nothing stops you from
+adding `envshield schema diff || true` to your own pre-commit hook by hand —
+EnvShield just doesn't install one for you, since a compatibility break is a
+PR-review decision, not a commit-blocking one.
 
 ---
 

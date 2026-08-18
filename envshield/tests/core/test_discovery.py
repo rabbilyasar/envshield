@@ -49,6 +49,22 @@ class TestOsEnvironSubscript:
         assert usage.access_type == "os.environ[]"
 
 
+class TestOsEnvironSubscriptWriteIsNotARead:
+    def test_a_write_only_assignment_is_not_reported(self):
+        """
+        Regression: visit_Subscript never checked node.ctx, so
+        os.environ["X"] = value (a write, never a read) was recorded
+        identically to os.environ["X"] (a read) -- misreporting every
+        write-only assignment as a configuration dependency.
+        """
+        assert _usages("os.environ['X'] = 'value'\n") == []
+
+    def test_a_read_in_the_same_file_is_still_reported(self):
+        usage = _one("os.environ['X'] = 'value'\ny = os.environ['X']\n")
+        assert usage.variable == "X"
+        assert usage.access_type == "os.environ[]"
+
+
 class TestMultiLineCalls:
     def test_call_spanning_multiple_lines_reports_the_call_start_line(self):
         content = (
@@ -255,6 +271,31 @@ class TestDestructuring:
         many_keys = ", ".join(f"K{i}" for i in range(2000))
         content = f"const {{{many_keys}}} = process.env;\n"
         assert _js(content) == []
+
+
+class TestJsAssignmentTargetIsNotARead:
+    """
+    Regression: process.env.FOO/process.env['FOO'] on the left side of an
+    assignment (a write) used to be matched identically to a read -- these
+    regexes have no notion of assignment target vs. value.
+    """
+
+    def test_dot_access_assignment_is_not_reported(self):
+        assert _js("process.env.FOO = 'bar';\n") == []
+
+    def test_bracket_access_assignment_is_not_reported(self):
+        assert _js("process.env['FOO'] = 'bar';\n") == []
+
+    def test_a_read_elsewhere_in_the_file_is_still_reported(self):
+        usage = _one_js("process.env.FOO = 'bar';\nconst x = process.env.FOO;\n")
+        assert usage.variable == "FOO"
+        assert usage.line == 2
+
+    def test_comparison_is_still_reported_as_a_read(self):
+        """A '==' comparison is a read, not an assignment -- must not be
+        mistaken for one just because it starts with '='."""
+        usage = _one_js("if (process.env.FOO == 'bar') {}\n")
+        assert usage.variable == "FOO"
 
 
 class TestJsOutOfScopeByDesign:

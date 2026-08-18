@@ -70,17 +70,19 @@ def find_new_usages(
     usages_a: List[DiscoveredVariableUsage], usages_b: List[DiscoveredVariableUsage]
 ) -> List[DiscoveredVariableUsage]:
     """
-    Every usage in `usages_b` whose (file_path, variable) didn't already
-    exist somewhere in `usages_a`. Identity deliberately excludes
-    access_type and line: switching os.environ.get("FOO") to
-    os.environ["FOO"], or a call site simply moving to a different line,
-    must not be reported as a new dependency. A second, independently new
-    call site for a variable already used elsewhere in the same file is
-    an accepted non-detection of this identity choice -- the identity is
-    file+variable, not call-site.
+    Every usage in `usages_b` whose `variable` didn't already exist
+    anywhere in `usages_a`. Identity is the variable name alone --
+    deliberately excluding file_path, access_type, and line: switching
+    os.environ.get("FOO") to os.environ["FOO"], a call site moving to a
+    different line, or a whole file being moved/renamed (which
+    git_utils.list_changed_files reports as a delete-and-add, not a
+    rename) must not be reported as a new dependency. A second,
+    independently new call site for a variable already used elsewhere in
+    the project -- whether in the same file or a different one -- is an
+    accepted non-detection of this identity choice.
     """
-    existing_keys = {(u.file_path, u.variable) for u in usages_a}
-    return [u for u in usages_b if (u.file_path, u.variable) not in existing_keys]
+    existing_variables = {u.variable for u in usages_a}
+    return [u for u in usages_b if u.variable not in existing_variables]
 
 
 def classify_against_schema(

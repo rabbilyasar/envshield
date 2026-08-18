@@ -567,7 +567,7 @@ def _render_explain_report(report: "explain.ExplainReport") -> None:
     if schema["requiredness"] == "conditional":
         condition = schema["requiredIf"] or {}
         console.print(
-            f'              when {condition.get("var")} == '
+            f"              when {condition.get('var')} == "
             f'"{condition.get("equals", "true")}"'
         )
     default = schema["default"]
@@ -844,7 +844,9 @@ def _render_contract_diff_table(
 
     console.print(table)
     blocking_changes = [
-        c for c in result.changes if contract_diff.is_blocking_change(c, fail_on_categories)
+        c
+        for c in result.changes
+        if contract_diff.is_blocking_change(c, fail_on_categories)
     ]
     if blocking_changes:
         blocking_categories_present = sorted({c.category for c in blocking_changes})
@@ -908,8 +910,8 @@ def _render_dependency_change_table(
         )
 
 
-@schema_app.command("check-usages")
-def schema_check_usages(
+@app.command(name="undeclared")
+def undeclared(
     rev_a: Optional[str] = typer.Argument(
         None,
         metavar="[REV_A]",
@@ -933,15 +935,16 @@ def schema_check_usages(
     ),
 ):
     """
-    Finds source-code environment-variable usages introduced between two
-    revisions and reports whether each is already declared in the
-    contract. With no arguments, compares HEAD against your current
+    A revision-scoped guard for newly introduced configuration
+    dependencies: finds source-code environment-variable usages introduced
+    between two revisions and reports whether each is already declared in
+    the contract. With no arguments, compares HEAD against your current
     working tree (uncommitted and untracked files included) -- catching a
     newly introduced dependency before you commit it.
     """
     if (rev_a is None) != (rev_b is None):
         message = (
-            "pass both revisions, or neither -- 'envshield schema check-usages' "
+            "pass both revisions, or neither -- 'envshield undeclared' "
             "alone compares HEAD against your current working tree."
         )
         if json_output:

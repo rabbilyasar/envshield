@@ -25,7 +25,7 @@ class TestFindNewUsages:
 
     def test_identity_ignores_access_type(self):
         """
-        Locked decision: (file_path, variable) is the identity, not
+        Locked decision: `variable` alone is the identity, not
         (file_path, variable, access_type). Rewriting os.environ.get("FOO")
         as os.environ["FOO"] must not be reported as a new dependency.
         """
@@ -44,13 +44,25 @@ class TestFindNewUsages:
 
         assert result == []
 
-    def test_same_variable_in_a_different_file_is_new(self):
+    def test_same_variable_in_a_different_file_is_not_new(self):
+        """
+        Locked decision: identity is `variable` alone, not
+        (file_path, variable). A file move/rename is reported by
+        git_utils.list_changed_files (which passes --no-renames) as the old
+        path deleted and the new path added -- under a file-inclusive
+        identity, every usage in the moved file would be misreported as a
+        newly introduced dependency even though nothing about the
+        dependency itself changed. The accepted trade-off is the inverse:
+        an independently new call site for a variable already used
+        elsewhere in the project goes undetected (see the same-file case
+        above, which already accepted this for call sites within one file).
+        """
         old = _usage("FOO", file_path="a.py")
         new = _usage("FOO", file_path="b.py")
 
         result = dependency_diff.find_new_usages([old], [new])
 
-        assert [u.file_path for u in result] == ["b.py"]
+        assert result == []
 
     def test_a_second_new_call_site_for_an_already_used_variable_in_the_same_file_is_not_flagged(
         self,
