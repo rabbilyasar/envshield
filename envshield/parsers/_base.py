@@ -22,6 +22,24 @@ class BaseParser(ABC):
     # legitimately-unknown value as an invalid one.
     UNRESOLVED_VALUE = "<value not visible in this file>"
 
+    # Set by a parser's own get_vars() (as an instance attribute, shadowing
+    # this class-level default) when the file references an external
+    # source -- e.g. a Kubernetes envFrom.configMapRef/secretRef whose
+    # ConfigMap/Secret isn't defined anywhere in the supplied manifest --
+    # that could supply variable NAMES this parser has no way to enumerate,
+    # not just a value it can't resolve for an already-known name (that
+    # case is UNRESOLVED_VALUE, above). Distinct from UNRESOLVED_VALUE
+    # because it can't be expressed as a per-key entry in the returned
+    # dict at all: there's no key to attach it to when the possible
+    # variable names themselves are unknown. Left False (the default) for
+    # every parser that has no such concept -- schema_manager.
+    # diff_against_schema treats a required variable this parser didn't
+    # report as genuinely missing unless this is True, in which case it's
+    # reported as unresolved instead: EnvShield cannot confirm the
+    # variable is supplied, but must equally not claim it's confirmed
+    # absent.
+    has_unresolved_source = False
+
     @abstractmethod
     def get_vars(
         self, file_path: str, get_values: bool = False

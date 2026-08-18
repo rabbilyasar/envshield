@@ -36,11 +36,24 @@ class KubernetesParser(BaseParser):
 
     A value sourced from 'envFrom' (a ConfigMap/Secret reference) is
     resolved only if that ConfigMap/Secret is itself defined in the same
-    file; a 'valueFrom' entry, or an unresolvable envFrom reference, is
-    reported as present with a placeholder value, since its real value
-    lives in the cluster, not in this file. A Secret's own data values are
-    never decoded even when present (they're base64, and this is a
-    presence check, not a content check).
+    file. A 'valueFrom' entry is reported as present with a placeholder
+    value (UNRESOLVED_VALUE), since its real value lives in the cluster,
+    not in this file -- the variable NAME is still known there, only the
+    value isn't. An 'envFrom' reference to a ConfigMap/Secret that ISN'T
+    defined in the supplied file is a different, weaker case: the
+    variable NAMES it might supply aren't knowable at all, so nothing can
+    be added to the returned set for it -- instead it's surfaced via
+    has_unresolved_source (see BaseParser), which
+    schema_manager.diff_against_schema uses to avoid confidently
+    reporting a required variable as either satisfied or missing when an
+    unresolved reference could be the thing supplying it. A ConfigMap/
+    Secret reference's own 'optional: true' flag (real K8s semantics: the
+    pod still starts if the object is absent) does not remove this
+    ambiguity -- it only means a genuinely-absent object wouldn't break
+    the deployment, not that EnvShield can determine what the object
+    supplies if it exists elsewhere in the cluster. A Secret's own data
+    values are never decoded even when present (they're base64, and this
+    is a presence check, not a content check).
     """
 
     def __init__(self, container: str | None = None, prefer: str | None = None):
@@ -103,6 +116,7 @@ class KubernetesParser(BaseParser):
             )
 
         variables: dict[str, str] = {}
+        self.has_unresolved_source = False
         for env_entry in target.get("env") or []:
             name = env_entry.get("name")
             if not name:
@@ -115,12 +129,18 @@ class KubernetesParser(BaseParser):
 
         for env_from in target.get("envFrom") or []:
             cm_ref = (env_from.get("configMapRef") or {}).get("name")
-            if cm_ref and cm_ref in config_maps:
-                for key, value in config_maps[cm_ref].items():
-                    variables.setdefault(key, value)
+            if cm_ref:
+                if cm_ref in config_maps:
+                    for key, value in config_maps[cm_ref].items():
+                        variables.setdefault(key, value)
+                else:
+                    self.has_unresolved_source = True
             secret_ref = (env_from.get("secretRef") or {}).get("name")
-            if secret_ref and secret_ref in secrets:
-                for key in secrets[secret_ref]:
-                    variables.setdefault(key, self.UNRESOLVED_VALUE)
+            if secret_ref:
+                if secret_ref in secrets:
+                    for key in secrets[secret_ref]:
+                        variables.setdefault(key, self.UNRESOLVED_VALUE)
+                else:
+                    self.has_unresolved_source = True
 
         return variables if get_values else set(variables.keys())
