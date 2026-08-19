@@ -2,6 +2,89 @@
 
 All notable changes to this project are documented in this file.
 
+## [4.6.0] - 2026-08-19
+
+This release completes the EnvShield **V1** product milestone: the schema-to-schema
+contract diff, source-code configuration discovery, and source-to-contract change
+analysis capabilities described in the project charter (Phases 2A, 2B, and 2C) are
+now all implemented, alongside a full security-hardening pass and a set of
+release-readiness fixes found during end-to-end validation.
+
+### Added
+- **`envshield schema diff [REV_A] [REV_B] [--service] [--json]`** — compares a
+  service's schema contract between two Git revisions (or the working tree against
+  `HEAD` with no arguments), classifying every added/removed/changed variable as
+  breaking, security-sensitive, or informational. See
+  [Contract diffing and CI enforcement](README.md#contract-diffing-and-ci-enforcement).
+- **`envshield undeclared [REV_A] [REV_B] [--service] [--json]`** — reports
+  environment-variable reads newly introduced in source code since a given revision
+  that aren't declared in the schema, so a new configuration dependency can be
+  caught before it's committed. Distinct from `scan`, which inventories every
+  currently-undeclared read across the whole codebase regardless of when it was
+  introduced.
+- **Source-code configuration discovery for Python and JavaScript/TypeScript** —
+  AST-based analysis of where a variable is actually read in source (`os.environ`,
+  `os.getenv`, `process.env`), independent of the CLI, powering `undeclared` and
+  `explain`. Correctly scopes to a service's own directory in a multi-service
+  project, with no cross-service attribution.
+- **`envshield explain VARIABLE [--service]`** — reports everything EnvShield
+  currently knows about one variable in one place: its contract, where it's
+  declared (including through `extends`), what source code reads it, which other
+  variables' `requiredIf` conditions reference it, and which registered deployment
+  manifests declare it.
+- **`doctor` diagnoses a per-service `manifests:` key** — this key was never valid
+  at any version (deployment manifests are only ever read from a top-level
+  `manifests:` list in `envshield.yml`), and was previously ignored silently
+  instead of flagged.
+
+### Fixed
+- **Six security hardening fixes, closing the P0 release blockers from the
+  2026-08-10 audit**, plus one related P1: `scan` no longer prints an unredacted
+  secret value in a finding; a validation error message no longer leaks the value
+  it's rejecting; `scan` no longer follows a symlink into arbitrary file content
+  and reports it as a legitimate finding; a schema-sourced path (service name,
+  description, schema path) can no longer be interpolated unescaped into a
+  generated hook script or generated source file; a configured schema/local-file/
+  deployment-manifest path is now checked for containment after resolving
+  symlinks, not just lexically; a freshly-created local secrets file now gets
+  `chmod 0600` instead of inheriting the process umask.
+- **A Kubernetes manifest's unresolved `envFrom` reference (an external ConfigMap
+  or Secret EnvShield can't read from the manifest alone) is now reported as
+  unresolved** — distinct from both "missing" and "satisfied" — consistently
+  across `check`, `doctor`, `explain`, and their `--json` output, instead of being
+  misreported as a plain missing declaration.
+- **`schema diff`'s two-revision form no longer hard-fails when the older revision
+  predates EnvShield's adoption in the project** (no `envshield.yml`/schema existed
+  yet at that revision) — it's treated as an empty contract so the diff still runs
+  and reports every variable as newly added, instead of erroring. The default
+  (no-arguments) form is unchanged and still errors, since there's no "older
+  revision" to be lenient about.
+- **`scan --service` no longer reports a false positive from another service's
+  files.** Its default scan path now scopes to the named service's own directory
+  (an explicitly-supplied path is never altered), closing a gap where the
+  single-schema-for-every-file resolver used with `--service` could flag an
+  unrelated service's variables against the wrong schema.
+- **`setup` no longer reports "Configuration complete!" after a declined
+  overwrite.** `run_setup` now reports whether it actually ran to completion, and
+  the CLI checks that result before printing success.
+- **A generated Python config module no longer duplicates its `pydantic` import
+  line** when more than one extra import shares that module — all imports from
+  the same module are now merged onto a single `from module import ...` line.
+- **`scan` and `undeclared` always report a scanned file's path relative to the
+  current working directory**, regardless of whether an absolute or relative path
+  argument was given, instead of sometimes showing an absolute path.
+- A deployment manifest failing `check` now suggests fixing the manifest itself,
+  not running `envshield setup` (which only ever writes a local config file, never
+  a deployment manifest).
+- Multi-document Compose YAML and the long-form `env_file` mapping are now parsed
+  correctly; a `.env`-style file with non-UTF-8 bytes no longer crashes parsing.
+- Pre-commit/post-merge hook checks use exact-line matching instead of a loose
+  grep, closing a gap where one service's change could spuriously trigger
+  another's hook.
+- A service's legacy `path:` key (pre-4.5.0, moved to `schema:`) is now
+  distinguished from a genuinely nonexistent service instead of being reported
+  identically.
+
 ## [4.5.1] - 2026-08-10
 
 ### Fixed
