@@ -5,14 +5,14 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "envshield"
 version = "4.6.0"  # must be a string for PEP 621 compliance
-description = "EnvShield: A CLI for secure local environment management and secret prevention."
+description = "EnvShield: Schema-first environment configuration governance CLI."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE.md" }
 authors = [
     { name = "Rabbil Yasar Sajal", email = "rabbilyasar@gmail.com" }
 ]
-keywords = ["environment", "security", "secrets", "cli", "devops"]
+keywords = ["environment", "configuration", "schema", "contract", "cli", "devops"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
@@ -36,6 +36,13 @@ dependencies = [
     "typer[all]>=0.9,<1.0",
     "toml>=0.10,<1.0"
 ]
+
+[project.urls]
+Homepage = "https://www.envshield.dev"
+Documentation = "https://docs.envshield.dev"
+Source = "https://github.com/rabbilyasar/envshield"
+Issues = "https://github.com/rabbilyasar/envshield/issues"
+Changelog = "https://github.com/rabbilyasar/envshield/blob/main/CHANGELOG.md"
 
 [project.scripts]
 envshield = "envshield.cli:app"
