@@ -252,9 +252,16 @@ def check_schema(
         console.print(table)
         suggestions = []
         if diff.missing or diff.blank or diff.invalid:
-            suggestions.append(
-                "Run 'envshield setup' to fill in missing/blank values or fix invalid ones."
-            )
+            if parser.is_deployment_manifest:
+                suggestions.append(
+                    "Fix the missing/blank/invalid values directly in this deployment "
+                    "manifest -- 'envshield setup' only writes your local config file, "
+                    "it never edits a deployment manifest."
+                )
+            else:
+                suggestions.append(
+                    "Run 'envshield setup' to fill in missing/blank values or fix invalid ones."
+                )
         if diff.extra:
             suggestions.append(
                 "Remove extra variables if unused, or add them to the schema if they're meant to be there."

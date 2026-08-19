@@ -56,6 +56,8 @@ class KubernetesParser(BaseParser):
     is a presence check, not a content check).
     """
 
+    is_deployment_manifest = True
+
     def __init__(self, container: str | None = None, prefer: str | None = None):
         self.container = container
         # A soft hint (typically the --service name), tried only when the

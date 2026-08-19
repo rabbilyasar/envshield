@@ -52,7 +52,7 @@ def _read_seed_values(example_file: str, local_file: str) -> Dict[str, str]:
     return {}
 
 
-def run_setup(service_name: str, output_file: Optional[str] = None):
+def run_setup(service_name: str, output_file: Optional[str] = None) -> bool:
     """
     Guides a new developer through creating (or completing) their local
     environment config, driven by the service's schema.
@@ -63,6 +63,13 @@ def run_setup(service_name: str, output_file: Optional[str] = None):
             'local_file' is set to for this service in envshield.yml (see
             config_manager.get_env_paths).
         service_name: Which registered service to set up.
+
+    Returns:
+        False if the user declined to overwrite an existing local file --
+        nothing was written. True otherwise (including the no-op case where
+        everything was already configured). Callers must check this before
+        reporting success, rather than assuming a normal return means a file
+        was actually written.
     """
     paths = config_manager.get_env_paths(service_name=service_name)
     example_file = paths["example_file"]
@@ -106,7 +113,7 @@ def run_setup(service_name: str, output_file: Optional[str] = None):
         ).ask()
         if not overwrite:
             console.print("[yellow]Setup cancelled.[/yellow]")
-            return
+            return False
 
     # Step 1: Work out which variables already have a usable value (from the
     # local file, the template, or the schema's own default), and which still
@@ -216,6 +223,7 @@ def run_setup(service_name: str, output_file: Optional[str] = None):
         _write_python_local_file(local_file, final_vars, keys_to_prompt)
     else:
         _write_dotenv_local_file(local_file, final_vars)
+    return True
 
 
 def _write_dotenv_local_file(local_file: str, final_vars: Dict[str, str]) -> None:

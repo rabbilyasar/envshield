@@ -29,10 +29,35 @@ _PYTHON_HEADER_TEMPLATE = (
     "Source of truth: env.schema.toml. Regenerate with: envshield generate\n\n"
     "Requires: pip install pydantic pydantic-settings{extra_requires}\n"
     '"""\n\n'
-    "{extra_imports}"
-    "from pydantic import Field, SecretStr\n"
+    "{imports}"
     "from pydantic_settings import BaseSettings, SettingsConfigDict\n\n\n"
 )
+
+_IMPORT_LINE_RE = re.compile(r"^from (?P<module>[\w.]+) import (?P<name>\w+)$")
+
+
+def _merge_python_imports(extra_imports: set[str]) -> list[str]:
+    """
+    Per-field codegen (_python_type_and_extras) collects one "from MODULE
+    import NAME" string per name a field happens to need (AnyUrl, EmailStr,
+    Literal, Optional, ...) -- rendering each of those verbatim, alongside
+    the always-present 'from pydantic import Field, SecretStr', used to
+    produce a separate 'from pydantic import ...' line per extra name
+    instead of one combined import. Groups everything (including the
+    always-present Field/SecretStr names) by module and emits exactly one
+    sorted, deduplicated import line per module.
+    """
+    by_module: dict[str, set[str]] = {"pydantic": {"Field", "SecretStr"}}
+    for entry in extra_imports:
+        match = _IMPORT_LINE_RE.match(entry)
+        if not match:
+            continue
+        by_module.setdefault(match["module"], set()).add(match["name"])
+
+    return [
+        f"from {module} import {', '.join(sorted(names))}"
+        for module, names in sorted(by_module.items())
+    ]
 
 
 def _python_field_name(key: str) -> str:
@@ -169,12 +194,10 @@ def _generate_python(schema: dict[str, Any]) -> str:
         else ""
     )
 
-    ordered_imports = sorted(all_imports)
+    import_lines = _merge_python_imports(all_imports)
     header = _PYTHON_HEADER_TEMPLATE.format(
         extra_requires=extra_requires,
-        extra_imports=("".join(f"{imp}\n" for imp in ordered_imports) + "\n")
-        if ordered_imports
-        else "",
+        imports="".join(f"{line}\n" for line in import_lines) + "\n",
     )
 
     lines = [

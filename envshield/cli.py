@@ -30,7 +30,7 @@ from .core import (
     service_manager,
     setup_manager,
 )
-from .core.exceptions import EnvShieldException
+from .core.exceptions import EnvShieldException, SchemaNotFoundError
 from .utils import git_utils
 
 
@@ -91,13 +91,13 @@ schema_app = typer.Typer(
 app.add_typer(schema_app, name="schema")
 service_app = typer.Typer(
     name="service",
-    help="Discover, add, and list services for a multi-service project.",
+    help="Discover, add, list, and remove services for a multi-service project.",
     no_args_is_help=True,
 )
 app.add_typer(service_app, name="service")
 hook_app = typer.Typer(
     name="hook",
-    help="Install, check, and remove EnvShield's Git hooks.",
+    help="Install, inspect the status of, and remove EnvShield's Git hooks.",
     no_args_is_help=True,
 )
 app.add_typer(hook_app, name="hook")
@@ -734,16 +734,21 @@ def setup(
         output_file = None
 
     try:
+        completed = True
         for target in targets:
             _print_service_header(targets, target)
-            setup_manager.run_setup(service_name=target, output_file=output_file)
+            if not setup_manager.run_setup(
+                service_name=target, output_file=output_file
+            ):
+                completed = False
 
-        # After successful setup, offer to install git hooks
-        hm = hooks_manager.HooksManager()
-        hm.install_hooks_if_needed(auto=True, force=False)
+        if completed:
+            # After successful setup, offer to install git hooks
+            hm = hooks_manager.HooksManager()
+            hm.install_hooks_if_needed(auto=True, force=False)
 
-        console.print("\n[bold green]✓ Configuration complete![/bold green]")
-        hm.print_hook_status()
+            console.print("\n[bold green]✓ Configuration complete![/bold green]")
+            hm.print_hook_status()
     except EnvShieldException as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(code=1)
@@ -952,12 +957,13 @@ def undeclared(
     ),
 ):
     """
-    A revision-scoped guard for newly introduced configuration
-    dependencies: finds source-code environment-variable usages introduced
-    between two revisions and reports whether each is already declared in
-    the contract. With no arguments, compares HEAD against your current
-    working tree (uncommitted and untracked files included) -- catching a
-    newly introduced dependency before you commit it.
+    Reports environment-variable reads newly introduced since a given
+    revision that aren't declared in the schema -- unlike 'scan' (which
+    inventories every currently-undeclared read across the whole
+    codebase), this only flags what's new. With no arguments, compares
+    HEAD against your current working tree (uncommitted and untracked
+    files included) -- catching a newly introduced dependency before you
+    commit it.
     """
     if (rev_a is None) != (rev_b is None):
         message = (
@@ -1185,6 +1191,7 @@ def schema_diff(
             console.print(f"[bold red]Error:[/bold red] {message}")
         raise typer.Exit(code=1)
 
+    explicit_revisions = rev_a is not None
     if rev_a is None and rev_b is None:
         left_revision, right_revision = None, "HEAD"
         left_label, right_label = "working tree", "HEAD"
@@ -1194,6 +1201,31 @@ def schema_diff(
         assert rev_a is not None and rev_b is not None
         left_revision, right_revision = rev_a, rev_b
         left_label, right_label = rev_a, rev_b
+
+        # git show treats a bad revision as "doesn't exist" -- the exact
+        # same signal a valid-but-pre-adoption revision produces (see the
+        # left_revision-missing-schema handling below). Without this
+        # upfront check, a typo'd revision and "this revision predates
+        # EnvShield" would be indistinguishable; explicit, mirrors
+        # 'undeclared's identical check (CLAUDE.md's "prefer explicit
+        # errors over silent assumptions").
+        for candidate in (rev_a, rev_b):
+            if not git_utils.revision_exists(candidate):
+                message = f"revision '{candidate}' does not resolve to a commit."
+                if json_output:
+                    print(
+                        json.dumps(
+                            {
+                                "has_breaking_changes": False,
+                                "has_blocking_changes": False,
+                                "error": message,
+                            },
+                            indent=2,
+                        )
+                    )
+                else:
+                    console.print(f"[bold red]Error:[/bold red] {message}")
+                raise typer.Exit(code=1)
 
     try:
         targets = service_manager.resolve_targets(
@@ -1223,8 +1255,30 @@ def schema_diff(
     for target in targets:
         if not json_output:
             _print_service_header(targets, target)
+        left_predates_adoption = False
         try:
-            schema_left = schema_snapshot.load_schema_for_diff(target, left_revision)
+            try:
+                schema_left = schema_snapshot.load_schema_for_diff(
+                    target, left_revision
+                )
+            except SchemaNotFoundError:
+                # Only for the explicit two-revision form's OLDER side: a
+                # revision that genuinely doesn't resolve was already
+                # rejected above, so a missing schema/envshield.yml/service
+                # here means this revision predates EnvShield adopting this
+                # service at all -- an adoption-boundary diff, not an
+                # error. Treated as an empty contract (diff_schemas already
+                # supports this input; every declared variable on the right
+                # side reports as "added", which is the correct, reviewable
+                # answer to "what does the very first contract declare?").
+                # The NEWER side (schema_right, below) is never given this
+                # leniency: a target revision with no contract at all is
+                # far more likely a mistake (e.g. arguments swapped) than
+                # an intentional query, so it still raises.
+                if not explicit_revisions:
+                    raise
+                schema_left = {}
+                left_predates_adoption = True
             schema_right = schema_snapshot.load_schema_for_diff(target, right_revision)
             result = contract_diff.diff_schemas(schema_left, schema_right)
         except EnvShieldException as e:
@@ -1245,8 +1299,15 @@ def schema_diff(
             entry["service"] = target
             entry["revision_a"] = left_label
             entry["revision_b"] = right_label
+            entry["revision_a_predates_adoption"] = left_predates_adoption
             results.append(entry)
         else:
+            if left_predates_adoption:
+                console.print(
+                    f"[dim]ℹ️  No EnvShield contract existed for '{target}' at "
+                    f"'{left_label}' -- every variable below is shown as added, "
+                    "against an implicit empty starting contract.[/dim]"
+                )
             _render_contract_diff_table(
                 result,
                 left_label,
@@ -1455,7 +1516,7 @@ def scan(
         help="Print machine-readable JSON instead of tables; suppresses all other output.",
     ),
 ):
-    """Scans files for hardcoded secrets and undeclared variables."""
+    """Scans files for hardcoded secrets and reports every currently-undeclared environment-variable read."""
     try:
         if service:
             # Validate eagerly for a consistent "Available: ..." error --
@@ -1598,7 +1659,9 @@ def hook_remove(
 @app.command(name="import")
 def import_command(
     file: str = typer.Argument(
-        ..., metavar="FILE", help="The .env file to import and convert to a schema."
+        ...,
+        metavar="FILE",
+        help="The config file to import and convert to a schema (.env, a Python config module, or a deployment manifest).",
     ),
     output: str = typer.Option(
         config_manager.SCHEMA_FILE_NAME,
@@ -1624,7 +1687,8 @@ def import_command(
         help="If set, import to this service's schema path (for multi-service projects).",
     ),
 ):
-    """Generates an env.schema.toml from an existing .env file.
+    """Builds (or refreshes) a schema from an existing config file -- .env,
+    a Python config module, or a deployment manifest.
 
     Narrower than 'init': only (re)writes one schema, from one file --
     no envshield.yml, .gitignore, or hook changes. Use this to refresh an

@@ -129,6 +129,30 @@ def test_check_auto_validates_a_registered_deployment_manifest_too(tmp_path):
         assert "MANIFEST_ONLY" in result.stdout
 
 
+def test_check_suggestion_for_a_deployment_manifest_does_not_recommend_setup(tmp_path):
+    """
+    Regression: a missing/blank/invalid finding against a deployment
+    manifest used to print "Run 'envshield setup' to fill in..." -- setup
+    only ever writes a service's local file, never a deployment manifest,
+    so that suggestion was actively wrong advice for this target.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_root_service()
+        config_manager.add_manifest("docker-compose.yml", {"app": "app"})
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[API_KEY]\ndescription="Test"\n[MANIFEST_ONLY]\ndescription="x"\n')
+        with open(".env", "w") as f:
+            f.write("API_KEY=12345\nMANIFEST_ONLY=x\n")
+        with open("docker-compose.yml", "w") as f:
+            f.write("services:\n  app:\n    environment:\n      - API_KEY=12345\n")
+
+        result = runner.invoke(app, ["check"])
+
+        assert result.exit_code == 1
+        assert "Run 'envshield setup'" not in result.stdout
+        assert "only writes your local config file" in result.stdout
+
+
 def test_doctor_reports_unresolved_for_a_kubernetes_manifest_with_an_external_env_from(
     tmp_path,
 ):
@@ -1242,6 +1266,95 @@ def test_doctor_reports_legacy_deployment_manifest_key(tmp_path):
         assert "Legacy Configuration Keys" in checks
         assert checks["Legacy Configuration Keys"]["passed"] is False
         assert "deployment_manifest" in checks["Legacy Configuration Keys"]["message"]
+
+
+def test_doctor_reports_a_manifests_key_nested_under_a_service(tmp_path):
+    """
+    Regression: 'manifests:' is only ever read as a TOP-LEVEL list
+    (config_manager.get_deployment_manifests) -- nesting it under a
+    service (a natural but wrong guess, since 'schema:'/'local_file:'
+    genuinely are per-service keys) was silently never read: no error, no
+    manifest validated, and 'explain'/'doctor' dropped the whole
+    deployment-manifest section with no warning at all. Deployment-
+    manifest correctness is the pillar the charter treats as carrying the
+    most differentiation weight, so a silent failure here is exactly what
+    doctor's legacy-key detection exists to prevent.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.system("git init -q")
+        os.makedirs("api", exist_ok=True)
+        with open(CONFIG_FILE_NAME, "w") as f:
+            f.write(
+                "services:\n"
+                "  api:\n"
+                "    schema: api/env.schema.toml\n"
+                "    manifests:\n"
+                "      - file: docker-compose.yml\n"
+                "        container: api\n"
+            )
+        with open("api/env.schema.toml", "w") as f:
+            f.write('[API_KEY]\ndescription = "Test"\n')
+
+        result = runner.invoke(app, ["doctor", "--json", "--service", "api"])
+
+        payload = json.loads(result.stdout)
+        checks = {c["name"]: c for c in payload["results"][0]["checks"]}
+        assert "Legacy Configuration Keys" in checks
+        assert checks["Legacy Configuration Keys"]["passed"] is False
+        assert "manifests" in checks["Legacy Configuration Keys"]["message"]
+        assert "TOP-LEVEL" in checks["Legacy Configuration Keys"]["message"]
+
+
+def test_doctor_omits_legacy_check_for_a_correctly_placed_top_level_manifest(tmp_path):
+    """A correctly-placed top-level 'manifests:' list must not trip the same check."""
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.system("git init -q")
+        os.makedirs("api", exist_ok=True)
+        with open(CONFIG_FILE_NAME, "w") as f:
+            f.write(
+                "services:\n"
+                "  api:\n"
+                "    schema: api/env.schema.toml\n"
+                "manifests:\n"
+                "  - file: docker-compose.yml\n"
+                "    containers:\n"
+                "      api: api\n"
+            )
+        with open("api/env.schema.toml", "w") as f:
+            f.write('[API_KEY]\ndescription = "Test"\n')
+        with open("docker-compose.yml", "w") as f:
+            f.write("services:\n  api:\n    environment:\n      - API_KEY=x\n")
+
+        result = runner.invoke(app, ["doctor", "--json", "--service", "api"])
+
+        payload = json.loads(result.stdout)
+        checks = {c["name"]: c for c in payload["results"][0]["checks"]}
+        assert "Legacy Configuration Keys" not in checks
+        assert "Deployment Manifest" in checks
+
+
+def test_doctor_omits_legacy_configuration_keys_check_when_not_applicable(tmp_path):
+    """
+    Regression: 'Legacy Configuration Keys' used to run unconditionally on
+    every project, printing a permanent, always-green, identical line for
+    the overwhelming majority of projects that never used the pre-4.2.0/
+    4.5.0 key names at all. It should only appear when actually relevant --
+    see test_doctor_reports_legacy_path_key/deployment_manifest_key above
+    for the case where it does.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.system("git init -q")
+        with open(CONFIG_FILE_NAME, "w") as f:
+            f.write("services:\n  api:\n    schema: api/env.schema.toml\n")
+        os.makedirs("api", exist_ok=True)
+        with open("api/env.schema.toml", "w") as f:
+            f.write('[API_KEY]\ndescription = "Test"\n')
+
+        result = runner.invoke(app, ["doctor", "--json", "--service", "api"])
+
+        payload = json.loads(result.stdout)
+        checks = {c["name"]: c for c in payload["results"][0]["checks"]}
+        assert "Legacy Configuration Keys" not in checks
 
 
 def test_doctor_json_and_fix_together_is_rejected(tmp_path):

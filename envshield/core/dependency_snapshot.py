@@ -216,7 +216,15 @@ def discover_usages_for_service(
     usages_a: List[discovery.DiscoveredVariableUsage] = []
     usages_b: List[discovery.DiscoveredVariableUsage] = []
     for file_path in files:
-        usages_a.extend(_discover(_read_source(file_path, revision_a), file_path))
-        usages_b.extend(_discover(_read_source(file_path, revision_b), file_path))
+        # _changed_source_files returns absolute paths (git_utils'
+        # documented contract, shared with get_staged_files) -- needed as-is
+        # for _read_source's disk/git-show reads, but reported verbatim they
+        # produced an unreadably long, Rich-table-truncated absolute path in
+        # both 'undeclared's table and its --json output. The recorded
+        # usage's own file_path is normalized to cwd-relative for display;
+        # the read itself still uses the real, resolvable absolute path.
+        display_path = os.path.relpath(file_path, os.getcwd())
+        usages_a.extend(_discover(_read_source(file_path, revision_a), display_path))
+        usages_b.extend(_discover(_read_source(file_path, revision_b), display_path))
 
     return usages_a, usages_b

@@ -78,6 +78,43 @@ class TestDefaultRevisionsAreHeadVsWorkingTree:
         assert {u.variable for u in usages_b} == {"FOO", "BAR"}
 
 
+class TestDiscoveredUsageFilePathIsCwdRelative:
+    def test_file_path_is_not_absolute(self, tmp_path, monkeypatch):
+        """
+        Regression: _changed_source_files returns absolute paths (git_utils'
+        documented contract) -- reported verbatim on a DiscoveredVariableUsage,
+        this produced an unreadable, Rich-table-truncated absolute path in
+        both 'undeclared's table and its --json output. The recorded
+        usage's file_path must be cwd-relative; only the internal disk/git
+        read still needs the real absolute path.
+        """
+        _single_service_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path, "app.py", "import os\n")
+        _commit(tmp_path, "no usages yet")
+        _write(tmp_path, "app.py", "import os\nx = os.environ.get('FOO')\n")
+
+        _, usages_b = dependency_snapshot.discover_usages_for_service("api")
+
+        assert [u.file_path for u in usages_b] == ["app.py"]
+
+    def test_file_path_is_cwd_relative_for_the_explicit_two_revision_form_too(
+        self, tmp_path, monkeypatch
+    ):
+        _single_service_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path, "app.py", "import os\n")
+        _commit(tmp_path, "no usages yet")
+        _write(tmp_path, "app.py", "import os\nx = os.environ.get('FOO')\n")
+        _commit(tmp_path, "adds FOO")
+
+        _, usages_b = dependency_snapshot.discover_usages_for_service(
+            "api", revision_a="HEAD~1", revision_b="HEAD"
+        )
+
+        assert [u.file_path for u in usages_b] == ["app.py"]
+
+
 class TestUntrackedFilesAreIncludedOnlyForTheWorkingTreeSide:
     def test_a_brand_new_untracked_file_is_discovered_against_head(
         self, tmp_path, monkeypatch

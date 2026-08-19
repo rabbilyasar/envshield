@@ -118,7 +118,14 @@ def test_setup_command_no_example_file(tmp_path):
 
 
 def test_setup_command_overwrite_declined(mocker, tmp_path):
-    """Tests that the command exits if the user declines to overwrite an existing .env file."""
+    """
+    Regression: declining the overwrite prompt used to leave '.env'
+    untouched (correct) but the CLI wrapper still unconditionally printed
+    '✓ Configuration complete!' right after -- a false success report for
+    a setup that did nothing. Also covers 'default' (pressing Enter, which
+    questionary.confirm's default=False resolves the same way as an
+    explicit decline).
+    """
     with runner.isolated_filesystem(temp_dir=tmp_path):
         _write_root_service_config()
         with open(setup_manager.EXAMPLE_FILE, "w") as f:
@@ -135,10 +142,84 @@ def test_setup_command_overwrite_declined(mocker, tmp_path):
 
         assert result.exit_code == 0
         assert "Setup cancelled" in result.stdout
+        assert "Configuration complete" not in result.stdout
 
         with open(".env", "r") as f:
             content = f.read()
             assert content == "OLD_KEY=OLD_VALUE"
+
+
+def test_setup_manager_reports_cancellation_via_return_value(mocker, tmp_path):
+    """
+    run_setup's return value is the CLI's only signal that nothing was
+    written -- a caller that ignores it (as the CLI used to) can't tell a
+    cancelled setup apart from a completed one.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_root_service_config()
+        with open(setup_manager.EXAMPLE_FILE, "w") as f:
+            f.write("KEY=VALUE\n")
+        with open(".env", "w") as f:
+            f.write("OLD_KEY=OLD_VALUE")
+
+        mocker.patch(
+            "questionary.confirm",
+            return_value=mocker.Mock(ask=mocker.Mock(return_value=False)),
+        )
+
+        assert setup_manager.run_setup(service_name="app") is False
+
+
+def test_setup_command_overwrite_accepted_still_reports_completion(mocker, tmp_path):
+    """
+    The accept path must keep reporting success -- this fix must not make
+    every setup run silently withhold 'Configuration complete!'.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_root_service_config()
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[KEY]\ndescription="x"\n')
+        with open(".env", "w") as f:
+            f.write("OLD_KEY=OLD_VALUE")
+
+        mocker.patch(
+            "questionary.confirm",
+            return_value=mocker.Mock(ask=mocker.Mock(return_value=True)),
+        )
+        mocker.patch(
+            "envshield.core.setup_manager.Prompt.ask", return_value="new-value"
+        )
+
+        result = runner.invoke(app, ["setup"])
+
+        assert result.exit_code == 0
+        assert "Configuration complete" in result.stdout
+        with open(".env", "r") as f:
+            content = f.read()
+            assert "KEY=new-value" in content
+            assert "OLD_KEY=OLD_VALUE" in content
+
+
+def test_setup_command_no_existing_env_still_reports_completion(mocker, tmp_path):
+    """No pre-existing local file means no overwrite prompt at all -- setup
+    should complete and report success exactly as before this fix."""
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_root_service_config()
+        with open(setup_manager.EXAMPLE_FILE, "w") as f:
+            f.write("KEY=\n")
+
+        mock_confirm = mocker.patch("questionary.confirm")
+        mocker.patch(
+            "envshield.core.setup_manager.Prompt.ask", return_value="new-value"
+        )
+
+        result = runner.invoke(app, ["setup"])
+
+        assert result.exit_code == 0
+        mock_confirm.assert_not_called()
+        assert "Configuration complete" in result.stdout
+        with open(".env", "r") as f:
+            assert "KEY=new-value" in f.read()
 
 
 def _write_multiservice_config(local_file="alpha/config/env_config.local.py"):

@@ -207,6 +207,24 @@ def test_generate_config_explicit_email_type_python_notes_extra():
     assert "pydantic[email]" in content
 
 
+def test_generate_config_python_merges_pydantic_imports_into_one_line():
+    """
+    Regression: a schema needing more than one extra pydantic name (here,
+    url + email, on top of the always-present Field/SecretStr) used to
+    render three separate 'from pydantic import ...' lines -- one per
+    name -- instead of one combined, deduplicated import.
+    """
+    schema = {
+        "API_URL": {"description": "URL.", "type": "url"},
+        "ADMIN_EMAIL": {"description": "Admin.", "type": "email"},
+    }
+
+    content = generator.generate_config(schema, lang="python")
+
+    assert content.count("from pydantic import") == 1
+    assert "from pydantic import AnyUrl, EmailStr, Field, SecretStr" in content
+
+
 def test_generate_config_pattern_becomes_field_constraint():
     schema = {"VERSION": {"description": "Semver.", "pattern": r"^v\d+\.\d+\.\d+$"}}
 

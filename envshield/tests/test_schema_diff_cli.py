@@ -66,6 +66,141 @@ class TestSchemaDiffRevisionPairing:
             assert "OLD" in result.stdout
 
 
+class TestSchemaDiffAdoptionBoundary:
+    """
+    Regression: diffing across the revision where EnvShield was first
+    adopted (no envshield.yml/schema at the older revision) used to hard-
+    error identically to a genuine typo'd revision -- 'envshield.yml does
+    not exist at revision X' either way, with no way to tell them apart.
+    The older side is now treated as an implicit empty contract (every
+    variable in the newer schema reports as "added"); a genuinely bad
+    revision string is now rejected by its own, distinct error, checked
+    before any schema is loaded.
+    """
+
+    def _adoption_boundary_repo(self):
+        _init_repo()
+        _write("app.py", "import os\nos.environ.get('DATABASE_URL')\n")
+        _commit("commit A: existing project, no EnvShield")
+        _write("envshield.yml", "services:\n  app:\n    schema: env.schema.toml\n")
+        _write(
+            "env.schema.toml",
+            '[DATABASE_URL]\ndescription = "x"\n\n'
+            '[PORT]\ndescription = "y"\ndefaultValue = "8000"\n',
+        )
+        _commit("commit B: EnvShield adopted")
+        _write(
+            "env.schema.toml",
+            '[DATABASE_URL]\ndescription = "x"\n\n'
+            '[PORT]\ndescription = "y"\ndefaultValue = "8000"\n\n'
+            '[LOG_LEVEL]\ndescription = "z"\ndefaultValue = "info"\n',
+        )
+        _commit("commit C: schema gains LOG_LEVEL")
+
+    def test_a_to_b_shows_the_initial_contract_as_added_not_an_error(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._adoption_boundary_repo()
+
+            result = runner.invoke(app, ["schema", "diff", "HEAD~2", "HEAD~1"])
+
+            assert (
+                result.exit_code == 1
+            )  # DATABASE_URL added with no default -> breaking
+            assert "does not exist at revision" not in result.stdout
+            assert "DATABASE_URL" in result.stdout
+            assert "PORT" in result.stdout
+            assert "No EnvShield contract existed" in result.stdout
+
+    def test_a_to_c_also_shows_the_full_contract_as_added(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._adoption_boundary_repo()
+
+            result = runner.invoke(app, ["schema", "diff", "HEAD~2", "HEAD"])
+
+            assert "DATABASE_URL" in result.stdout
+            assert "PORT" in result.stdout
+            assert "LOG_LEVEL" in result.stdout
+
+    def test_b_to_c_is_unaffected_by_the_adoption_boundary_leniency(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._adoption_boundary_repo()
+
+            result = runner.invoke(app, ["schema", "diff", "HEAD~1", "HEAD"])
+
+            assert "LOG_LEVEL" in result.stdout
+            assert "DATABASE_URL" not in result.stdout
+            assert "PORT" not in result.stdout
+            assert "No EnvShield contract existed" not in result.stdout
+
+    def test_json_marks_the_adoption_boundary_explicitly(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._adoption_boundary_repo()
+
+            result = runner.invoke(
+                app, ["schema", "diff", "HEAD~2", "HEAD~1", "--json"]
+            )
+
+            payload = json.loads(result.stdout)
+            assert payload["results"][0]["revision_a_predates_adoption"] is True
+            variables = {c["variable"] for c in payload["results"][0]["changes"]}
+            assert variables == {"DATABASE_URL", "PORT"}
+
+    def test_json_does_not_mark_a_normal_two_schema_comparison(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._adoption_boundary_repo()
+
+            result = runner.invoke(app, ["schema", "diff", "HEAD~1", "HEAD", "--json"])
+
+            payload = json.loads(result.stdout)
+            assert payload["results"][0]["revision_a_predates_adoption"] is False
+
+    def test_the_reverse_direction_still_errors_instead_of_silently_emptying(
+        self, tmp_path
+    ):
+        """
+        The leniency only ever applies to the OLDER (left) side. A target
+        revision with no contract at all -- e.g. arguments swapped by
+        mistake -- must still raise, not silently report every variable as
+        "removed" against an implicit empty target.
+        """
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._adoption_boundary_repo()
+
+            result = runner.invoke(app, ["schema", "diff", "HEAD~1", "HEAD~2"])
+
+            assert result.exit_code == 1
+            assert "does not exist at revision" in result.stdout
+
+    def test_a_genuinely_bad_revision_gets_its_own_distinct_error(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._adoption_boundary_repo()
+
+            result = runner.invoke(
+                app, ["schema", "diff", "not-a-real-revision", "HEAD"]
+            )
+
+            assert result.exit_code == 1
+            assert "does not resolve to a commit" in result.stdout
+            assert "does not exist at revision" not in result.stdout
+
+    def test_default_working_tree_form_is_not_affected_by_this_leniency(self, tmp_path):
+        """
+        The adoption-boundary leniency is scoped to the explicit two-
+        revision form only -- the default (no-args) working-tree-vs-HEAD
+        comparison keeps its existing, unrelated behavior for a project
+        with no envshield.yml at all yet.
+        """
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            _init_repo()
+            _write("app.py", "import os\n")
+            _commit("no envshield.yml at all, anywhere in history")
+
+            result = runner.invoke(app, ["schema", "diff"])
+
+            assert result.exit_code == 1
+            assert "No services configured" in result.stdout
+
+
 class TestSchemaDiffExitCodes:
     def test_no_changes_exits_zero(self, tmp_path):
         with runner.isolated_filesystem(temp_dir=tmp_path):

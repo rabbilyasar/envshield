@@ -252,11 +252,14 @@ def _check_config_source_drift(service_name: str):
 
 def _check_legacy_configuration_keys(service_name: str):
     """
-    Two breaking, no-shim renames (see CHANGELOG) left behind keys that are
-    now silently never read: a service still using 'path:' (pre-4.5.0,
-    renamed to 'schema:') or 'deployment_manifest:' (pre-4.2.0, moved to a
-    top-level 'manifests:' list) gets no error and no validation for
-    whatever depended on that key -- surfaced here rather than left silent.
+    Three keys that are silently never read, surfaced here rather than left
+    silent: 'path:' (pre-4.5.0, renamed to 'schema:') and per-service
+    'deployment_manifest:' (pre-4.2.0, moved to a top-level 'manifests:'
+    list) are breaking, no-shim renames (see CHANGELOG); a per-service
+    'manifests:' key was never valid at any version -- it's a natural but
+    wrong guess, given 'schema:'/'local_file:' genuinely are per-service
+    keys, for where the top-level 'manifests:' list belongs. All three
+    leave whatever depended on them completely unvalidated with no error.
     """
     services = config_manager.get_services()
     service_config = services.get(service_name)
@@ -273,6 +276,12 @@ def _check_legacy_configuration_keys(service_name: str):
             "uses the legacy per-service 'deployment_manifest:' key -- move it into a top-level "
             "'manifests:' entry in envshield.yml (moved in 4.2.0); until then, no deployment "
             "manifest is being validated for this service"
+        )
+    if "manifests" in service_config:
+        issues.append(
+            "has a per-service 'manifests:' key -- deployment manifests are only ever read from "
+            "a TOP-LEVEL 'manifests:' list in envshield.yml, never nested under a service; this "
+            "key is never read, so no manifest is being validated for this service"
         )
 
     if issues:
@@ -372,11 +381,6 @@ def _build_checks(service_name: str) -> List[HealthCheck]:
             fix_description="No config found. Run 'envshield init' to create them?",
         ),
         HealthCheck(
-            "Legacy Configuration Keys",
-            lambda: _check_legacy_configuration_keys(service_name),
-            fix_func=None,
-        ),
-        HealthCheck(
             "Local Environment Sync",
             lambda: _check_local_env_sync(service_name),
             # Delegates to the same wizard 'setup' already runs, rather than
@@ -402,6 +406,24 @@ def _build_checks(service_name: str) -> List[HealthCheck]:
             fix_description="One or both git hooks are missing or not EnvShield's. Install them now?",
         ),
     ]
+
+    # Only shown at all when the service's envshield.yml entry actually
+    # carries one of the legacy keys -- otherwise this would print a
+    # permanent, always-green, always-identical line for every project on
+    # every run forever, for a condition that essentially never applies.
+    service_config = config_manager.get_services().get(service_name)
+    if isinstance(service_config, dict) and (
+        ("path" in service_config and "schema" not in service_config)
+        or "deployment_manifest" in service_config
+        or "manifests" in service_config
+    ):
+        checks.append(
+            HealthCheck(
+                "Legacy Configuration Keys",
+                lambda: _check_legacy_configuration_keys(service_name),
+                fix_func=None,
+            )
+        )
 
     # Only shown at all when a config_source was actually recorded -- an
     # older envshield.yml or a schema built from a generic template has

@@ -259,6 +259,21 @@ def _get_diff_lines(file_path: str) -> Optional[set]:
         return set()
 
 
+def _display_path(file_path: str) -> str:
+    """
+    Normalizes a collected file path to one consistent, cwd-relative form
+    for display. Without this, a single-file argument (os.path.abspath'd)
+    showed an absolute path, a directory walk of '.' showed a './'-prefixed
+    relative path, and '--staged' (absolute, via git_utils.get_staged_files)
+    showed yet a third form -- all for files in the same scan, and none
+    matching 'undeclared's already-consistent relative style.
+    """
+    try:
+        return os.path.relpath(file_path, os.getcwd())
+    except ValueError:
+        return file_path  # e.g. different drive on Windows -- not relatable
+
+
 def _record_discovered_usages(
     undeclared_findings: List[Dict],
     usages,
@@ -275,7 +290,7 @@ def _record_discovered_usages(
         if usage.variable not in schema_vars:
             undeclared_findings.append(
                 {
-                    "file_path": usage.file_path,
+                    "file_path": _display_path(usage.file_path),
                     "line_num": usage.line,
                     "variable_name": usage.variable,
                 }
@@ -322,7 +337,7 @@ def _scan_single_file(
                 if match:
                     secret_findings.append(
                         {
-                            "file_path": file_path,
+                            "file_path": _display_path(file_path),
                             "line_num": line_num,
                             "secret_type": secret["name"],
                             # Only the matched span's length, never the raw
@@ -568,7 +583,40 @@ def _scan_files(
 
     schema_resolver = _build_undeclared_var_resolver(service_name)
 
+    # An explicit --service checks every file it's given against that one
+    # schema (see _build_undeclared_var_resolver above) -- correct when the
+    # caller also gave an explicit path/file, but paths defaults to ["."]
+    # (the whole project) when the caller gave none, and --staged always
+    # collects every staged file project-wide regardless of paths. Without
+    # scoping those two "no explicit path" cases down to the named
+    # service's own directory, --service X with no path argument (the
+    # natural, documented "scan just my service" invocation) silently
+    # scanned the entire monorepo and flagged every OTHER service's
+    # genuinely-declared variables as undeclared against X's schema --
+    # confirmed via a real multi-service reproduction. An explicitly-given
+    # path is left alone either way: that's a deliberate, existing choice
+    # (e.g. checking one shared file against a specific service's schema
+    # on purpose), not something to silently override.
+    service_scope_dir = None
+    if service_name:
+        try:
+            candidate_dir = config_manager.get_service_dir(service_name)
+        except EnvShieldException:
+            candidate_dir = None
+        if candidate_dir and candidate_dir != ".":
+            service_scope_dir = candidate_dir
+
+    if service_scope_dir and not staged_only and not paths:
+        paths = [service_scope_dir]
+
     files_to_scan = _collect_files_to_scan(paths, staged_only)
+
+    if service_scope_dir and staged_only:
+        files_to_scan = [
+            f
+            for f in files_to_scan
+            if config_manager.service_dir_contains(f, service_scope_dir)
+        ]
 
     # For staged scans: keep excluded files for diff-aware scanning
     # For non-staged scans: filter out excluded files as before

@@ -40,6 +40,14 @@ class BaseParser(ABC):
     # absent.
     has_unresolved_source = False
 
+    # True for a parser whose target is a deployment manifest (docker-
+    # compose, Kubernetes) rather than a local config file (.env, a Python
+    # config module). schema_manager.check_target uses this to pick a
+    # suggestion message that fits the actual target -- "run 'envshield
+    # setup'" is actively wrong advice for a manifest, since setup only
+    # ever writes a service's local file, never a deployment manifest.
+    is_deployment_manifest = False
+
     @abstractmethod
     def get_vars(
         self, file_path: str, get_values: bool = False

@@ -2,6 +2,7 @@
 import json
 import os
 import re
+import subprocess
 
 import pytest
 from typer.testing import CliRunner
@@ -37,6 +38,36 @@ def test_scan_with_undeclared_variable(mocker, tmp_path):
         )
         assert "Found 1 undeclared variable(s)!" in result.stdout
         assert "UNDECLARED_KEY" in result.stdout
+
+
+def test_scan_reports_consistent_relative_paths_regardless_of_argument_form(
+    mocker, tmp_path
+):
+    """
+    Regression: scanning '.' walked directories and reported a './'-
+    prefixed relative path, while scanning the single file 'app.py'
+    directly reported an absolute path -- two different-looking paths for
+    the same file, in the same tool. Both invocations should report the
+    same plain, cwd-relative path ('app.py'), matching 'undeclared's own
+    already-consistent style.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[DECLARED_KEY]\ndescription="ok"\n')
+        mocker.patch(
+            "envshield.config.manager.load_schema", return_value={"DECLARED_KEY": {}}
+        )
+        with open("app.py", "w") as f:
+            f.write("import os\n\nAPI_KEY = os.environ.get('UNDECLARED_KEY')\n")
+
+        result_dir = runner.invoke(app, ["scan", "."])
+        assert "app.py" in result_dir.stdout
+        assert "./app.py" not in result_dir.stdout
+        assert os.getcwd() not in result_dir.stdout
+
+        result_file = runner.invoke(app, ["scan", "app.py"])
+        assert "app.py" in result_file.stdout
+        assert os.getcwd() not in result_file.stdout
 
 
 def test_scan_with_only_declared_variables(mocker, tmp_path):
@@ -311,6 +342,119 @@ def test_scan_with_explicit_service_still_checks_a_single_schema_for_every_file(
 
         assert result.exit_code == 1
         assert "BETA_VAR" in result.stdout
+
+
+def test_scan_with_service_and_no_path_defaults_to_that_services_own_directory(
+    tmp_path,
+):
+    """
+    Regression: 'scan --service X' with no path argument defaulted to
+    scanning the whole project (paths or ["."]) while still checking every
+    file against only X's schema -- so on a multi-service project, every
+    OTHER service's genuinely-declared variables got flagged as
+    "undeclared" against X's schema. This is the natural, documented
+    invocation ("scan just my service"), not an edge case: the default
+    path must now be scoped to X's own directory, not the whole project.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.makedirs("alpha")
+        os.makedirs("beta")
+        with open("envshield.yml", "w") as f:
+            f.write(
+                "services:\n  alpha:\n    schema: alpha/env.schema.toml\n  beta:\n    schema: beta/env.schema.toml\n"
+            )
+        with open("alpha/env.schema.toml", "w") as f:
+            f.write('[ALPHA_VAR]\ndescription="x"\n')
+        with open("beta/env.schema.toml", "w") as f:
+            f.write('[BETA_VAR]\ndescription="x"\n')
+        with open("alpha/app.py", "w") as f:
+            f.write("import os\n\na = os.environ.get('ALPHA_VAR')\n")
+        with open("beta/app.py", "w") as f:
+            # Declared in beta's OWN schema -- must never be flagged just
+            # because a bare '--service alpha' run (no path) used to sweep
+            # in every file project-wide.
+            f.write("import os\n\nb = os.environ.get('BETA_VAR')\n")
+
+        result = runner.invoke(app, ["scan", "--service", "alpha"])
+
+        assert result.exit_code == 0, result.stdout
+        assert "No issues found" in result.stdout
+        assert "BETA_VAR" not in result.stdout
+
+
+def test_scan_with_service_and_explicit_path_outside_its_directory_is_unchanged(
+    tmp_path,
+):
+    """
+    The default-path scoping above must not override a caller's own
+    explicit path/file argument -- deliberately checking one specific file
+    against a named service's schema (e.g. a shared file, on purpose) is
+    existing, intentional behavior and must keep working exactly as before.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.makedirs("alpha")
+        os.makedirs("beta")
+        with open("envshield.yml", "w") as f:
+            f.write(
+                "services:\n  alpha:\n    schema: alpha/env.schema.toml\n  beta:\n    schema: beta/env.schema.toml\n"
+            )
+        with open("alpha/env.schema.toml", "w") as f:
+            f.write('[ALPHA_VAR]\ndescription="x"\n')
+        with open("beta/env.schema.toml", "w") as f:
+            f.write('[BETA_VAR]\ndescription="x"\n')
+        with open("beta/app.py", "w") as f:
+            f.write("import os\n\nc = os.environ.get('BETA_VAR')\n")
+
+        result = runner.invoke(app, ["scan", "beta", "--service", "alpha"])
+
+        assert result.exit_code == 1
+        assert "BETA_VAR" in result.stdout
+
+
+def test_scan_staged_with_service_does_not_leak_another_services_staged_file(
+    tmp_path,
+):
+    """
+    Same root cause, '--staged' variant: '--staged' always collects every
+    staged file project-wide (paths is never consulted for it), so
+    '--staged --service X' used to check every OTHER service's staged
+    files against X's schema too. A staged change belonging to a different
+    service must not be attributed to X.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        subprocess.run(["git", "init", "-q"], check=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], check=True)
+        subprocess.run(["git", "config", "user.name", "Test"], check=True)
+        os.makedirs("alpha")
+        os.makedirs("beta")
+        with open("envshield.yml", "w") as f:
+            f.write(
+                "services:\n  alpha:\n    schema: alpha/env.schema.toml\n  beta:\n    schema: beta/env.schema.toml\n"
+            )
+        with open("alpha/env.schema.toml", "w") as f:
+            f.write('[ALPHA_VAR]\ndescription="x"\n')
+        with open("beta/env.schema.toml", "w") as f:
+            f.write('[BETA_VAR]\ndescription="x"\n')
+        with open("beta/app.py", "w") as f:
+            f.write("import os\n\nb = os.environ.get('BETA_VAR')\n")
+        subprocess.run(["git", "add", "-A"], check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "init"], check=True)
+
+        # Stage a genuinely undeclared var in alpha's own file...
+        with open("alpha/app.py", "w") as f:
+            f.write("import os\n\na = os.environ.get('ALPHA_UNDECLARED')\n")
+        # ...and an unrelated, already-declared edit in beta's file.
+        with open("beta/app.py", "w") as f:
+            f.write("import os\n\nb = os.environ.get('BETA_VAR')\n# unrelated edit\n")
+        subprocess.run(["git", "add", "-A"], check=True)
+
+        result_beta = runner.invoke(app, ["scan", "--staged", "--service", "beta"])
+        assert result_beta.exit_code == 0, result_beta.stdout
+        assert "ALPHA_UNDECLARED" not in result_beta.stdout
+
+        result_alpha = runner.invoke(app, ["scan", "--staged", "--service", "alpha"])
+        assert result_alpha.exit_code == 1
+        assert "ALPHA_UNDECLARED" in result_alpha.stdout
 
 
 def test_scan_detects_unquoted_dotenv_style_secret(tmp_path):
