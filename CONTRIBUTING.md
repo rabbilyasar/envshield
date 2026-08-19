@@ -39,7 +39,7 @@ If you have an idea for a new feature or an improvement to an existing one, plea
 To get started with the codebase, follow these steps:
 1. **Clone the repository**
 ```
-git clone [https://github.com/rabbilyasar/envshield.git](https://github.com/rabbilyasar/envshield.git)
+git clone https://github.com/rabbilyasar/envshield.git
 cd envshield
 ```
 2. **Create a virtual environment:**
@@ -57,27 +57,22 @@ pip install -e ".[dev]"
 
 ## **Versioning & Releases**
 
-This section is primarily for project maintainers. EnvShield uses **Semantic Versioning** (`MAJOR.MINOR.PATCH`) and automates the versioning process using the `bump2version` tool.  
-When preparing a new release, do not manually edit the version number in pyproject.toml. Instead, use the following commands from the main branch.
+This section is primarily for project maintainers. EnvShield uses **Semantic Versioning** (`MAJOR.MINOR.PATCH`) and automates the versioning process using the `bump2version` tool. A release is always an explicit, maintainer-authorized action — never an automatic consequence of merging a PR.
 
-#### **Making a PATCH Release (Bug Fixes)**
+Before bumping the version:
 
-For backward-compatible bug fixes (e.g., `0.1.0` -> `0.1.1`):  
-```bump2version patch```
+1. Ensure the working tree is clean (`bump2version` requires this).
+2. Update `CHANGELOG.md` with a new dated section for the release, and commit it on its own (`docs: update changelog for vX.Y.Z`) — separately from the version bump.
 
-#### **Making a MINOR Release (New Features)**
+Then, from the main branch, do not manually edit the version number in `pyproject.toml`. Use one of:
 
-For new, backward-compatible features (e.g., `0.1.1` -> `0.2.0`):  
-```bump2version minor```
+```bump2version patch```   (bug fixes, e.g. `4.5.0` -> `4.5.1`)
+```bump2version minor```   (new backward-compatible features, e.g. `4.5.1` -> `4.6.0`)
+```bump2version major```   (breaking changes)
 
-This command will automatically:
+This automatically increments the version in `pyproject.toml` and `.bumpversion.cfg`, creates a release commit, and creates the matching Git tag (e.g. `v4.6.0`).
 
-1. Increment the version in `pyproject.toml` and `.bumpversion.cfg`.  
-2. Create a Git commit with a standardized message (e.g., "chore(release): Bump version: 0.1.0 → 0.1.1").  
-3. Create a Git tag for the new version (e.g., `v0.1.1`).
-
-After running the command, simply push the changes and the new tag to the repository:  
-```git push && git push --tags```
+Pushing the commit and tag (`git push && git push --tags`) triggers PyPI publishing and the GitHub Release — so review the release before pushing, don't push immediately after running `bump2version`.
 
 ## **Running Tests and Linting**
 
