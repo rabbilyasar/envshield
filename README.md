@@ -1,8 +1,8 @@
 # EnvShield
 
-A schema-first environment configuration governance CLI for developers.
+Environment variables, as a version-controlled configuration contract.
 
-`.env` files and environment variables have no contract. Nothing declares what a project actually needs, what's secret, what's required where, or whether a change to one breaks another service. EnvShield gives that contract a file — `env.schema.toml` — and drives validation, discovery, review, and secret scanning from it.
+`.env` files and environment variables have no contract. Nothing declares what a project actually needs, what's required where, or whether a change to one breaks another service. EnvShield gives that contract a real, committed file — `env.schema.toml` — and everything else follows from it: validating a local file against it, discovering what code actually reads that the schema doesn't know about, and reviewing how the contract itself changes across git revisions. Secret handling is one part of that contract, not the product's center of gravity.
 
 Free, open source (MIT), and fully local. EnvShield never sends your configuration or secrets anywhere.
 
@@ -27,14 +27,14 @@ EnvShield's answer is to make the configuration contract a real, versioned file,
 
 ```
 env.schema.toml
-    → contract          (types, required/optional, secret, defaults)
+    → contract          (types, required/optional, defaults, conditional requirements)
     → validation        (check, doctor, setup)
     → usage discovery   (undeclared — what does the code actually read?)
-    → schema diff       (what changed, across two git revisions?)
-    → secret scanning   (scan — nothing hardcoded, nothing leaked)
+    → schema diff       (what changed to the contract, across two git revisions?)
+    → secret safety     (scan — a supporting check, not the product)
 ```
 
-The schema is the center. Secret scanning is one capability that sits on top of it, not the other way around.
+`env.schema.toml` is the product. Everything above reads from that one file; nothing above it invents its own idea of what your configuration is supposed to be.
 
 ---
 
@@ -105,12 +105,29 @@ What each field actually means:
 | `pattern` | A regex the value must also match, e.g. `pattern = "^v\\d+\\.\\d+\\.\\d+$"`. |
 | `secret` | Marks the variable sensitive — masked input in `setup`, never inferred by `import`, masked in generated code. |
 | `defaultValue` | What `setup` writes automatically. A variable still has to be explicitly present in your local file even with a default — `check`/`doctor` name the default inline so a missing one is obvious. |
-| `requiredIf` | `{ var = "OTHER_VAR", equals = "some value" }` — required only when that condition holds. With no `defaultValue` and no `requiredIf`, a variable is required unconditionally. |
 | `description` | Shown in `setup`, copied into generated code. |
 
-**There is no separate `required = true/false` field.** Requiredness is derived: unconditional by default, waived by a `defaultValue`, or made conditional by `requiredIf`.
+**There is no separate `required = true/false` field.** Requiredness is derived: unconditional by default, waived by a `defaultValue`, or made conditional by `requiredIf` — see below.
 
-**Composing schemas (`extends`).** A monorepo with several services usually shares a handful of variables. Factor them into a base schema and extend it — the child's own definition always wins on a conflict, no per-field merging:
+### Conditional requirements (`requiredIf`)
+
+A variable that's only relevant behind a feature flag doesn't need to be required unconditionally. `requiredIf = { var = "OTHER_VAR", equals = "some value" }` makes a field required only when that condition holds — with no `defaultValue` and no `requiredIf`, a variable stays required unconditionally, exactly as before this existed:
+
+```toml
+[PAYMENTS_ENABLED]
+type = "bool"
+defaultValue = "false"
+
+[STRIPE_SECRET_KEY]
+secret = true
+requiredIf = { var = "PAYMENTS_ENABLED", equals = "true" }
+```
+
+With `PAYMENTS_ENABLED=false`, `STRIPE_SECRET_KEY` is optional. Flip the flag in any environment, and `check`/`doctor`/`setup` immediately start requiring it there.
+
+### Composing schemas (`extends`)
+
+A monorepo with several services usually shares a handful of variables. Factor them into a base schema and extend it — the child's own definition always wins on a conflict, no per-field merging:
 
 ```toml
 # services/api/env.schema.toml
@@ -124,7 +141,15 @@ secret = true
 
 ## Core workflow
 
-**`envshield check`** — validate a local file against the schema.
+Four stages, in order: define the contract, validate against it, discover what code actually depends on, review how the contract itself changes.
+
+### Define
+
+`env.schema.toml` (see [The Schema](#the-schema) above) is what you define. `envshield init`/`envshield import <file>` build it from your real, existing configuration — see [Existing projects](#existing-projects).
+
+### Validate
+
+**`envshield check`** — validate local configuration and supported deployment manifests such as Docker Compose and Kubernetes against the same schema.
 
 ```bash
 $ envshield check
@@ -136,6 +161,14 @@ $ envshield check
 └───────────────────┴────────────────┴────────────────────────────────────┘
 ```
 
+**`envshield setup`** — interactive onboarding: fills in whatever's missing, blank, or now-invalid in your local file, prompting with each variable's description.
+
+**`envshield doctor`** — a full health check on your project's EnvShield setup at once (config files present, schema/template in sync, deployment manifest registered and valid, and more). `--fix` offers to fix what it can.
+
+Want typed, validated config code instead of raw `os.getenv()` calls? **`envshield generate`** compiles the schema into a Python (`pydantic-settings`) or TypeScript (`zod`) module — a secondary, opt-in convenience once the contract exists, not a separate thing to learn.
+
+### Discover
+
 **`envshield undeclared`** — catch a new environment-variable read that isn't in the schema yet, before you commit it. Compares source code between two git revisions (or your working tree against `HEAD` by default):
 
 ```bash
@@ -146,6 +179,10 @@ $ envshield undeclared
 │ ANALYTICS_KEY  │ app/main.py │ 42   │ os.getenv │ missing declaration  │
 └────────────────┴─────────────┴──────┴───────────┴──────────────────────┘
 ```
+
+**`envshield explain VARIABLE`** — everything EnvShield knows about one variable: its contract, where it's declared, what source code reads it, and which deployment manifests reference it.
+
+### Review / govern
 
 **`envshield schema diff`** — compare the schema contract between two git revisions, classified by impact:
 
@@ -160,27 +197,11 @@ $ envshield schema diff origin/main HEAD
 └───────────────┴──────────┴───────────────────────────────────────────┘
 ```
 
-**`envshield scan`** — hardcoded secrets and undeclared variables, in one pass. Values are always redacted, never printed in the clear:
+This is the schema functioning as a real contract: a change to it is reviewable on a PR, the same way an API contract change would be — not just a local file that happens to agree with itself.
 
-```bash
-$ envshield scan --staged
-🚨 DANGER: Found 1 potential secret(s)!
-┌───────────┬──────┬─────────────────┬──────────────────────┐
-│ File      │ Line │ Secret Type     │ Preview              │
-├───────────┼──────┼─────────────────┼──────────────────────┤
-│ config.py │ 12   │ Generic API Key │ <redacted, 40 chars> │
-└───────────┴──────┴─────────────────┴──────────────────────┘
-```
+---
 
-**`envshield setup`** — interactive onboarding: fills in whatever's missing, blank, or now-invalid in your local file, prompting with each variable's description and masking secret input.
-
-**`envshield doctor`** — a full health check on your project's EnvShield setup at once (config files present, schema/template in sync, deployment manifest registered and valid, and more). `--fix` offers to fix what it can.
-
-**`envshield explain VARIABLE`** — everything EnvShield knows about one variable: its contract, where it's declared, what source code reads it, and which deployment manifests reference it.
-
-**`envshield import <file>`** — the same real-config analysis `init` runs automatically, as its own command, for refreshing a schema after your config changes.
-
-**`envshield service discover` / `service add`** — register services in a multi-service project (see [Monorepos](#monorepos--services) below).
+**`envshield service discover` / `service add`** register services in a multi-service project — see [Monorepos](#monorepos--services). A supporting safety check, `scan`, exists alongside all of this — see [Secret safety](#secret-safety).
 
 Every command above documents its own options with `--help`; the full reference is in the [docs](https://docs.envshield.dev).
 
@@ -275,19 +296,18 @@ Every command is service-aware. `--service` is optional with exactly one service
 
 ---
 
-## Secret safety
-
-- **Classification lives in the schema, not the value.** `secret = true` tells EnvShield (and `setup`, and code generation) that a field is sensitive — the schema never contains the actual value, only the fact that it's secret.
-- **`scan`** looks for hardcoded secrets by pattern (Stripe, AWS, GitHub tokens, and more) and for env-var reads the schema doesn't declare, in one pass.
-- **`envshield hook install`** wires `scan --staged` into a pre-commit hook, so a real secret is caught before it's committed, not after.
-- Detection is value-shape based, not name-based: a Stripe *publishable* key (`pk_...`) never matches the secret-key pattern (`sk_...`) regardless of what the variable is called — a genuinely secret-shaped value is still caught under any name.
-- A file excluded from scanning (a shared local-dev fixture with intentionally fake values) is still diffed line-by-line against `HEAD` when staged — a real secret added to that same file later is still caught.
-
----
-
 ## Supported languages / discovery
 
 Source-code discovery (what powers `undeclared` and `explain`'s "used in source" section) is AST-based for **Python** (`os.environ.get`, `os.getenv`, `os.environ[...]`) and pattern-based for **JavaScript/TypeScript** (`process.env.X`, `process.env["X"]`, `import.meta.env.X`, including single-level destructuring). No other language is discovered yet — the schema and validation commands work with any stack, but `undeclared`/`explain` can only see what's read from these two.
+
+---
+
+## Secret safety
+
+A supporting check alongside the contract, not the product itself. `secret = true` on a field tells EnvShield (and `setup`, and code generation) that it's sensitive — the schema records that fact, never the actual value. On top of that:
+
+- **`envshield scan`** looks for hardcoded secrets by pattern (Stripe, AWS, GitHub tokens, and more), and for env-var reads the schema doesn't declare, in one pass. Values are always redacted in output — a Stripe *publishable* key (`pk_...`) is never flagged, since detection matches the secret-key pattern (`sk_...`) by shape, not the variable's name.
+- **`envshield hook install`** wires `scan --staged` into a pre-commit hook, so a real secret is caught before it's committed, not after.
 
 ---
 
