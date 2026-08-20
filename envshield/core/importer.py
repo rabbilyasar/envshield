@@ -9,6 +9,7 @@ import toml
 from rich.console import Console
 
 from ..parsers.factory import get_parser
+from . import discovery
 from .exceptions import EnvShieldException
 from .scanner import SECRET_PATTERNS
 
@@ -129,6 +130,54 @@ def _infer_type(key: str, value: str) -> Optional[str]:
     return None
 
 
+def _discover_python_variables(file_path: str) -> Dict[str, str]:
+    """
+    Variable discovery for a '.py' source, specifically for
+    generate_schema_from_file/merge_variables_from_other_sources -- NOT
+    the general '.py' parser used everywhere else in this codebase
+    (get_parser/PythonParser), which reads EnvShield's OWN local config
+    module format (env_config.local.py-style, where a top-level assignment
+    IS the real, final value) and must stay exactly as-is for its own,
+    different, already-correct callers (setup_manager, schema_manager,
+    doctor, explain, service_discovery).
+
+    Prefers discovery.discover_python_env_vars -- the same AST engine
+    'undeclared'/'explain' use for real os.environ.get/os.getenv/
+    os.environ[] reads (correct at any nesting depth, including inside a
+    class body), plus BaseSettings field recognition -- whenever it finds
+    at least one recognized read anywhere in the file. Falls back to the
+    existing PythonParser-based top-level-literal scan, completely
+    unchanged, only when it finds none at all: a file with zero recognized
+    environment reads is, by that same signal, indistinguishable from a
+    plain, already-resolved local config module (exactly what
+    PythonParser was built for) -- and importing one that way is a real,
+    tested, still-supported use of 'import' today, deliberately preserved
+    rather than solved here (a real settings file with framework noise but
+    zero env reads at all would still show that noise; there's nothing
+    else to fall back to, and nothing meaningful to discover).
+
+    Deduplicates by the discovered variable name (not the Python
+    assignment target it happened to be read into) -- first occurrence's
+    recovered default wins; a later occurrence of the same name never
+    overwrites it, and conflicting defaults between reads are never
+    reconciled.
+    """
+    with open(file_path, "r") as f:
+        content = f.read()
+
+    discovered = discovery.discover_python_env_vars(content, file_path)
+    if not discovered:
+        parser = get_parser(file_path)
+        return parser.get_vars(file_path, get_values=True) if parser else {}
+
+    variables: Dict[str, str] = {}
+    for usage in discovered:
+        if usage.variable in variables:
+            continue
+        variables[usage.variable] = usage.default_value or ""
+    return variables
+
+
 def generate_schema_from_file(
     file_path: str,
     interactive: bool = False,
@@ -156,15 +205,17 @@ def generate_schema_from_file(
     if not os.path.exists(file_path):
         raise EnvShieldException(f"Input file not found at: {file_path}")
 
-    parser = get_parser(file_path)
-    if not parser:
-        raise EnvShieldException(
-            f"Could not find a suitable parser for '{file_path}'. "
-            "Supported: a dotenv file (.env or no extension), a Python module (.py), "
-            "or a docker-compose/Kubernetes YAML manifest."
-        )
-
-    variables = parser.get_vars(file_path, get_values=True)
+    if file_path.endswith(".py"):
+        variables = _discover_python_variables(file_path)
+    else:
+        parser = get_parser(file_path)
+        if not parser:
+            raise EnvShieldException(
+                f"Could not find a suitable parser for '{file_path}'. "
+                "Supported: a dotenv file (.env or no extension), a Python module (.py), "
+                "or a docker-compose/Kubernetes YAML manifest."
+            )
+        variables = parser.get_vars(file_path, get_values=True)
 
     schema_dict: Dict[str, Any] = {}
     secrets_found = 0
@@ -281,11 +332,14 @@ def merge_variables_from_other_sources(
     """
     added: Dict[str, list] = {}
     for path in other_sources:
-        parser = get_parser(path)
-        if not parser:
-            continue
         try:
-            variables = parser.get_vars(path, get_values=True)
+            if path.endswith(".py"):
+                variables = _discover_python_variables(path)
+            else:
+                parser = get_parser(path)
+                if not parser:
+                    continue
+                variables = parser.get_vars(path, get_values=True)
         except (FileNotFoundError, OSError):
             continue
 

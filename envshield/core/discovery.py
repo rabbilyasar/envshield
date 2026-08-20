@@ -152,6 +152,264 @@ def discover_python_usages(
     return visitor.usages
 
 
+@dataclass
+class DiscoveredPythonEnvVar:
+    """
+    An environment-variable read discovered specifically for schema
+    generation ('envshield import'/'init') -- richer than
+    DiscoveredVariableUsage (used by 'explain'/'undeclared', whose stable
+    to_dict() shape this must not touch) because generating a schema needs
+    a best-effort recoverable literal default/fallback value, which
+    neither of those callers ever needed. Deliberately a separate type
+    rather than an optional field bolted onto DiscoveredVariableUsage.
+    """
+
+    variable: str
+    line: int
+    access_type: str
+    default_value: Optional[str]
+
+
+def _literal_default(node: Optional[ast.expr]) -> Optional[str]:
+    """
+    Best-effort literal default/fallback value, coerced to the string form
+    every value in this codebase is ultimately compared/rendered as (see
+    schema_types.py) -- string, int, float, and bool constants are all
+    accepted. None (including pydantic's Ellipsis-as-"required, no
+    default" marker, filtered out by callers before reaching this) yields
+    no default, same as any other non-literal expression.
+    """
+    if isinstance(node, ast.Constant) and node.value is not None:
+        return str(node.value)
+    return None
+
+
+def _is_recognized_env_call(node: ast.expr) -> bool:
+    """Whether `node` is itself a recognized os.environ.get/os.getenv call with a literal key -- reuses the exact predicates _UsageVisitor does, so the two engines can never disagree on what counts as a read."""
+    return (
+        isinstance(node, ast.Call)
+        and bool(node.args)
+        and _literal_str(node.args[0]) is not None
+        and (_is_os_environ_get(node.func) or _is_os_getenv(node.func))
+    )
+
+
+def _is_recognized_env_subscript(node: ast.expr) -> bool:
+    return (
+        isinstance(node, ast.Subscript)
+        and _is_os_environ(node.value)
+        and isinstance(node.ctx, ast.Load)
+        and _literal_str(node.slice) is not None
+    )
+
+
+def _contains_recognized_env_read(node: ast.expr) -> bool:
+    """
+    Whether an os.environ.get/os.getenv/os.environ[] read (with a literal
+    key) appears anywhere inside `node`'s subtree -- used to decide
+    whether a BaseSettings field's own value already names its real env
+    var explicitly (which always wins) before falling back to the
+    alias/attribute-name convention below.
+    """
+    return any(
+        _is_recognized_env_call(sub) or _is_recognized_env_subscript(sub)
+        for sub in ast.walk(node)
+    )
+
+
+def _is_pydantic_field_call(node: ast.expr) -> bool:
+    return isinstance(node, ast.Call) and (
+        (isinstance(node.func, ast.Name) and node.func.id == "Field")
+        or (isinstance(node.func, ast.Attribute) and node.func.attr == "Field")
+    )
+
+
+def _pydantic_field_alias(call_node: ast.Call) -> Optional[str]:
+    for kw in call_node.keywords:
+        if kw.arg == "alias":
+            alias = _literal_str(kw.value)
+            if alias is not None:
+                return alias
+    return None
+
+
+def _pydantic_field_default(call_node: ast.Call) -> Optional[str]:
+    """
+    pydantic's Field(default, ...) -- the first positional arg, or an
+    explicit 'default=' keyword if there's no positional one. Ellipsis
+    ('...') is pydantic's own marker for "required, no default", never a
+    literal value to suggest.
+    """
+    first = call_node.args[0] if call_node.args else None
+    if first is None:
+        for kw in call_node.keywords:
+            if kw.arg == "default":
+                first = kw.value
+                break
+    if isinstance(first, ast.Constant) and first.value is Ellipsis:
+        return None
+    return _literal_default(first)
+
+
+def _is_base_settings_subclass(node: ast.ClassDef) -> bool:
+    """
+    Matches a base named (bare, or the attribute name of a dotted access)
+    'BaseSettings' -- deliberately by name only, not by resolving the real
+    import, matching this module's existing precedent for os.environ (see
+    TestOutOfScopeByDesign): an aliased import ('from pydantic_settings
+    import BaseSettings as BS') is out of scope, not a bug.
+    """
+    for base in node.bases:
+        if isinstance(base, ast.Name) and base.id == "BaseSettings":
+            return True
+        if isinstance(base, ast.Attribute) and base.attr == "BaseSettings":
+            return True
+    return False
+
+
+class _EnvVarWithDefaultsVisitor(ast.NodeVisitor):
+    """
+    Separate from _UsageVisitor by design: reuses its exact
+    node-recognition predicates (so the two engines can never disagree on
+    what counts as a read), but additionally recovers a best-effort
+    literal default/fallback value and recognizes BaseSettings class
+    attributes -- neither of which _UsageVisitor's own callers
+    ('explain'/'undeclared') ever needed.
+    """
+
+    def __init__(self, file_path: str):
+        self.file_path = file_path
+        self.usages: List[DiscoveredPythonEnvVar] = []
+
+    def _record(
+        self,
+        variable: str,
+        line: int,
+        access_type: str,
+        default_value: Optional[str],
+    ) -> None:
+        self.usages.append(
+            DiscoveredPythonEnvVar(
+                variable=variable,
+                line=line,
+                access_type=access_type,
+                default_value=default_value,
+            )
+        )
+
+    def visit_Call(self, node: ast.Call) -> None:
+        if not node.args:
+            self.generic_visit(node)
+            return
+
+        key = _literal_str(node.args[0])
+        if key is not None:
+            default = _literal_default(node.args[1]) if len(node.args) > 1 else None
+            if _is_os_environ_get(node.func):
+                self._record(key, node.lineno, "os.environ.get", default)
+            elif _is_os_getenv(node.func):
+                self._record(key, node.lineno, "os.getenv", default)
+
+        self.generic_visit(node)
+
+    def visit_Subscript(self, node: ast.Subscript) -> None:
+        if _is_os_environ(node.value) and isinstance(node.ctx, ast.Load):
+            key = _literal_str(node.slice)
+            if key is not None:
+                self._record(key, node.lineno, "os.environ[]", None)
+
+        self.generic_visit(node)
+
+    def visit_BoolOp(self, node: ast.BoolOp) -> None:
+        """
+        'X or "fallback"' -- only the exact two-operand shape, where X is
+        itself a recognized read and the right-hand side is a literal.
+        Anything else (three-plus operands, a non-literal right-hand side,
+        a left-hand side that isn't a recognized read) is deliberately
+        left to the ordinary traversal below, recording the read (if any)
+        with no default rather than guessing at one -- no evaluation
+        semantics are invented here.
+        """
+        if len(node.values) == 2:
+            left, right = node.values
+            default = _literal_default(right)
+            if default is not None:
+                if _is_recognized_env_call(left):
+                    key = _literal_str(left.args[0])
+                    access_type = (
+                        "os.environ.get"
+                        if _is_os_environ_get(left.func)
+                        else "os.getenv"
+                    )
+                    self._record(key, left.lineno, access_type, default)
+                    return
+                if _is_recognized_env_subscript(left):
+                    key = _literal_str(left.slice)
+                    self._record(key, left.lineno, "os.environ[]", default)
+                    return
+
+        self.generic_visit(node)
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        if _is_base_settings_subclass(node):
+            for stmt in node.body:
+                if isinstance(stmt, ast.AnnAssign) and isinstance(
+                    stmt.target, ast.Name
+                ):
+                    self._visit_base_settings_field(stmt)
+        self.generic_visit(node)
+
+    def _visit_base_settings_field(self, stmt: ast.AnnAssign) -> None:
+        # An explicit os.environ/getenv read anywhere in this field's own
+        # value always wins over the alias/attribute-name convention below
+        # -- it names the real env var directly, and the ordinary
+        # visit_Call/visit_Subscript traversal (via generic_visit, still
+        # run for this class after this method returns) already records
+        # it correctly on its own.
+        if stmt.value is not None and _contains_recognized_env_read(stmt.value):
+            return
+
+        attr_name = stmt.target.id
+        if stmt.value is not None and _is_pydantic_field_call(stmt.value):
+            variable = _pydantic_field_alias(stmt.value) or attr_name.upper()
+            default = _pydantic_field_default(stmt.value)
+        else:
+            variable = attr_name.upper()
+            default = _literal_default(stmt.value) if stmt.value is not None else None
+
+        self._record(variable, stmt.lineno, "pydantic.BaseSettings.field", default)
+
+
+def discover_python_env_vars(
+    content: str, file_path: str
+) -> List[DiscoveredPythonEnvVar]:
+    """
+    The one public entry point for schema generation ('import'/'init'):
+    everything discover_python_usages finds (os.environ.get/os.getenv/
+    os.environ[], anywhere in the file, including inside a class body),
+    plus a best-effort recoverable literal default/fallback value for
+    each, plus BaseSettings class-attribute recognition (a bare annotated
+    field, or Field(..., alias=...)) -- the one common real-world shape
+    that contains no os.environ call at all, which discover_python_usages
+    was never designed to see.
+
+    Returns an empty list -- never raises -- under the same conditions as
+    discover_python_usages: invalid Python, or pathologically deep input.
+    """
+    try:
+        tree = ast.parse(content, filename=file_path)
+    except (SyntaxError, RecursionError, ValueError):
+        return []
+
+    visitor = _EnvVarWithDefaultsVisitor(file_path)
+    try:
+        visitor.visit(tree)
+    except RecursionError:
+        return []
+
+    return visitor.usages
+
+
 def _js_language_for(file_path: str) -> Optional[str]:
     if file_path.endswith((".ts", ".tsx")):
         return "typescript"

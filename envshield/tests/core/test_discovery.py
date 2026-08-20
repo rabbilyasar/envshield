@@ -159,6 +159,235 @@ class TestToDict:
         }
 
 
+def _env_vars(content, file_path="config.py"):
+    return discovery.discover_python_env_vars(content, file_path)
+
+
+def _one_env_var(content, file_path="config.py"):
+    result = _env_vars(content, file_path)
+    assert len(result) == 1, f"expected exactly one usage, got {result}"
+    return result[0]
+
+
+class TestDiscoverPythonEnvVarsBasicReads:
+    """
+    Reuses the same os.environ.get/os.getenv/os.environ[] recognition as
+    discover_python_usages (including at any nesting depth), plus a
+    best-effort recovered default -- the new capability discover_python_usages
+    itself was never designed to have.
+    """
+
+    def test_os_environ_get_no_default(self):
+        usage = _one_env_var("x = os.environ.get('X')\n")
+        assert usage.variable == "X"
+        assert usage.access_type == "os.environ.get"
+        assert usage.default_value is None
+
+    def test_os_getenv_no_default(self):
+        usage = _one_env_var("x = os.getenv('X')\n")
+        assert usage.variable == "X"
+        assert usage.access_type == "os.getenv"
+        assert usage.default_value is None
+
+    def test_os_environ_subscript(self):
+        usage = _one_env_var("x = os.environ['X']\n")
+        assert usage.variable == "X"
+        assert usage.access_type == "os.environ[]"
+        assert usage.default_value is None
+
+    def test_recognizes_a_read_inside_a_class_body(self):
+        """The exact gap discover_python_usages already closes for free -- verified here too, since this new engine has its own separate visitor."""
+        usage = _one_env_var(
+            "import os\nclass Config:\n    SECRET_KEY = os.environ.get('SECRET_KEY')\n"
+        )
+        assert usage.variable == "SECRET_KEY"
+
+
+class TestLiteralDefaults:
+    def test_os_getenv_literal_default(self):
+        usage = _one_env_var("x = os.getenv('PORT', '8000')\n")
+        assert usage.variable == "PORT"
+        assert usage.default_value == "8000"
+
+    def test_os_environ_get_literal_default(self):
+        usage = _one_env_var("x = os.environ.get('PORT', '8000')\n")
+        assert usage.variable == "PORT"
+        assert usage.default_value == "8000"
+
+    def test_non_literal_default_is_not_recovered(self):
+        usage = _one_env_var("fallback = compute()\nx = os.getenv('X', fallback)\n")
+        assert usage.variable == "X"
+        assert usage.default_value is None
+
+    def test_subscript_form_has_no_default_slot_at_all(self):
+        usage = _one_env_var("x = os.environ['X']\n")
+        assert usage.default_value is None
+
+
+class TestOrFallbackPattern:
+    def test_os_environ_get_or_literal_fallback(self):
+        usage = _one_env_var("x = os.environ.get('SECRET_KEY') or 'fallback'\n")
+        assert usage.variable == "SECRET_KEY"
+        assert usage.access_type == "os.environ.get"
+        assert usage.default_value == "fallback"
+
+    def test_os_getenv_or_literal_fallback(self):
+        usage = _one_env_var("x = os.getenv('HOST') or 'localhost'\n")
+        assert usage.variable == "HOST"
+        assert usage.default_value == "localhost"
+
+    def test_os_environ_subscript_or_literal_fallback(self):
+        usage = _one_env_var("x = os.environ['HOST'] or 'localhost'\n")
+        assert usage.variable == "HOST"
+        assert usage.default_value == "localhost"
+
+    def test_does_not_double_record_the_or_operand(self):
+        """The recognized call inside the BoolOp must be recorded exactly once -- not once by visit_BoolOp and again by the ordinary visit_Call traversal."""
+        result = _env_vars("x = os.environ.get('SECRET_KEY') or 'fallback'\n")
+        assert len(result) == 1
+
+    def test_a_non_literal_right_hand_side_invents_no_default(self):
+        """'X or Y' where Y isn't a literal -- no evaluation semantics are invented; the read is still recorded, just with no default."""
+        usage = _one_env_var("y = compute()\nx = os.getenv('X') or y\n")
+        assert usage.variable == "X"
+        assert usage.default_value is None
+
+    def test_three_operand_or_chain_is_left_to_ordinary_traversal(self):
+        """Only the exact two-operand shape is special-cased -- a three-way 'or' still records the read via the ordinary Call visitor, with no default."""
+        usage = _one_env_var("x = os.getenv('X') or compute() or 'fallback'\n")
+        assert usage.variable == "X"
+        assert usage.default_value is None
+
+
+class TestWrapperCallsAreTransparent:
+    """int()/bool()/str() etc. need no special handling at all -- the visitor already descends through any wrapper into the inner recognized call."""
+
+    def test_int_wrapped_getenv_with_default(self):
+        usage = _one_env_var("x = int(os.getenv('PORT', '8000'))\n")
+        assert usage.variable == "PORT"
+        assert usage.default_value == "8000"
+
+    def test_bool_wrapped_environ_get(self):
+        usage = _one_env_var("x = bool(os.environ.get('DEBUG', 'false'))\n")
+        assert usage.variable == "DEBUG"
+        assert usage.default_value == "false"
+
+
+class TestDjangoStyleNoiseIsExcluded:
+    def test_only_env_reading_assignments_are_reported(self):
+        content = (
+            "import os\n"
+            "SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY')\n"
+            "DATABASE_URL = os.getenv('DATABASE_URL')\n"
+            "PROJECT_ROOT = 'BASE_DIR/foo'\n"
+            "ROOT_URLCONF = 'project.urls'\n"
+            "APPEND_SLASH = True\n"
+        )
+        result = _env_vars(content)
+        assert {u.variable for u in result} == {"DJANGO_SECRET_KEY", "DATABASE_URL"}
+
+
+class TestBaseSettingsFields:
+    def test_bare_annotated_field_uses_uppercased_attribute_name(self):
+        usage = _one_env_var(
+            "from pydantic_settings import BaseSettings\n"
+            "class Settings(BaseSettings):\n"
+            "    secret_key: str\n"
+        )
+        assert usage.variable == "SECRET_KEY"
+        assert usage.access_type == "pydantic.BaseSettings.field"
+        assert usage.default_value is None
+
+    def test_field_with_alias_uses_the_alias(self):
+        usage = _one_env_var(
+            "from pydantic_settings import BaseSettings\n"
+            "from pydantic import Field\n"
+            "class Settings(BaseSettings):\n"
+            "    database_url: str = Field(..., alias='DATABASE_URL')\n"
+        )
+        assert usage.variable == "DATABASE_URL"
+        assert usage.default_value is None
+
+    def test_field_with_default_and_alias_recovers_both(self):
+        usage = _one_env_var(
+            "from pydantic_settings import BaseSettings\n"
+            "from pydantic import Field\n"
+            "class Settings(BaseSettings):\n"
+            "    log_level: str = Field('info', alias='LOG_LEVEL')\n"
+        )
+        assert usage.variable == "LOG_LEVEL"
+        assert usage.default_value == "info"
+
+    def test_field_without_alias_uses_uppercased_attribute_name(self):
+        usage = _one_env_var(
+            "from pydantic_settings import BaseSettings\n"
+            "from pydantic import Field\n"
+            "class Settings(BaseSettings):\n"
+            "    log_level: str = Field('info')\n"
+        )
+        assert usage.variable == "LOG_LEVEL"
+        assert usage.default_value == "info"
+
+    def test_field_ellipsis_default_is_not_a_literal_default(self):
+        usage = _one_env_var(
+            "from pydantic_settings import BaseSettings\n"
+            "from pydantic import Field\n"
+            "class Settings(BaseSettings):\n"
+            "    api_key: str = Field(..., alias='API_KEY')\n"
+        )
+        assert usage.default_value is None
+
+    def test_an_explicit_os_getenv_default_wins_over_the_attribute_name(self):
+        """
+        A field whose own value calls os.getenv/os.environ.get explicitly
+        names the real env var -- that always wins over guessing from the
+        (possibly differently-named) attribute name.
+        """
+        usage = _one_env_var(
+            "import os\n"
+            "from pydantic_settings import BaseSettings\n"
+            "class Settings(BaseSettings):\n"
+            "    db_url: str = os.getenv('DATABASE_URL')\n"
+        )
+        assert usage.variable == "DATABASE_URL"
+
+    def test_a_plain_class_not_inheriting_base_settings_is_not_treated_as_config(self):
+        """Do not treat arbitrary annotated class attributes as configuration fields -- only an actual BaseSettings subclass."""
+        result = _env_vars("class Point:\n    x: int\n    y: int = 0\n")
+        assert result == []
+
+    def test_aliased_base_settings_import_is_out_of_scope_by_design(self):
+        """Matches discover_python_usages' own precedent (no import-alias resolution) -- consistent, not a bug."""
+        result = _env_vars(
+            "from pydantic_settings import BaseSettings as BS\n"
+            "class Settings(BS):\n"
+            "    secret_key: str\n"
+        )
+        assert result == []
+
+    def test_reads_elsewhere_in_the_same_file_are_still_reported(self):
+        """generic_visit still runs after BaseSettings-specific handling -- a plain read outside the class is unaffected."""
+        result = _env_vars(
+            "import os\n"
+            "from pydantic_settings import BaseSettings\n"
+            "class Settings(BaseSettings):\n"
+            "    secret_key: str\n"
+            "OTHER = os.getenv('OTHER_VAR')\n"
+        )
+        assert {u.variable for u in result} == {"SECRET_KEY", "OTHER_VAR"}
+
+
+class TestMalformedInputNeverRaisesForEnvVars:
+    def test_a_syntax_error_returns_an_empty_list(self):
+        assert _env_vars("def f(:\n") == []
+
+    def test_empty_content_returns_an_empty_list(self):
+        assert _env_vars("") == []
+
+    def test_content_with_no_relevant_usages_returns_an_empty_list(self):
+        assert _env_vars("x = 1\ny = 'hello'\n") == []
+
+
 def _js(content, file_path="app.js"):
     return discovery.discover_js_usages(content, file_path)
 

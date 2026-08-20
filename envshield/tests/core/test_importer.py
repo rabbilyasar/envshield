@@ -376,3 +376,211 @@ def test_merge_variables_from_other_sources_no_op_when_nothing_new(tmp_path):
 
     assert added == {}
     assert schema_dict == {"SECRET_KEY": {"description": "x", "secret": True}}
+
+
+class TestImportRecognizesRealEnvironmentReads:
+    """
+    Regression coverage for PDF findings 3.2/3.3/3.5: 'import' previously
+    discovered variables via PythonParser's top-level-assignment-only scan
+    -- blind to anything inside a class body (3.2, Flask/pydantic-settings),
+    and reporting the Python assignment TARGET rather than the real env
+    var name for any call-wrapped read (3.3), while also treating every
+    unrelated top-level constant as a candidate variable (3.5). Each
+    example below is lettered exactly as in the reconnaissance report and
+    was independently verified against the pre-fix code to reproduce the
+    described bug.
+    """
+
+    def test_a_flask_class_based_config_with_a_matching_name(self, tmp_path):
+        """Example A."""
+        config = tmp_path / "config.py"
+        config.write_text(
+            "import os\nclass Config:\n    SECRET_KEY = os.environ.get('SECRET_KEY')\n"
+        )
+
+        schema_content = importer.generate_schema_from_file(str(config))
+
+        assert "[SECRET_KEY]" in schema_content
+        assert "secret = true" in schema_content.split("[SECRET_KEY]")[1]
+
+    def test_a_superset_style_assignment_where_the_name_differs(self, tmp_path):
+        """
+        Example B, and the exact real-world repro (Apache Superset's real
+        config.py): the schema must record the actual environment variable
+        name the app reads, never the differently-named Python attribute
+        it happens to be assigned to.
+        """
+        config = tmp_path / "config.py"
+        config.write_text(
+            "import os\n"
+            "class Config:\n"
+            "    SECRET_KEY = os.environ.get('SUPERSET_SECRET_KEY') or 'CHANGE_ME_SECRET_KEY'\n"
+        )
+
+        schema_content = importer.generate_schema_from_file(str(config))
+
+        assert "[SUPERSET_SECRET_KEY]" in schema_content
+        assert "[SECRET_KEY]" not in schema_content
+        # The fake placeholder fallback must never surface as a suggested
+        # default -- the name is secret-keyword-classified regardless of
+        # the recovered value, and a secret classification never suggests one.
+        assert (
+            "CHANGE_ME_SECRET_KEY"
+            not in schema_content.split("[SUPERSET_SECRET_KEY]")[1].split("\n\n")[0]
+        )
+        assert "secret = true" in schema_content.split("[SUPERSET_SECRET_KEY]")[1]
+
+    def test_a_pydantic_field_with_a_manual_getenv_default(self, tmp_path):
+        """Example C."""
+        config = tmp_path / "config.py"
+        config.write_text(
+            "import os\n"
+            "from pydantic_settings import BaseSettings\n"
+            "class Settings(BaseSettings):\n"
+            "    database_url: str = os.getenv('DATABASE_URL')\n"
+        )
+
+        schema_content = importer.generate_schema_from_file(str(config))
+
+        assert "[DATABASE_URL]" in schema_content
+
+    def test_django_settings_noise_is_excluded(self, tmp_path):
+        """Example D -- the exact class of noise reported against Saleor's real 1,293-line settings.py."""
+        settings = tmp_path / "settings.py"
+        settings.write_text(
+            "import os\n"
+            "SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY')\n"
+            "DATABASE_URL = os.getenv('DATABASE_URL')\n"
+            "PROJECT_ROOT = 'BASE_DIR/foo'\n"
+            "ROOT_URLCONF = 'project.urls'\n"
+            "APPEND_SLASH = True\n"
+        )
+
+        schema_content = importer.generate_schema_from_file(str(settings))
+        schema = toml.loads(schema_content)
+
+        assert set(schema.keys()) == {"DJANGO_SECRET_KEY", "DATABASE_URL"}
+
+    def test_a_direct_environment_subscript(self, tmp_path):
+        """Example E."""
+        config = tmp_path / "config.py"
+        config.write_text("import os\nAPI_KEY = os.environ['REAL_API_KEY']\n")
+
+        schema_content = importer.generate_schema_from_file(str(config))
+
+        assert "[REAL_API_KEY]" in schema_content
+        assert "[API_KEY]" not in schema_content
+
+    def test_a_type_cast_wrapped_defaulted_read(self, tmp_path):
+        """Example F -- the wrapper needs no special handling; the default and inferred type both survive."""
+        config = tmp_path / "config.py"
+        config.write_text("import os\nPORT = int(os.getenv('PORT', '8000'))\n")
+
+        schema_content = importer.generate_schema_from_file(str(config))
+        schema = toml.loads(schema_content)
+
+        assert schema["PORT"]["defaultValue"] == "8000"
+        assert schema["PORT"]["type"] == "port"
+
+    def test_envshields_own_generated_python_config_is_readable(self, tmp_path):
+        """
+        Example G, and the PDF's own pointed observation: 'import' must be
+        able to read back the exact format 'envshield generate --lang
+        python' produces -- Field(..., alias=...), no os.environ call
+        anywhere in the file at all.
+        """
+        from envshield.core import generator
+
+        original_schema = {
+            "DATABASE_URL": {"description": "DB URL", "secret": True},
+            "LOG_LEVEL": {"description": "Log verbosity", "defaultValue": "info"},
+        }
+        generated_source = generator.generate_config(original_schema, "python")
+
+        config = tmp_path / "config.py"
+        config.write_text(generated_source)
+
+        schema_content = importer.generate_schema_from_file(str(config))
+        schema = toml.loads(schema_content)
+
+        assert set(schema.keys()) == {"DATABASE_URL", "LOG_LEVEL"}
+        assert schema["LOG_LEVEL"]["defaultValue"] == "info"
+
+    def test_repeated_reads_of_the_same_variable_keep_the_first_default(self, tmp_path):
+        """
+        Deterministic dedup rule, explicitly tested per the approved
+        design: multiple reads of the same env var collapse to one schema
+        entry, keeping the FIRST occurrence's recovered default -- later,
+        conflicting defaults are never reconciled or merged.
+        """
+        config = tmp_path / "config.py"
+        config.write_text(
+            "import os\n"
+            "PORT = os.getenv('PORT', '8000')\n"
+            "BACKUP_PORT = os.getenv('PORT', '9000')\n"
+        )
+
+        schema_content = importer.generate_schema_from_file(str(config))
+        schema = toml.loads(schema_content)
+
+        assert set(schema.keys()) == {"PORT"}
+        assert schema["PORT"]["defaultValue"] == "8000"
+
+    def test_a_mixed_file_ignores_unrelated_literal_assignments(self, tmp_path):
+        """
+        As soon as a file contains at least one real environment read, the
+        new discovery path is authoritative for the whole file -- an
+        unrelated, non-env-reading constant sitting in the same file (the
+        exact shape of Django-style noise) must not also appear.
+        """
+        config = tmp_path / "config.py"
+        config.write_text(
+            "import os\n"
+            "API_KEY = os.environ.get('REAL_API_KEY')\n"
+            "APP_NAME = 'My Cool App'\n"
+            "VERSION = '1.0.0'\n"
+        )
+
+        schema_content = importer.generate_schema_from_file(str(config))
+        schema = toml.loads(schema_content)
+
+        assert set(schema.keys()) == {"REAL_API_KEY"}
+
+    def test_a_zero_env_read_file_falls_back_to_the_old_top_level_scan_unchanged(
+        self, tmp_path
+    ):
+        """
+        Explicit coverage for the approved compatibility fallback: a
+        plain, flat, already-resolved config module with no os.environ
+        call anywhere continues to be read exactly as before this fix,
+        via PythonParser's top-level-literal scan -- not silently emptied.
+        """
+        config = tmp_path / "config.py"
+        config.write_text(
+            "SECRET_KEY = 'django-insecure-abc123'\nDEBUG = True\nDATABASE_URL = 'postgres://user:pass@localhost/db'\n"
+        )
+
+        schema_content = importer.generate_schema_from_file(str(config))
+        schema = toml.loads(schema_content)
+
+        assert set(schema.keys()) == {"SECRET_KEY", "DEBUG", "DATABASE_URL"}
+        assert schema["SECRET_KEY"]["secret"] is True
+
+    def test_merge_variables_from_other_sources_uses_the_new_discovery_path_too(
+        self, tmp_path
+    ):
+        """merge_variables_from_other_sources shares the exact same fix -- not a separate, potentially-diverging implementation."""
+        other_file = tmp_path / "config.py"
+        other_file.write_text(
+            "import os\n"
+            "SECRET_KEY = os.environ.get('SUPERSET_SECRET_KEY')\n"
+            "PROJECT_ROOT = 'noise'\n"
+        )
+        schema_dict = {}
+
+        added = importer.merge_variables_from_other_sources(
+            schema_dict, [str(other_file)]
+        )
+
+        assert added == {str(other_file): ["SUPERSET_SECRET_KEY"]}
+        assert "PROJECT_ROOT" not in schema_dict
