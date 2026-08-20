@@ -335,6 +335,36 @@ def test_import_command_on_python_settings_file(tmp_path):
             assert "DEBUG" in content
 
 
+def test_import_command_warns_about_commented_out_variables(tmp_path):
+    """
+    End-to-end PDF finding 3.4 regression, through the actual 'import'
+    command, not just the underlying importer.generate_schema_from_file
+    helper: a real self-hosted-project '.env' commonly documents optional
+    settings as commented-out examples, which must be warned about rather
+    than silently dropped.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        with open("docker-compose.env", "w") as f:
+            f.write(
+                "PAPERLESS_REDIS=redis://broker:6379\n"
+                "#PAPERLESS_OCR_LANGUAGE=eng\n"
+                "#PAPERLESS_SECRET_KEY=change-me\n"
+            )
+
+        result = runner.invoke(app, ["import", "docker-compose.env"])
+
+        assert result.exit_code == 0
+        assert (
+            "Found 2 commented-out variable assignment(s); these were not imported."
+            in result.stdout
+        )
+        with open(SCHEMA_FILE_NAME, "r") as f:
+            content = f.read()
+            assert "PAPERLESS_REDIS" in content
+            assert "PAPERLESS_OCR_LANGUAGE" not in content
+            assert "PAPERLESS_SECRET_KEY" not in content
+
+
 def test_generate_command_creates_typed_config_module(tmp_path):
     """Tests that `envshield generate` writes a pydantic-settings module from the schema."""
     with runner.isolated_filesystem(temp_dir=tmp_path):

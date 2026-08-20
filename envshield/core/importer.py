@@ -8,6 +8,7 @@ import questionary
 import toml
 from rich.console import Console
 
+from ..parsers._dotenv import DotenvParser
 from ..parsers.factory import get_parser
 from . import discovery
 from .exceptions import EnvShieldException
@@ -205,6 +206,7 @@ def generate_schema_from_file(
     if not os.path.exists(file_path):
         raise EnvShieldException(f"Input file not found at: {file_path}")
 
+    commented_out_count = 0
     if file_path.endswith(".py"):
         variables = _discover_python_variables(file_path)
     else:
@@ -216,6 +218,10 @@ def generate_schema_from_file(
                 "or a docker-compose/Kubernetes YAML manifest."
             )
         variables = parser.get_vars(file_path, get_values=True)
+        if isinstance(parser, DotenvParser):
+            commented_out_count = DotenvParser.count_commented_out_assignments(
+                file_path
+            )
 
     schema_dict: Dict[str, Any] = {}
     secrets_found = 0
@@ -307,6 +313,11 @@ def generate_schema_from_file(
     console.print(
         f"- Inferred a type (int/port/bool/url/email) for {types_found} variable(s)."
     )
+    if commented_out_count:
+        console.print(
+            f"[bold yellow]Warning:[/] Found {commented_out_count} commented-out "
+            "variable assignment(s); these were not imported."
+        )
 
     return SCHEMA_HEADER + toml.dumps(schema_dict)
 

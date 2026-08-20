@@ -4,6 +4,83 @@ import toml
 from envshield.core import importer
 
 
+class TestCommentedOutAssignmentsAreWarnedNotImported:
+    """
+    Regression coverage for PDF finding 3.4: 'import' used to silently
+    drop commented-out '#KEY=value' lines with no signal at all -- it must
+    now warn how many it found, without importing them into the schema.
+    """
+
+    def test_warns_and_excludes_commented_out_variable_from_schema(
+        self, tmp_path, capsys
+    ):
+        env_file = tmp_path / "docker-compose.env"
+        env_file.write_text(
+            "PAPERLESS_REDIS=redis://broker:6379\n#PAPERLESS_OCR_LANGUAGE=eng\n"
+        )
+
+        schema_content = importer.generate_schema_from_file(str(env_file))
+
+        assert "PAPERLESS_REDIS" in schema_content
+        assert "PAPERLESS_OCR_LANGUAGE" not in schema_content
+
+        warning = capsys.readouterr().out
+        assert (
+            "Found 1 commented-out variable assignment(s); these were not imported."
+            in warning
+        )
+
+    def test_warns_with_correct_count_for_multiple_commented_out_variables(
+        self, tmp_path, capsys
+    ):
+        env_file = tmp_path / "docker-compose.env"
+        env_file.write_text(
+            "PAPERLESS_REDIS=redis://broker:6379\n"
+            "#PAPERLESS_OCR_LANGUAGE=eng\n"
+            "#PAPERLESS_OCR_LANGUAGES=deu eng\n"
+            "#PAPERLESS_TIME_ZONE=America/Chicago\n"
+            "#PAPERLESS_SECRET_KEY=change-me\n"
+            "#PAPERLESS_ADMIN_USER=admin\n"
+        )
+
+        schema_content = importer.generate_schema_from_file(str(env_file))
+
+        for name in (
+            "PAPERLESS_OCR_LANGUAGE",
+            "PAPERLESS_OCR_LANGUAGES",
+            "PAPERLESS_TIME_ZONE",
+            "PAPERLESS_SECRET_KEY",
+            "PAPERLESS_ADMIN_USER",
+        ):
+            assert name not in schema_content
+
+        warning = capsys.readouterr().out
+        assert (
+            "Found 5 commented-out variable assignment(s); these were not imported."
+            in warning
+        )
+
+    def test_no_warning_when_nothing_is_commented_out(self, tmp_path, capsys):
+        env_file = tmp_path / ".env"
+        env_file.write_text("DATABASE_URL=postgres://localhost/db\n")
+
+        importer.generate_schema_from_file(str(env_file))
+
+        assert "commented-out" not in capsys.readouterr().out
+
+    def test_ordinary_comments_do_not_trigger_a_warning(self, tmp_path, capsys):
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "# Configuration for the app.\n"
+            "# See https://example.com/docs?ref=readme\n"
+            "DATABASE_URL=postgres://localhost/db\n"
+        )
+
+        importer.generate_schema_from_file(str(env_file))
+
+        assert "commented-out" not in capsys.readouterr().out
+
+
 def test_import_command_python_settings_file(tmp_path):
     """Tests that a Django/Flask-style settings.py is correctly converted into a schema."""
     settings_content = "SECRET_KEY = 'django-insecure-abc123'\nDEBUG = True\nDATABASE_URL = 'postgres://user:pass@localhost/db'\n"

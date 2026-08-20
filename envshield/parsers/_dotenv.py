@@ -8,6 +8,16 @@ from ._base import BaseParser
 
 _INLINE_COMMENT_RE = re.compile(r"\s+#.*$")
 
+# A commented-out line whose remainder (after stripping '#'/'export ') is
+# exactly an identifier immediately followed by '=' -- i.e. it would parse
+# as a real assignment if it weren't commented out. Deliberately stricter
+# than the active-line parser's own "split on the first '='" rule: ordinary
+# prose that happens to contain '=' (a URL query string, a parenthetical
+# example inside a real comment) doesn't match this and is correctly not
+# counted, since matching on '=' alone would be indistinguishable from any
+# other comment that mentions an equals sign.
+_COMMENTED_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\s*=")
+
 
 class DotenvParser(BaseParser):
     """
@@ -71,3 +81,36 @@ class DotenvParser(BaseParser):
             return raw_value[1:]
 
         return _INLINE_COMMENT_RE.sub("", raw_value).strip()
+
+    @staticmethod
+    def count_commented_out_assignments(file_path: str) -> int:
+        """
+        Counts commented-out lines that otherwise look exactly like a real
+        'KEY=value' assignment, e.g. '#PAPERLESS_OCR_LANGUAGE=eng' -- a
+        common self-hosted-project convention for documenting available
+        settings as inactive examples. get_vars() correctly never treats
+        these as live values; this exists so a caller (currently:
+        importer.generate_schema_from_file) can warn that they exist
+        instead of silently producing a schema that looks complete but is
+        missing every documented-but-inactive setting.
+
+        Never auto-imports or infers anything about these lines beyond
+        their count -- deciding whether/how to treat a commented-out
+        example as an optional schema entry is a separate, not-yet-made
+        design decision.
+        """
+        if not os.path.exists(file_path):
+            return 0
+
+        count = 0
+        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line.startswith("#"):
+                    continue
+                candidate = line.lstrip("#").strip()
+                if candidate.startswith("export "):
+                    candidate = candidate[len("export ") :].strip()
+                if _COMMENTED_ASSIGNMENT_RE.match(candidate):
+                    count += 1
+        return count

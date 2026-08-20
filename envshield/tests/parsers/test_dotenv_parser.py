@@ -140,3 +140,81 @@ def test_dotenv_parser_sad_path_empty_file(mocker):
     variables = parser.get_vars("empty.env")
 
     assert variables == set()
+
+
+class TestCountCommentedOutAssignments:
+    """
+    Regression coverage for PDF finding 3.4: get_vars() correctly never
+    treats a commented-out 'KEY=value' line as a real variable, but until
+    now nothing counted them either, so 'import' had no way to warn that
+    they exist.
+    """
+
+    def test_one_commented_out_plus_one_active_variable(self, tmp_path):
+        f = tmp_path / ".env"
+        f.write_text(
+            "PAPERLESS_REDIS=redis://broker:6379\n#PAPERLESS_OCR_LANGUAGE=eng\n"
+        )
+
+        assert DotenvParser.count_commented_out_assignments(str(f)) == 1
+        # Non-regression: the active variable is still extracted normally.
+        assert DotenvParser().get_vars(str(f), get_values=True) == {
+            "PAPERLESS_REDIS": "redis://broker:6379"
+        }
+
+    def test_multiple_commented_out_assignments(self, tmp_path):
+        f = tmp_path / ".env"
+        f.write_text(
+            "PAPERLESS_REDIS=redis://broker:6379\n"
+            "#PAPERLESS_OCR_LANGUAGE=eng\n"
+            "#PAPERLESS_OCR_LANGUAGES=deu eng\n"
+            "#PAPERLESS_TIME_ZONE=America/Chicago\n"
+            "#PAPERLESS_SECRET_KEY=change-me\n"
+            "#PAPERLESS_ADMIN_USER=admin\n"
+        )
+
+        assert DotenvParser.count_commented_out_assignments(str(f)) == 5
+
+    def test_ordinary_comments_are_not_counted(self, tmp_path):
+        f = tmp_path / ".env"
+        f.write_text(
+            "# This is a configuration file.\n"
+            "# See the docs for more information.\n"
+            "FOO=bar\n"
+        )
+
+        assert DotenvParser.count_commented_out_assignments(str(f)) == 0
+
+    def test_prose_containing_equals_is_not_counted(self, tmp_path):
+        """
+        A '=' appearing inside ordinary prose (a URL query string, a
+        parenthetical example) must not be mistaken for a commented-out
+        assignment -- only a line whose remainder is exactly an identifier
+        followed by '=' counts.
+        """
+        f = tmp_path / ".env"
+        f.write_text(
+            "# see https://example.com/docs?ref=readme for more info\n"
+            "# note: x=y is not a real setting\n"
+            "FOO=bar\n"
+        )
+
+        assert DotenvParser.count_commented_out_assignments(str(f)) == 0
+
+    def test_export_prefix_is_recognized_when_commented_out(self, tmp_path):
+        f = tmp_path / ".env"
+        f.write_text("# export DATABASE_URL=postgres://localhost/db\n")
+
+        assert DotenvParser.count_commented_out_assignments(str(f)) == 1
+
+    def test_empty_file_returns_zero(self, tmp_path):
+        f = tmp_path / ".env"
+        f.write_text("")
+
+        assert DotenvParser.count_commented_out_assignments(str(f)) == 0
+
+    def test_missing_file_returns_zero_rather_than_raising(self, tmp_path):
+        assert (
+            DotenvParser.count_commented_out_assignments(str(tmp_path / "nope.env"))
+            == 0
+        )
