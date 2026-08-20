@@ -391,6 +391,29 @@ def sync_schema(service_name: str) -> bool:
             safe_description = description.replace("\r", "\\r").replace("\n", "\\n")
             body += f"# {safe_description}\n"
 
+        # Surfaces contract metadata that's otherwise only visible by
+        # opening env.schema.toml itself -- secret/enum/requiredIf are
+        # exactly the facts a developer editing this template by hand
+        # would need but currently can't see. enum values are escaped for
+        # the same reason description/defaultValue are above; requiredIf's
+        # comparison literal goes through schema_types.requiredif_condition_text
+        # instead, which additionally withholds it if the triggering
+        # variable is itself secret.
+        annotations = []
+        if details.get("secret"):
+            annotations.append("secret")
+        enum_values = schema_types.enum_values(details)
+        if enum_values:
+            safe_enum = ", ".join(
+                v.replace("\r", "\\r").replace("\n", "\\n") for v in enum_values
+            )
+            annotations.append(f"enum: {safe_enum}")
+        condition_text = schema_types.requiredif_condition_text(details, schema)
+        if condition_text:
+            annotations.append(f"required if {condition_text}")
+        if annotations:
+            body += f"# {'; '.join(annotations)}\n"
+
         default_value = str(details.get("defaultValue", ""))
         safe_default = default_value.replace("\r", "\\r").replace("\n", "\\n")
         body += f"{key}={safe_default}\n\n"

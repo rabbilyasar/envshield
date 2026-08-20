@@ -3,7 +3,7 @@
 
 import os
 import sys
-from typing import List, Optional, Union
+from typing import List, Optional, Tuple, Union
 
 import questionary
 from rich.console import Console
@@ -14,6 +14,18 @@ from .exceptions import EnvShieldException
 console = Console()
 
 ALL_SERVICES_CHOICE = "All services"
+
+# How a resolved target was actually selected -- not merely what directory
+# inference *would* produce (single-service and interactive-pick can both
+# coincidentally match that), but which branch of resolution actually ran.
+# Only a caller that needs to explain *why* a target was picked (currently:
+# 'setup's inference announcement) needs this; every other caller keeps
+# using resolve_service/resolve_targets exactly as before.
+PROVENANCE_EXPLICIT = "explicit"
+PROVENANCE_SINGLE_SERVICE = "single_service"
+PROVENANCE_INFERRED = "inferred"
+PROVENANCE_INTERACTIVE = "interactive"
+PROVENANCE_ALL_SERVICES = "all_services"
 
 
 def _is_interactive() -> bool:
@@ -61,21 +73,19 @@ def _infer_from_invocation_dir(
     return matches[0] if len(matches) == 1 else None
 
 
-def resolve_service(
+def _resolve_service_with_provenance(
     service_name: Optional[str] = None,
     allow_multiple: bool = False,
     invocation_dir: Optional[str] = None,
-) -> Union[str, List[str]]:
+) -> Tuple[Union[str, List[str]], str]:
     """
-    Resolves which service(s) a command should operate on.
-
-    If `service_name` is provided, validates it exists and returns it.
-    If None and there's only one service, returns that service automatically.
-    If None, multiple services are configured, and `invocation_dir` sits
-    inside exactly one of them, that one is picked -- no flag or prompt
-    needed for the common case of standing inside a service's own directory.
-    Otherwise, interactively prompts the user to pick one (or, if
-    `allow_multiple`, all of them at once).
+    The actual resolution logic behind both `resolve_service` and
+    `resolve_service_with_provenance` -- one implementation, so the two
+    can never quietly diverge. Returns the resolved service(s) alongside
+    exactly which branch produced them (see the PROVENANCE_* constants),
+    since a caller that only checks "does the result match what inference
+    would produce" can be fooled by coincidence (a single-service project's
+    root directory, or an interactive pick that happens to match cwd).
 
     envshield.yml always has at least one registered service once a project
     has been initialized -- a single-service project is just the one-entry
@@ -83,11 +93,6 @@ def resolve_service(
     config_manager.generate_default_config_content) -- so there's no more
     "no services configured" state to silently fall back to; that's just an
     uninitialized project now, and it's raised as such.
-
-    Returns:
-        - A single service name (str)
-        - A list of every configured service name (if `allow_multiple=True`
-          and the user picks "All services")
     """
     available = get_available_services()
 
@@ -102,15 +107,15 @@ def resolve_service(
             raise EnvShieldException(
                 f"Service '{service_name}' not found. Available: {', '.join(available)}"
             )
-        return service_name
+        return service_name, PROVENANCE_EXPLICIT
 
     # Only one service: select it automatically
     if len(available) == 1:
-        return available[0]
+        return available[0], PROVENANCE_SINGLE_SERVICE
 
     inferred = _infer_from_invocation_dir(available, invocation_dir)
     if inferred:
-        return inferred
+        return inferred, PROVENANCE_INFERRED
 
     # Multiple services, none specified, and no TTY to prompt on (CI, a
     # piped/redirected invocation, etc.) -- never block on a prompt that can
@@ -121,7 +126,7 @@ def resolve_service(
     # instead of hanging or raising a raw EOFError from questionary.
     if not _is_interactive():
         if allow_multiple:
-            return available
+            return available, PROVENANCE_ALL_SERVICES
         raise EnvShieldException(
             "Multiple services configured and no terminal to prompt on. "
             f"Pass --service explicitly. Available: {', '.join(available)}"
@@ -141,9 +146,53 @@ def resolve_service(
         raise EnvShieldException(f"No service selected (prompt cancelled). {hint}")
 
     if selected == ALL_SERVICES_CHOICE:
-        return available
+        return available, PROVENANCE_ALL_SERVICES
 
-    return selected
+    return selected, PROVENANCE_INTERACTIVE
+
+
+def resolve_service(
+    service_name: Optional[str] = None,
+    allow_multiple: bool = False,
+    invocation_dir: Optional[str] = None,
+) -> Union[str, List[str]]:
+    """
+    Resolves which service(s) a command should operate on.
+
+    If `service_name` is provided, validates it exists and returns it.
+    If None and there's only one service, returns that service automatically.
+    If None, multiple services are configured, and `invocation_dir` sits
+    inside exactly one of them, that one is picked -- no flag or prompt
+    needed for the common case of standing inside a service's own directory.
+    Otherwise, interactively prompts the user to pick one (or, if
+    `allow_multiple`, all of them at once).
+
+    Returns:
+        - A single service name (str)
+        - A list of every configured service name (if `allow_multiple=True`
+          and the user picks "All services")
+    """
+    resolved, _provenance = _resolve_service_with_provenance(
+        service_name, allow_multiple=allow_multiple, invocation_dir=invocation_dir
+    )
+    return resolved
+
+
+def resolve_service_with_provenance(
+    service_name: Optional[str] = None,
+    allow_multiple: bool = False,
+    invocation_dir: Optional[str] = None,
+) -> Tuple[Union[str, List[str]], str]:
+    """
+    Same resolution as `resolve_service`, but also returns *how* the
+    result was actually selected (one of the PROVENANCE_* constants) --
+    for a caller that needs to explain a directory-inferred choice to the
+    user without being fooled by a single-service or interactive-pick
+    result that happens to coincide with what inference would produce.
+    """
+    return _resolve_service_with_provenance(
+        service_name, allow_multiple=allow_multiple, invocation_dir=invocation_dir
+    )
 
 
 def resolve_targets(
@@ -158,7 +207,18 @@ def resolve_targets(
     unconditionally instead of branching on the return type of
     `resolve_service`.
     """
-    resolved = resolve_service(
+    targets, _provenance = resolve_targets_with_provenance(
+        service_name, invocation_dir=invocation_dir
+    )
+    return targets
+
+
+def resolve_targets_with_provenance(
+    service_name: Optional[str] = None, invocation_dir: Optional[str] = None
+) -> Tuple[List[str], str]:
+    """Same resolution as `resolve_targets`, but also returns how the target(s) were actually selected -- see `resolve_service_with_provenance`."""
+    resolved, provenance = _resolve_service_with_provenance(
         service_name, allow_multiple=True, invocation_dir=invocation_dir
     )
-    return resolved if isinstance(resolved, list) else [resolved]
+    targets = resolved if isinstance(resolved, list) else [resolved]
+    return targets, provenance

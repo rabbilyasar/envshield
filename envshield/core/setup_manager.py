@@ -1,24 +1,102 @@
 # envshield/core/setup_manager.py
 # Contains the core business logic for the 'setup' command.
 
+import dataclasses
 import datetime
 import os
 import re
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import questionary
 from rich.console import Console
-from rich.panel import Panel
 from rich.prompt import Prompt
 
 from ..config import manager as config_manager
 from ..parsers.factory import get_parser
-from . import file_updater, schema_types, service_discovery
+from . import file_updater, schema_manager, schema_types, service_discovery
 from .exceptions import EnvShieldException
 from .importer import key_contains_secret_keyword
 
 console = Console()
 EXAMPLE_FILE = ".env.example"
+
+
+@dataclasses.dataclass
+class SetupResult:
+    """
+    What actually happened for one service's setup run -- richer than a
+    bare bool so a caller (the CLI's completion report) can say how much
+    was actually done instead of a single undifferentiated pass/fail.
+    `completed` is False only when the user declined to overwrite an
+    existing local file, in which case nothing was written and
+    `configured_count` is meaningless (left at 0). `__bool__` mirrors
+    `completed` so existing truthiness checks (`if not run_setup(...)`)
+    keep working unchanged.
+    """
+
+    completed: bool
+    local_file: str
+    configured_count: int = 0
+
+    def __bool__(self) -> bool:
+        return self.completed
+
+
+def _fill_schema_defaults(
+    schema: Dict[str, Any], values: Dict[str, str]
+) -> Dict[str, str]:
+    """
+    Returns a copy of `values` with every schema default filled in for any
+    key that doesn't already have a truthy value -- the same resolution
+    'setup' always performs before deciding what actually still needs a
+    prompt. Computed once and reused both for the upfront drift
+    classification and for Step 1's real prompt-target dict below, so the
+    two can never diverge on what counts as "already resolved" -- a
+    defaulted field is never something the user needs to act on, so
+    classifying it against pre-default values (as `check`/`doctor` do,
+    correctly, since they never auto-fill anything) would otherwise call
+    it "missing" or "blank" right before silently filling it with zero
+    prompt, contradicting the very next thing 'setup' does.
+    """
+    resolved = dict(values)
+    for key, field_schema in schema.items():
+        if not resolved.get(key) and "defaultValue" in field_schema:
+            resolved[key] = field_schema["defaultValue"]
+    return resolved
+
+
+def _print_drift_summary(
+    schema: Dict[str, Any], diff: schema_manager.SchemaDiff
+) -> None:
+    """
+    Shows the gap between the schema and what's already on disk, before
+    anything is prompted for -- reusing check/doctor's own classification
+    (`schema_manager.diff_against_schema`) rather than a second engine.
+    'missing' is split by whether the variable is unconditionally required
+    or only required right now because of an active 'requiredIf' -- the
+    schema itself proves that distinction, so it's never a claim about
+    history (e.g. never "newly required", which nothing here could
+    actually prove). Silent when there's nothing to report; the plain
+    "no empty or invalid variables" message below already covers that.
+    """
+    if diff.is_clean:
+        return
+    if diff.missing:
+        unconditional = sorted(
+            k for k in diff.missing if not schema.get(k, {}).get("requiredIf")
+        )
+        conditional = sorted(k for k in diff.missing if k not in unconditional)
+        if unconditional:
+            console.print(f"  [yellow]missing:[/yellow] {', '.join(unconditional)}")
+        if conditional:
+            console.print(
+                f"  [yellow]missing (conditionally required):[/yellow] {', '.join(conditional)}"
+            )
+    if diff.blank:
+        console.print(f"  [yellow]blank:[/yellow] {', '.join(sorted(diff.blank))}")
+    if diff.invalid:
+        for key, reason in sorted(diff.invalid.items()):
+            console.print(f"  [red]invalid:[/red] {key} ({reason})")
 
 
 def _is_secret_key(key: str) -> bool:
@@ -52,7 +130,7 @@ def _read_seed_values(example_file: str, local_file: str) -> Dict[str, str]:
     return {}
 
 
-def run_setup(service_name: str, output_file: Optional[str] = None) -> bool:
+def run_setup(service_name: str, output_file: Optional[str] = None) -> SetupResult:
     """
     Guides a new developer through creating (or completing) their local
     environment config, driven by the service's schema.
@@ -65,24 +143,19 @@ def run_setup(service_name: str, output_file: Optional[str] = None) -> bool:
         service_name: Which registered service to set up.
 
     Returns:
-        False if the user declined to overwrite an existing local file --
-        nothing was written. True otherwise (including the no-op case where
-        everything was already configured). Callers must check this before
-        reporting success, rather than assuming a normal return means a file
-        was actually written.
+        A SetupResult whose `completed` is False if the user declined to
+        overwrite an existing local file -- nothing was written. True
+        otherwise (including the no-op case where everything was already
+        configured). Callers must check this before reporting success,
+        rather than assuming a normal return means a file was actually
+        written.
     """
     paths = config_manager.get_env_paths(service_name=service_name)
     example_file = paths["example_file"]
     local_file = output_file or paths["local_file"]
     is_python_target = local_file.endswith(".py")
 
-    console.print(
-        Panel(
-            f"[bold cyan]Welcome to EnvShield Setup[/bold cyan]\n\nThis wizard will help you set up your local [magenta]{local_file}[/magenta] file.",
-            title="✨ Local Setup ✨",
-            border_style="green",
-        )
-    )
+    console.print(f"[bold]{local_file}[/bold]")
 
     # Load the schema so we can use its authoritative 'secret' flag and
     # descriptions during prompting, instead of re-guessing from the key name.
@@ -102,6 +175,14 @@ def run_setup(service_name: str, output_file: Optional[str] = None) -> bool:
             f"'{example_file}' not found. Please run 'envshield schema sync' first to generate it."
         )
 
+    if schema:
+        _print_drift_summary(
+            schema,
+            schema_manager.diff_against_schema(
+                schema, _fill_schema_defaults(schema, seed_values)
+            ),
+        )
+
     # A full rewrite only makes sense for a pure generated artifact (dotenv).
     # A Python module may hold real logic beyond simple assignments, so it's
     # only ever patched in place -- see the write step below -- and never
@@ -113,22 +194,19 @@ def run_setup(service_name: str, output_file: Optional[str] = None) -> bool:
         ).ask()
         if not overwrite:
             console.print("[yellow]Setup cancelled.[/yellow]")
-            return False
+            return SetupResult(completed=False, local_file=local_file)
 
     # Step 1: Work out which variables already have a usable value (from the
     # local file, the template, or the schema's own default), and which still
     # need to be asked for. Schema vars come first (they're the contract);
     # any extra vars already present locally are carried over untouched.
-    final_vars: Dict[str, str] = dict(seed_values)
+    # _fill_schema_defaults fills in every schema default up front,
+    # regardless of key order, so a 'requiredIf' condition can be
+    # evaluated against a sibling's default value below even when that
+    # sibling comes later in the schema.
+    final_vars: Dict[str, str] = _fill_schema_defaults(schema, seed_values)
     keys_to_prompt: List[str] = []
     all_keys = list(schema.keys()) + [k for k in seed_values if k not in schema]
-
-    # Fill in every schema default first, regardless of key order, so a
-    # 'requiredIf' condition can be evaluated against a sibling's default
-    # value below even when that sibling comes later in the schema.
-    for key, field_schema in schema.items():
-        if not final_vars.get(key) and "defaultValue" in field_schema:
-            final_vars[key] = field_schema["defaultValue"]
 
     for key in all_keys:
         field_schema = schema.get(key, {})
@@ -164,6 +242,21 @@ def run_setup(service_name: str, output_file: Optional[str] = None) -> bool:
             description = field_schema.get("description")
             if description and not description.startswith("TODO"):
                 console.print(f"  [dim]{description}[/dim]")
+
+            # Only shown when the condition is the actual reason this
+            # field needs a value right now (schema_types.is_required_now
+            # -- not just "has a requiredIf at all") -- a field reaching
+            # this prompt for an unrelated reason (e.g. an invalid
+            # existing value) gets no condition explanation to avoid
+            # implying one that isn't why it's here.
+            if field_schema.get("requiredIf") and schema_types.is_required_now(
+                field_schema, final_vars
+            ):
+                condition_text = schema_types.requiredif_condition_text(
+                    field_schema, schema
+                )
+                if condition_text:
+                    console.print(f"  [dim]Required because {condition_text}.[/dim]")
 
             is_secret = (
                 field_schema["secret"]
@@ -223,7 +316,9 @@ def run_setup(service_name: str, output_file: Optional[str] = None) -> bool:
         _write_python_local_file(local_file, final_vars, keys_to_prompt)
     else:
         _write_dotenv_local_file(local_file, final_vars)
-    return True
+    return SetupResult(
+        completed=True, local_file=local_file, configured_count=len(keys_to_prompt)
+    )
 
 
 def _write_dotenv_local_file(local_file: str, final_vars: Dict[str, str]) -> None:

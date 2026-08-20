@@ -153,7 +153,8 @@ def test_setup_manager_reports_cancellation_via_return_value(mocker, tmp_path):
     """
     run_setup's return value is the CLI's only signal that nothing was
     written -- a caller that ignores it (as the CLI used to) can't tell a
-    cancelled setup apart from a completed one.
+    cancelled setup apart from a completed one. `SetupResult.__bool__`
+    mirrors `completed`, so a plain truthiness check still works.
     """
     with runner.isolated_filesystem(temp_dir=tmp_path):
         _write_root_service_config()
@@ -167,7 +168,10 @@ def test_setup_manager_reports_cancellation_via_return_value(mocker, tmp_path):
             return_value=mocker.Mock(ask=mocker.Mock(return_value=False)),
         )
 
-        assert setup_manager.run_setup(service_name="app") is False
+        result = setup_manager.run_setup(service_name="app")
+
+        assert result.completed is False
+        assert bool(result) is False
 
 
 def test_setup_command_overwrite_accepted_still_reports_completion(mocker, tmp_path):
@@ -646,3 +650,430 @@ class TestNewLocalFilesGetRestrictivePermissions:
         )
 
         assert stat.S_IMODE(os.stat(target).st_mode) == 0o600
+
+
+def test_setup_shows_a_terse_target_line_not_a_decorative_banner(tmp_path):
+    """
+    P0-3: the old opening Panel ('Welcome to EnvShield Setup' / '✨ Local
+    Setup ✨') is decorative and generic -- exactly the tone this round of
+    work asked 'setup' to stop using. It's replaced with a plain line
+    naming the file actually being configured.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_root_service_config()
+        with open(setup_manager.EXAMPLE_FILE, "w") as f:
+            f.write("KEY=value\n")
+
+        result = runner.invoke(app, ["setup"])
+
+        assert result.exit_code == 0
+        assert "Welcome" not in result.stdout
+        assert "✨" not in result.stdout
+        assert ".env" in result.stdout
+
+
+def test_setup_shows_upfront_drift_classification_before_prompting(mocker, tmp_path):
+    """
+    'setup' now shows the gap against the schema before asking anything --
+    reusing schema_manager's own missing/blank/invalid classification
+    (the same one 'check'/'doctor' render) instead of a second validation
+    engine. A variable missing only because of a currently-active
+    'requiredIf' is labeled distinctly from one that's unconditionally
+    required, since the schema itself proves that distinction -- it's
+    never phrased as "newly" required, which nothing here could prove.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_root_service_config()
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write(
+                '[API_URL]\ndescription="x"\ntype="url"\n\n'
+                '[LOG_LEVEL]\ndescription="x"\nenum=["debug","info"]\n\n'
+                '[PAYMENTS_ENABLED]\ndescription="x"\ndefaultValue="true"\n\n'
+                '[STRIPE_KEY]\ndescription="x"\nrequiredIf={var="PAYMENTS_ENABLED", equals="true"}\n'
+            )
+        with open(".env", "w") as f:
+            f.write("API_URL=not-a-url\nPAYMENTS_ENABLED=true\n")
+
+        mocker.patch("questionary.confirm").return_value.ask.return_value = True
+        mocker.patch("questionary.select").return_value.ask.return_value = "debug"
+        mocker.patch(
+            "envshield.core.setup_manager.Prompt.ask",
+            side_effect=["https://api.example.com", "sk_test"],
+        )
+
+        result = runner.invoke(app, ["setup"])
+
+        assert result.exit_code == 0, result.stdout
+        assert "missing: LOG_LEVEL" in result.stdout
+        assert "missing (conditionally required): STRIPE_KEY" in result.stdout
+        assert "invalid: API_URL (must be a valid URL)" in result.stdout
+
+
+class TestDriftClassificationReflectsDefaultResolution:
+    """
+    Regression coverage for the second confirmed P0 defect: the upfront
+    classification previously ran against raw local values, before
+    'setup's own default-resolution step -- so a defaulted field missing
+    or blank from the local file was labeled "missing"/"blank" (implying
+    it needs input) right before being silently filled with zero prompt,
+    contradicting the very next section of output. The classification
+    must now be computed from the same resolved values Step 1 actually
+    uses to decide what to prompt for (schema_types.is_required_now /
+    should_be_present, fed by setup_manager._fill_schema_defaults),
+    without introducing a second validation engine -- it's still
+    schema_manager.diff_against_schema, just fed the resolved values.
+    """
+
+    def test_a_missing_defaulted_field_is_not_reported_as_missing(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            _write_root_service_config()
+            with open(SCHEMA_FILE_NAME, "w") as f:
+                f.write('[LOG_LEVEL]\ndescription="x"\ndefaultValue="info"\n')
+            with open(setup_manager.EXAMPLE_FILE, "w") as f:
+                f.write("")  # LOG_LEVEL entirely absent from the template
+
+            result = runner.invoke(app, ["setup"])
+
+            assert result.exit_code == 0, result.stdout
+            assert "missing" not in result.stdout
+            assert "LOG_LEVEL=info" in open(".env").read()
+
+    def test_a_blank_defaulted_field_is_not_reported_as_blank(self, mocker, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            _write_root_service_config()
+            with open(SCHEMA_FILE_NAME, "w") as f:
+                f.write('[LOG_LEVEL]\ndescription="x"\ndefaultValue="info"\n')
+            with open(".env", "w") as f:
+                f.write("LOG_LEVEL=\n")
+
+            mocker.patch("questionary.confirm").return_value.ask.return_value = True
+
+            result = runner.invoke(app, ["setup"])
+
+            assert result.exit_code == 0, result.stdout
+            assert "blank" not in result.stdout
+            assert "LOG_LEVEL=info" in open(".env").read()
+
+    def test_a_missing_non_defaulted_required_field_is_still_reported_as_missing(
+        self, mocker, tmp_path
+    ):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            _write_root_service_config()
+            with open(SCHEMA_FILE_NAME, "w") as f:
+                f.write('[API_KEY]\ndescription="x"\n')
+            with open(setup_manager.EXAMPLE_FILE, "w") as f:
+                f.write("")
+
+            mocker.patch(
+                "envshield.core.setup_manager.Prompt.ask", return_value="a-key"
+            )
+
+            result = runner.invoke(app, ["setup"])
+
+            assert result.exit_code == 0, result.stdout
+            assert "missing: API_KEY" in result.stdout
+
+    def test_a_conditional_field_with_a_default_is_treated_as_defaulted_not_conditional(
+        self, tmp_path
+    ):
+        """
+        schema_types.is_required_now already gives 'defaultValue' precedence
+        over 'requiredIf' -- a field with both is just a defaulted field,
+        never actually "conditionally required". The classification must
+        agree: it's silently resolved, not labeled either way.
+        """
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            _write_root_service_config()
+            with open(SCHEMA_FILE_NAME, "w") as f:
+                f.write(
+                    '[FLAG]\ndescription="x"\ndefaultValue="false"\n\n'
+                    '[DEPENDENT]\ndescription="x"\ndefaultValue="fallback"\n'
+                    'requiredIf={var="FLAG", equals="true"}\n'
+                )
+            with open(setup_manager.EXAMPLE_FILE, "w") as f:
+                f.write("")
+
+            result = runner.invoke(app, ["setup"])
+
+            assert result.exit_code == 0, result.stdout
+            assert "missing" not in result.stdout
+            content = open(".env").read()
+            assert "FLAG=false" in content
+            assert "DEPENDENT=fallback" in content
+
+    def test_a_conditional_field_without_a_default_is_reported_as_conditionally_required(
+        self, mocker, tmp_path
+    ):
+        """
+        The trigger (FLAG) has its own default -- resolved before the
+        condition is evaluated, so DEPENDENT correctly shows up as
+        conditionally required even though FLAG never appears in the
+        local file at all. Confirms requiredIf is now evaluated against
+        post-default-resolution values, not raw local values.
+        """
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            _write_root_service_config()
+            with open(SCHEMA_FILE_NAME, "w") as f:
+                f.write(
+                    '[FLAG]\ndescription="x"\ndefaultValue="true"\n\n'
+                    '[DEPENDENT]\ndescription="x"\n'
+                    'requiredIf={var="FLAG", equals="true"}\n'
+                )
+            with open(setup_manager.EXAMPLE_FILE, "w") as f:
+                f.write("")
+
+            mocker.patch(
+                "envshield.core.setup_manager.Prompt.ask", return_value="dep-value"
+            )
+
+            result = runner.invoke(app, ["setup"])
+
+            assert result.exit_code == 0, result.stdout
+            assert "missing (conditionally required): DEPENDENT" in result.stdout
+            assert "DEPENDENT=dep-value" in open(".env").read()
+
+    def test_a_fully_defaulted_setup_shows_no_drift_and_needs_no_prompt(
+        self, mocker, tmp_path
+    ):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            _write_root_service_config()
+            with open(SCHEMA_FILE_NAME, "w") as f:
+                f.write(
+                    '[LOG_LEVEL]\ndescription="x"\ndefaultValue="info"\n\n'
+                    '[PORT]\ndescription="x"\ndefaultValue="8080"\n'
+                )
+            with open(setup_manager.EXAMPLE_FILE, "w") as f:
+                f.write("")
+
+            mock_prompt = mocker.patch("envshield.core.setup_manager.Prompt.ask")
+
+            result = runner.invoke(app, ["setup"])
+
+            assert result.exit_code == 0, result.stdout
+            assert "missing:" not in result.stdout
+            assert "blank:" not in result.stdout
+            assert "invalid:" not in result.stdout
+            mock_prompt.assert_not_called()
+            content = open(".env").read()
+            assert "LOG_LEVEL=info" in content
+            assert "PORT=8080" in content
+
+
+def test_setup_explains_a_satisfied_requiredif_condition_for_a_non_secret_trigger(
+    mocker, tmp_path
+):
+    """
+    P0-4: a field that's only required right now because of a satisfied
+    'requiredIf' condition says why, right where it's prompted for -- not
+    just that it's required.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_root_service_config()
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write(
+                '[PAYMENTS_ENABLED]\ndescription="x"\ndefaultValue="true"\n\n'
+                '[STRIPE_KEY]\ndescription="x"\nrequiredIf={var="PAYMENTS_ENABLED", equals="true"}\n'
+            )
+        with open(setup_manager.EXAMPLE_FILE, "w") as f:
+            f.write("PAYMENTS_ENABLED=true\nSTRIPE_KEY=\n")
+
+        mocker.patch("envshield.core.setup_manager.Prompt.ask", return_value="sk_test")
+
+        result = runner.invoke(app, ["setup"])
+
+        assert result.exit_code == 0
+        assert 'Required because PAYMENTS_ENABLED = "true".' in result.stdout
+
+
+def test_setup_requiredif_explanation_never_leaks_a_secret_triggers_value(
+    mocker, tmp_path
+):
+    """
+    Security requirement for P0-4: if the variable that *triggers* a
+    requiredIf condition is itself declared secret, 'setup' must never
+    print its value -- or the schema's 'equals' comparison literal, which
+    could itself coincide with the real secret -- while explaining why a
+    dependent field is required. Uses a distinctive sentinel so a leak is
+    unambiguous, the same way test_setup_retry_loop_never_prints_the_rejected_value
+    does for the retry loop.
+    """
+    sentinel = "sk_live_super_secret_998877"
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_root_service_config()
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write(
+                f'[STRIPE_TOKEN]\ndescription="x"\nsecret=true\ndefaultValue="{sentinel}"\n\n'
+                f'[PAYMENTS_ENABLED]\ndescription="x"\nrequiredIf={{var="STRIPE_TOKEN", equals="{sentinel}"}}\n'
+            )
+        with open(setup_manager.EXAMPLE_FILE, "w") as f:
+            f.write(f"STRIPE_TOKEN={sentinel}\nPAYMENTS_ENABLED=\n")
+
+        mocker.patch("envshield.core.setup_manager.Prompt.ask", return_value="true")
+
+        result = runner.invoke(app, ["setup"])
+
+        assert result.exit_code == 0
+        assert sentinel not in result.stdout
+        assert "Required because STRIPE_TOKEN is set." in result.stdout
+
+
+def test_setup_reports_configured_count_on_completion(mocker, tmp_path):
+    """P0-2: the completion report states how many variables were actually set, instead of a bare '✓ Configuration complete!' with no detail."""
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_root_service_config()
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[A]\ndescription="x"\n\n[B]\ndescription="x"\n')
+        with open(setup_manager.EXAMPLE_FILE, "w") as f:
+            f.write("A=\nB=\n")
+
+        mocker.patch(
+            "envshield.core.setup_manager.Prompt.ask",
+            side_effect=["a-value", "b-value"],
+        )
+
+        result = runner.invoke(app, ["setup"])
+
+        assert result.exit_code == 0
+        assert "2 variable(s) set" in result.stdout
+
+
+def test_setup_reports_partial_completion_across_multiple_services(mocker, tmp_path):
+    """
+    Regression for P0-2: previously, one declined service silently blanked
+    out the entire command's completion report -- even for other services
+    that succeeded in the same run -- and installed no hooks even though
+    real configuration had just been written. 'setup' must report what
+    actually happened, per service and in aggregate, rather than staying
+    silent the moment anything is less than a full sweep.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.makedirs("alpha")
+        os.makedirs("beta")
+        with open("envshield.yml", "w") as f:
+            f.write(
+                "services:\n  alpha:\n    schema: alpha/env.schema.toml\n  beta:\n    schema: beta/env.schema.toml\n"
+            )
+        with open("alpha/env.schema.toml", "w") as f:
+            f.write('[API_KEY]\ndescription="x"\nsecret=true\n')
+        with open("beta/env.schema.toml", "w") as f:
+            f.write('[DB_URL]\ndescription="x"\nsecret=true\n')
+        with open("beta/.env", "w") as f:
+            f.write("OLD=value\n")
+
+        mocker.patch(
+            "envshield.core.service_manager._is_interactive", return_value=True
+        )
+        mock_select = mocker.patch("questionary.select")
+        mock_select.return_value.ask.return_value = "All services"
+        # beta already has a '.env' -- decline its overwrite prompt.
+        mocker.patch("questionary.confirm").return_value.ask.return_value = False
+        mocker.patch(
+            "envshield.core.setup_manager.Prompt.ask", return_value="alpha-key"
+        )
+
+        result = runner.invoke(app, ["setup"])
+
+        assert result.exit_code == 0, result.stdout
+        assert "Configuration complete for 1 of 2 service(s)" in result.stdout
+        assert "1 variable(s) set" in result.stdout
+        assert "1 of 2 service(s) left unchanged" in result.stdout
+        with open("alpha/.env") as f:
+            assert "API_KEY=alpha-key" in f.read()
+        with open("beta/.env") as f:
+            assert f.read() == "OLD=value\n"
+
+
+def test_setup_announces_an_inferred_service_but_not_an_explicit_one(tmp_path):
+    """
+    P0-5: silently picking one of several configured services based on
+    which directory the command happened to run from is worth surfacing --
+    the developer didn't say which service they meant, EnvShield guessed.
+    An explicit '--service' needs no such explanation; the user already
+    said so.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.makedirs("api")
+        os.makedirs("web")
+        with open("envshield.yml", "w") as f:
+            f.write(
+                "services:\n  api:\n    schema: api/env.schema.toml\n  web:\n    schema: web/env.schema.toml\n"
+            )
+        with open("api/env.schema.toml", "w") as f:
+            f.write('[API_KEY]\ndescription="x"\ndefaultValue="k"\n')
+        with open("web/env.schema.toml", "w") as f:
+            f.write('[WEB_KEY]\ndescription="x"\ndefaultValue="k"\n')
+        os.chdir("api")
+
+        result = runner.invoke(app, ["setup"])
+
+        assert result.exit_code == 0, result.stdout
+        assert "inferred from the current directory" in result.stdout
+
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.makedirs("api")
+        os.makedirs("web")
+        with open("envshield.yml", "w") as f:
+            f.write(
+                "services:\n  api:\n    schema: api/env.schema.toml\n  web:\n    schema: web/env.schema.toml\n"
+            )
+        with open("api/env.schema.toml", "w") as f:
+            f.write('[API_KEY]\ndescription="x"\ndefaultValue="k"\n')
+        with open("web/env.schema.toml", "w") as f:
+            f.write('[WEB_KEY]\ndescription="x"\ndefaultValue="k"\n')
+
+        result = runner.invoke(app, ["setup", "--service", "api"])
+
+        assert result.exit_code == 0, result.stdout
+        assert "inferred from the current directory" not in result.stdout
+
+
+def test_setup_does_not_announce_inference_for_a_single_service_project(tmp_path):
+    """
+    Regression: a single-service project run from its own root directory
+    used to be misreported as directory-inferred -- the root service's
+    directory trivially equals the invocation directory, so a check that
+    only asked "does this match what inference would produce" fired every
+    time, even though resolution never even considered more than one
+    service. This is the single most common 'setup' invocation in the
+    whole product, so it must stay silent.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_root_service_config()
+        with open(setup_manager.EXAMPLE_FILE, "w") as f:
+            f.write("KEY=value\n")
+
+        result = runner.invoke(app, ["setup"])
+
+        assert result.exit_code == 0, result.stdout
+        assert "inferred from the current directory" not in result.stdout
+
+
+def test_setup_does_not_announce_inference_for_an_interactive_pick(mocker, tmp_path):
+    """
+    Regression: a human explicitly picking a service from the interactive
+    prompt is not directory inference, even if that pick happens to be the
+    same service cwd would have inferred (here: run from the project root,
+    which matches neither service's own directory, so a real ambiguous
+    prompt fires) -- the two must stay distinguishable.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.makedirs("api")
+        os.makedirs("web")
+        with open("envshield.yml", "w") as f:
+            f.write(
+                "services:\n  api:\n    schema: api/env.schema.toml\n  web:\n    schema: web/env.schema.toml\n"
+            )
+        with open("api/env.schema.toml", "w") as f:
+            f.write('[API_KEY]\ndescription="x"\ndefaultValue="k"\n')
+        with open("web/env.schema.toml", "w") as f:
+            f.write('[WEB_KEY]\ndescription="x"\ndefaultValue="k"\n')
+
+        mocker.patch(
+            "envshield.core.service_manager._is_interactive", return_value=True
+        )
+        mocker.patch("questionary.select").return_value.ask.return_value = "api"
+
+        result = runner.invoke(app, ["setup"])
+
+        assert result.exit_code == 0, result.stdout
+        assert "inferred from the current directory" not in result.stdout

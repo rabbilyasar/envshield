@@ -158,6 +158,35 @@ def is_required_now(field_schema: dict[str, Any], local_values: dict[str, str]) 
     return local_values.get(other_var) == expected
 
 
+def requiredif_condition_text(
+    field_schema: dict[str, Any], schema: dict[str, Any]
+) -> str | None:
+    """
+    Secret-safe, human-readable rendering of a field's `requiredIf`
+    condition -- e.g. 'PAYMENTS_ENABLED = "true"'. If the triggering
+    variable is itself declared `secret` in `schema`, the comparison
+    literal is withheld ('STRIPE_TOKEN is set') instead: it's schema-
+    authored, but nothing stops it from coinciding with (or hinting at) a
+    real secret value, so it's treated the same as a value itself would
+    be. Returns None if the field has no `requiredIf`, or the condition is
+    malformed (missing 'var').
+
+    Shared by 'setup's prompt-time explanation and 'schema sync's
+    '.env.example' annotation -- the two places this condition is
+    surfaced to a human outside of 'explain'.
+    """
+    condition = field_schema.get("requiredIf")
+    if not condition:
+        return None
+    var = condition.get("var")
+    if not var:
+        return None
+    if schema.get(var, {}).get("secret"):
+        return f"{var} is set"
+    equals = str(condition.get("equals", "true"))
+    return f'{var} = "{equals}"'
+
+
 def should_be_present(
     field_schema: dict[str, Any], local_values: dict[str, str]
 ) -> bool:

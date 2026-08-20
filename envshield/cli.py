@@ -158,7 +158,9 @@ def init(
 
     if has_services and not force:
         console.print(
-            "[yellow]An EnvShield setup already exists. Use '--force' to overwrite.[/yellow]"
+            "[yellow]An EnvShield setup already exists. Run '[bold]envshield "
+            "setup[/bold]' to configure your local environment, or use "
+            "'--force' to overwrite the existing schema/config.[/yellow]"
         )
         raise typer.Exit()
 
@@ -718,7 +720,7 @@ def setup(
 ):
     """Interactively creates (or completes) a local environment file from the schema."""
     try:
-        targets = service_manager.resolve_targets(
+        targets, provenance = service_manager.resolve_targets_with_provenance(
             service, invocation_dir=INVOCATION_DIR
         )
     except EnvShieldException as e:
@@ -733,22 +735,52 @@ def setup(
         )
         output_file = None
 
+    # Only worth explaining *why* a service was picked when directory
+    # inference is actually what picked it -- not merely when the result
+    # happens to match what inference would have produced (a single-
+    # service project's root directory, or an interactive pick, can both
+    # coincidentally match cwd without inference having run at all).
+    if provenance == service_manager.PROVENANCE_INFERRED:
+        console.print(
+            f"[dim]Configuring '{targets[0]}' (inferred from the current directory).[/dim]"
+        )
+
     try:
-        completed = True
+        results: List[setup_manager.SetupResult] = []
         for target in targets:
             _print_service_header(targets, target)
-            if not setup_manager.run_setup(
-                service_name=target, output_file=output_file
-            ):
-                completed = False
+            results.append(
+                setup_manager.run_setup(service_name=target, output_file=output_file)
+            )
+
+        completed = [r for r in results if r.completed]
+        skipped_count = len(results) - len(completed)
 
         if completed:
-            # After successful setup, offer to install git hooks
+            # After successful setup, offer to install git hooks -- even a
+            # partial success (some services configured, others declined)
+            # still means there's now something worth hooking.
             hm = hooks_manager.HooksManager()
             hm.install_hooks_if_needed(auto=True, force=False)
-
-            console.print("\n[bold green]✓ Configuration complete![/bold green]")
+            total_configured = sum(r.configured_count for r in completed)
+            if len(results) > 1:
+                console.print(
+                    f"\n[bold green]✓ Configuration complete[/bold green] for "
+                    f"{len(completed)} of {len(results)} service(s) "
+                    f"({total_configured} variable(s) set)."
+                )
+            else:
+                console.print(
+                    f"\n[bold green]✓ Configuration complete[/bold green] "
+                    f"({total_configured} variable(s) set)."
+                )
             hm.print_hook_status()
+
+        if skipped_count:
+            console.print(
+                f"[yellow]{skipped_count} of {len(results)} service(s) left "
+                "unchanged.[/yellow]"
+            )
     except EnvShieldException as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(code=1)

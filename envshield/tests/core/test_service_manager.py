@@ -1,4 +1,6 @@
 # envshield/tests/core/test_service_manager.py
+import os
+
 import pytest
 
 from envshield.core import service_manager
@@ -160,3 +162,93 @@ def test_resolve_service_raises_clearly_when_no_tty_and_single_target_required(
     with pytest.raises(EnvShieldException, match="--service"):
         service_manager.resolve_service(allow_multiple=False)
     mock_select.assert_not_called()
+
+
+class TestResolutionProvenance:
+    """
+    Regression coverage for the P0 fix: a caller that wants to explain
+    *why* a target was picked (currently: 'setup's directory-inference
+    announcement) previously had to guess by checking whether directory
+    inference *would* produce the same result as whatever was resolved --
+    which a single-service project (the resolution never even calls the
+    inference helper) or an interactive pick (a human chose it) can both
+    match by pure coincidence. `resolve_service_with_provenance` /
+    `resolve_targets_with_provenance` instead report which branch of
+    resolution actually ran, so a caller never has to reverse-engineer it.
+    """
+
+    def test_explicit_service_has_explicit_provenance(self, tmp_path, monkeypatch):
+        _write_two_services(monkeypatch, tmp_path)
+
+        resolved, provenance = service_manager.resolve_service_with_provenance("beta")
+
+        assert resolved == "beta"
+        assert provenance == service_manager.PROVENANCE_EXPLICIT
+
+    def test_the_only_configured_service_has_single_service_provenance(
+        self, tmp_path, monkeypatch
+    ):
+        """
+        The trivial case this fix must not treat as inference: a project
+        with exactly one registered service never even reaches the
+        directory-inference check, regardless of where it's invoked from.
+        """
+        monkeypatch.chdir(tmp_path)
+        with open("envshield.yml", "w") as f:
+            f.write("services:\n  alpha:\n    schema: alpha/env.schema.toml\n")
+
+        resolved, provenance = service_manager.resolve_service_with_provenance()
+
+        assert resolved == "alpha"
+        assert provenance == service_manager.PROVENANCE_SINGLE_SERVICE
+
+    def test_cwd_match_among_multiple_services_has_inferred_provenance(
+        self, tmp_path, monkeypatch
+    ):
+        _write_two_services(monkeypatch, tmp_path)
+        os.makedirs("alpha", exist_ok=True)
+
+        resolved, provenance = service_manager.resolve_service_with_provenance(
+            invocation_dir=os.path.join(str(tmp_path), "alpha")
+        )
+
+        assert resolved == "alpha"
+        assert provenance == service_manager.PROVENANCE_INFERRED
+
+    def test_interactive_pick_has_interactive_provenance_even_if_it_matches_cwd(
+        self, mocker, tmp_path, monkeypatch
+    ):
+        """
+        A human explicitly picking a service from the prompt is not
+        directory inference, even if that pick happens to be the same
+        service cwd would have inferred -- the two must stay distinguishable.
+        """
+        _write_two_services(monkeypatch, tmp_path)
+        mocker.patch(
+            "envshield.core.service_manager._is_interactive", return_value=True
+        )
+        mocker.patch("questionary.select").return_value.ask.return_value = "alpha"
+
+        resolved, provenance = service_manager.resolve_service_with_provenance(
+            invocation_dir=str(tmp_path)
+        )
+
+        assert resolved == "alpha"
+        assert provenance == service_manager.PROVENANCE_INTERACTIVE
+
+    def test_resolve_targets_with_provenance_matches_resolve_targets(
+        self, tmp_path, monkeypatch
+    ):
+        """resolve_targets/resolve_service keep their exact prior behavior -- the provenance-aware variants are additive, not a replacement."""
+        _write_two_services(monkeypatch, tmp_path)
+        os.makedirs("alpha", exist_ok=True)
+
+        targets, provenance = service_manager.resolve_targets_with_provenance(
+            invocation_dir=os.path.join(str(tmp_path), "alpha")
+        )
+
+        assert targets == ["alpha"]
+        assert provenance == service_manager.PROVENANCE_INFERRED
+        assert service_manager.resolve_targets(
+            invocation_dir=os.path.join(str(tmp_path), "alpha")
+        ) == ["alpha"]
