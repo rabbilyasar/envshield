@@ -252,3 +252,75 @@ class TestResolutionProvenance:
         assert service_manager.resolve_targets(
             invocation_dir=os.path.join(str(tmp_path), "alpha")
         ) == ["alpha"]
+
+
+class TestInferFromInvocationDirGitBoundary:
+    """
+    P0 regression: directory-based service inference must never treat a
+    registered service's directory as "where the invocation is" once the
+    invocation itself has crossed into an independent nested Git
+    repository below that service directory -- the plain path-containment
+    check alone (invocation_dir starts with service_dir) can't tell that
+    apart from the ordinary case, since both look identical lexically.
+    """
+
+    def test_rejects_inference_across_a_nested_independent_repository(
+        self, tmp_path, monkeypatch
+    ):
+        _write_two_services(monkeypatch, tmp_path)
+        nested_repo = tmp_path / "alpha" / "reserved3"
+        nested_repo.mkdir(parents=True)
+        (nested_repo / ".git").mkdir()
+
+        inferred = service_manager._infer_from_invocation_dir(
+            ["alpha", "beta"], str(nested_repo)
+        )
+
+        assert inferred is None
+
+    def test_rejects_inference_across_a_dot_git_file_boundary_too(
+        self, tmp_path, monkeypatch
+    ):
+        _write_two_services(monkeypatch, tmp_path)
+        nested_repo = tmp_path / "alpha" / "reserved3"
+        nested_repo.mkdir(parents=True)
+        (nested_repo / ".git").write_text("gitdir: /elsewhere/.git/worktrees/x\n")
+
+        inferred = service_manager._infer_from_invocation_dir(
+            ["alpha", "beta"], str(nested_repo)
+        )
+
+        assert inferred is None
+
+    def test_still_infers_normally_from_an_ordinary_subdirectory(
+        self, tmp_path, monkeypatch
+    ):
+        """The existing, legitimate case -- no nested '.git' anywhere -- must be completely unaffected."""
+        _write_two_services(monkeypatch, tmp_path)
+        plain_subdir = tmp_path / "alpha" / "nested"
+        plain_subdir.mkdir(parents=True)
+
+        inferred = service_manager._infer_from_invocation_dir(
+            ["alpha", "beta"], str(plain_subdir)
+        )
+
+        assert inferred == "alpha"
+
+    def test_still_infers_normally_when_the_whole_project_is_one_git_repo(
+        self, tmp_path, monkeypatch
+    ):
+        """
+        The realistic common case: the project itself is a Git repository
+        (boundary at the project root, above every service directory) --
+        inference must work exactly as before, since nothing here crosses
+        that boundary.
+        """
+        (tmp_path / ".git").mkdir()
+        _write_two_services(monkeypatch, tmp_path)
+        os.makedirs(tmp_path / "alpha", exist_ok=True)
+
+        inferred = service_manager._infer_from_invocation_dir(
+            ["alpha", "beta"], str(tmp_path / "alpha")
+        )
+
+        assert inferred == "alpha"

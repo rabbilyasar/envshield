@@ -12,6 +12,73 @@ from envshield.core.exceptions import (
 )
 
 
+class TestFindProjectRootGitBoundary:
+    """
+    P0 regression: find_project_root's upward walk for 'envshield.yml' must
+    never cross past the nearest enclosing Git repository boundary
+    relative to `start` -- otherwise a command run from inside an
+    independent nested repository (a vendored dependency, a scratch
+    checkout, a submodule) silently adopts an unrelated outer project's
+    envshield.yml. See envshield/tests/test_service_cli.py for the
+    end-to-end CLI-level reproduction of the actual failure mode.
+    """
+
+    def test_stops_at_an_independent_nested_repository_boundary(self, tmp_path):
+        (tmp_path / ".git").mkdir()
+        with open(tmp_path / "envshield.yml", "w") as f:
+            f.write("services:\n  edge:\n    schema: edge/env.schema.toml\n")
+
+        nested_repo = tmp_path / "edge" / "reserved3"
+        nested_repo.mkdir(parents=True)
+        (nested_repo / ".git").mkdir()
+
+        assert config_manager.find_project_root(str(nested_repo)) is None
+
+    def test_stops_at_a_dot_git_file_boundary_too(self, tmp_path):
+        """Worktree/submodule-style '.git' *file* must block the walk exactly like a '.git' directory does."""
+        (tmp_path / ".git").mkdir()
+        with open(tmp_path / "envshield.yml", "w") as f:
+            f.write("services:\n  edge:\n    schema: edge/env.schema.toml\n")
+
+        nested_repo = tmp_path / "edge" / "reserved3"
+        nested_repo.mkdir(parents=True)
+        (nested_repo / ".git").write_text("gitdir: /elsewhere/.git/worktrees/x\n")
+
+        assert config_manager.find_project_root(str(nested_repo)) is None
+
+    def test_an_ordinary_subdirectory_without_its_own_git_still_resolves_normally(
+        self, tmp_path
+    ):
+        """The single most common case: a plain service subdirectory inside the same repo as envshield.yml must be completely unaffected."""
+        (tmp_path / ".git").mkdir()
+        with open(tmp_path / "envshield.yml", "w") as f:
+            f.write("services:\n  edge:\n    schema: edge/env.schema.toml\n")
+
+        plain_subdir = tmp_path / "edge" / "nested"
+        plain_subdir.mkdir(parents=True)
+
+        assert config_manager.find_project_root(str(plain_subdir)) == str(tmp_path)
+
+    def test_invocation_from_the_project_root_itself_still_works(self, tmp_path):
+        (tmp_path / ".git").mkdir()
+        with open(tmp_path / "envshield.yml", "w") as f:
+            f.write("services:\n  app:\n    schema: env.schema.toml\n")
+
+        assert config_manager.find_project_root(str(tmp_path)) == str(tmp_path)
+
+    def test_no_git_repository_at_all_preserves_the_original_full_upward_walk(
+        self, tmp_path
+    ):
+        """No '.git' anywhere above `start` at all -- the pre-existing behavior (walk all the way to the filesystem root) is completely unaffected."""
+        with open(tmp_path / "envshield.yml", "w") as f:
+            f.write("services:\n  app:\n    schema: env.schema.toml\n")
+
+        nested = tmp_path / "a" / "b" / "c"
+        nested.mkdir(parents=True)
+
+        assert config_manager.find_project_root(str(nested)) == str(tmp_path)
+
+
 def test_update_gitignore_creates_file_with_env_pattern(tmp_path, monkeypatch):
     """A fresh project must get '.env' ignored, not just the '.local' variants."""
     monkeypatch.chdir(tmp_path)

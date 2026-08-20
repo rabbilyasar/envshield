@@ -9,6 +9,7 @@ import questionary
 from rich.console import Console
 
 from ..config import manager as config_manager
+from ..utils import git_utils
 from .exceptions import EnvShieldException
 
 console = Console()
@@ -56,20 +57,36 @@ def _infer_from_invocation_dir(
     invoked from the project root, from outside every service directory, or
     -- unlikely, but possible with nested service dirs -- inside more than
     one at once.
+
+    A candidate is also rejected if its directory sits outside
+    `invocation_dir`'s own nearest Git repository boundary (a '.git'
+    directory or file -- see git_utils.find_nearest_git_boundary): a
+    registered service directory that happens to be, or to contain, an
+    independent nested Git repository (e.g. a submodule) must not be
+    silently treated as "this is where I am" once the invocation itself
+    has crossed into that nested repo's own boundary -- the same reasoning
+    config_manager.find_project_root applies to 'envshield.yml' itself.
     """
     if not invocation_dir:
         return None
     invocation_dir = os.path.abspath(invocation_dir)
+    git_boundary = git_utils.find_nearest_git_boundary(invocation_dir)
     matches = []
     for name in available:
         try:
             service_dir = os.path.abspath(config_manager.get_service_dir(name))
         except EnvShieldException:
             continue
-        if invocation_dir == service_dir or invocation_dir.startswith(
-            service_dir + os.sep
+        if not (
+            invocation_dir == service_dir
+            or invocation_dir.startswith(service_dir + os.sep)
         ):
-            matches.append(name)
+            continue
+        if git_boundary is not None and not (
+            service_dir == git_boundary or service_dir.startswith(git_boundary + os.sep)
+        ):
+            continue  # service_dir sits above invocation_dir's own repo boundary
+        matches.append(name)
     return matches[0] if len(matches) == 1 else None
 
 

@@ -5,6 +5,36 @@ import os
 import subprocess
 
 
+def find_nearest_git_boundary(start: str) -> str | None:
+    """
+    Walks upward from `start` looking for the nearest enclosing '.git'
+    entry -- a directory (the ordinary case) or a file (what Git itself
+    leaves behind for a worktree or a submodule checkout, in place of the
+    usual directory) -- either of which marks the root of an independent
+    Git repository. `os.path.exists` deliberately doesn't distinguish the
+    two: both count as a boundary equally.
+
+    Pure filesystem/path logic, no 'git' subprocess: this has to answer
+    "is there a repository boundary here" even when standing inside an
+    unrelated nested repository that a 'git' invocation from further up
+    the tree wouldn't (and, correctly, shouldn't) know anything about --
+    `get_git_root()`'s `git rev-parse --show-toplevel` answers a different
+    question (where does *this* repo end) and can't be repurposed for it.
+
+    Returns the absolute directory containing the '.git' entry, or None if
+    `start` isn't inside any Git repository at all (nothing found before
+    reaching the filesystem root).
+    """
+    current = os.path.abspath(start)
+    while True:
+        if os.path.exists(os.path.join(current, ".git")):
+            return current
+        parent = os.path.dirname(current)
+        if parent == current:
+            return None
+        current = parent
+
+
 def get_git_root() -> str | None:
     """
     Finds the root directory of the current Git repository.

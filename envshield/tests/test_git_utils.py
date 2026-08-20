@@ -13,6 +13,58 @@ def _init_repo(path):
     subprocess.run(["git", "config", "user.name", "Test"], cwd=path, check=True)
 
 
+class TestFindNearestGitBoundary:
+    """
+    Pure filesystem/path logic, deliberately tested with hand-created '.git'
+    markers rather than real 'git init' -- the function only ever checks
+    for the entry's *existence*, never invokes 'git' itself, so a real
+    repository would exercise nothing a manually-placed marker doesn't.
+    """
+
+    def test_finds_a_dot_git_directory_at_start(self, tmp_path):
+        (tmp_path / ".git").mkdir()
+
+        assert git_utils.find_nearest_git_boundary(str(tmp_path)) == str(tmp_path)
+
+    def test_finds_a_dot_git_directory_above_start(self, tmp_path):
+        (tmp_path / ".git").mkdir()
+        nested = tmp_path / "a" / "b" / "c"
+        nested.mkdir(parents=True)
+
+        assert git_utils.find_nearest_git_boundary(str(nested)) == str(tmp_path)
+
+    def test_finds_a_dot_git_file_boundary(self, tmp_path):
+        """
+        Git replaces the '.git' directory with a plain pointer *file* for
+        a worktree or a submodule checkout -- this must count as a
+        boundary exactly the same as the ordinary directory form.
+        """
+        (tmp_path / ".git").write_text("gitdir: /elsewhere/.git/worktrees/x\n")
+
+        assert git_utils.find_nearest_git_boundary(str(tmp_path)) == str(tmp_path)
+
+    def test_returns_none_when_not_inside_any_git_repository(self, tmp_path):
+        nested = tmp_path / "a" / "b"
+        nested.mkdir(parents=True)
+
+        assert git_utils.find_nearest_git_boundary(str(nested)) is None
+
+    def test_returns_the_nearest_boundary_not_an_outer_one(self, tmp_path):
+        """
+        Two independent repositories, one nested inside the other --
+        walking up from inside the inner one must stop there, never
+        reaching the outer repository's own '.git'.
+        """
+        (tmp_path / ".git").mkdir()
+        inner = tmp_path / "vendored"
+        inner.mkdir()
+        (inner / ".git").mkdir()
+        nested = inner / "deep"
+        nested.mkdir()
+
+        assert git_utils.find_nearest_git_boundary(str(nested)) == str(inner)
+
+
 def test_get_hooks_dir_defaults_to_dot_git_hooks(tmp_path, monkeypatch):
     _init_repo(tmp_path)
     monkeypatch.chdir(tmp_path)

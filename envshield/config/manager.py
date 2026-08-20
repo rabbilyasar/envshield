@@ -12,6 +12,7 @@ from envshield.core.exceptions import (
     SchemaParseError,
     UnsafePathError,
 )
+from envshield.utils import git_utils
 
 CONFIG_FILE_NAME = "envshield.yml"
 SCHEMA_FILE_NAME = "env.schema.toml"
@@ -65,13 +66,29 @@ def find_project_root(start: str = ".") -> Optional[str]:
     inside a service's own directory (e.g. 'services/api') still finds the
     project's config instead of reporting an uninitialized project.
 
+    The walk never crosses upward past the nearest enclosing Git repository
+    boundary relative to `start` (a '.git' directory or file -- see
+    git_utils.find_nearest_git_boundary). Once `start` is inside an
+    independent Git repository -- a nested checkout, a vendored dependency,
+    or a submodule sitting inside an EnvShield-managed project -- an
+    'envshield.yml' living in some unrelated outer repository must never be
+    silently adopted as this invocation's project, the same way a real
+    'git' command run inside a submodule never reaches up into the
+    superproject's own '.git'. If `start` isn't inside any Git repository
+    at all, there's no boundary to respect, and the walk proceeds all the
+    way to the filesystem root exactly as before this existed.
+
     Returns the absolute directory containing envshield.yml, or None if
-    there isn't one anywhere above `start`.
+    there isn't one within `start`'s own Git repository boundary (or
+    anywhere above `start`, if it's not inside a Git repository at all).
     """
     current = os.path.abspath(start)
+    git_boundary = git_utils.find_nearest_git_boundary(current)
     while True:
         if os.path.isfile(os.path.join(current, CONFIG_FILE_NAME)):
             return current
+        if git_boundary is not None and current == git_boundary:
+            return None
         parent = os.path.dirname(current)
         if parent == current:
             return None

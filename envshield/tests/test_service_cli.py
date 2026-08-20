@@ -353,3 +353,90 @@ def test_doctor_infers_service_from_invocation_directory(tmp_path):
         assert result.exit_code in (0, 1)  # health failures are fine; a crash isn't
         payload = json.loads(result.stdout)
         assert [r["service"] for r in payload["results"]] == ["api"]
+
+
+class TestGitBoundaryPreventsFalseCleanAcrossNestedRepos:
+    """
+    P0 regression, direct end-to-end reproduction of the reported failure
+    mode: a nested, independent Git repository (its own '.git', its own
+    unrelated '.env') sitting inside an EnvShield-managed project must
+    never let 'check'/'doctor' silently resolve and validate the OUTER
+    project's file while the invocation is actually standing inside the
+    inner, unrelated repository. Before the fix, the everyday no-argument
+    form of both commands -- not the contrived explicit-path form -- did
+    exactly that: confidently reported the outer project's file as clean,
+    the worst possible failure mode for a validation tool.
+    """
+
+    def _write_outer_project_with_nested_repo(self, root):
+        """
+        outer/ (root, its own '.git')
+          envshield.yml -- registers service 'edge'
+          edge/
+            env.schema.toml, .env  -- the outer project's own, genuinely-clean file
+            reserved3/  -- an INDEPENDENT nested repo, own '.git', own unrelated .env
+        Returns reserved3's absolute path.
+        """
+        os.makedirs(os.path.join(root, "edge"))
+        os.makedirs(os.path.join(root, ".git"))
+        with open(os.path.join(root, "envshield.yml"), "w") as f:
+            f.write("services:\n  edge:\n    schema: edge/env.schema.toml\n")
+        with open(os.path.join(root, "edge", "env.schema.toml"), "w") as f:
+            f.write('[OUTER_REQUIRED_VAR]\ndescription="x"\n')
+        with open(os.path.join(root, "edge", ".env"), "w") as f:
+            f.write("OUTER_REQUIRED_VAR=value\n")
+
+        nested_repo = os.path.join(root, "edge", "reserved3")
+        os.makedirs(os.path.join(nested_repo, ".git"))
+        with open(os.path.join(nested_repo, ".env"), "w") as f:
+            f.write("TOTALLY_UNRELATED_VAR=foo\n")
+        return nested_repo
+
+    def test_check_no_args_does_not_report_the_outer_projects_env_as_clean(
+        self, tmp_path
+    ):
+        with runner.isolated_filesystem(temp_dir=tmp_path) as root:
+            nested_repo = self._write_outer_project_with_nested_repo(root)
+            os.chdir(nested_repo)
+
+            result = runner.invoke(app, ["check", "--json"])
+
+            payload = json.loads(result.stdout)
+            # The exact pre-fix symptom: never claim the outer service's
+            # file was checked and found clean from inside the nested repo.
+            for entry in payload.get("results", []):
+                assert not (
+                    entry.get("service") == "edge" and entry.get("clean") is True
+                )
+            assert payload.get("success") is not True
+
+    def test_doctor_no_args_does_not_report_the_outer_projects_service_healthy(
+        self, tmp_path
+    ):
+        with runner.isolated_filesystem(temp_dir=tmp_path) as root:
+            nested_repo = self._write_outer_project_with_nested_repo(root)
+            os.chdir(nested_repo)
+
+            result = runner.invoke(app, ["doctor", "--json"])
+
+            payload = json.loads(result.stdout)
+            assert not any(
+                entry.get("service") == "edge" for entry in payload.get("results", [])
+            )
+
+    def test_check_and_doctor_still_work_normally_from_the_outer_project_itself(
+        self, tmp_path
+    ):
+        """Sanity check: the fix must not break the legitimate case -- running from the outer project itself still finds and validates it."""
+        with runner.isolated_filesystem(temp_dir=tmp_path) as root:
+            self._write_outer_project_with_nested_repo(root)
+
+            check_result = runner.invoke(app, ["check", "--json"])
+            check_payload = json.loads(check_result.stdout)
+            assert check_payload["success"] is True
+            assert check_payload["results"][0]["service"] == "edge"
+            assert check_payload["results"][0]["clean"] is True
+
+            doctor_result = runner.invoke(app, ["doctor", "--json"])
+            doctor_payload = json.loads(doctor_result.stdout)
+            assert doctor_payload["results"][0]["service"] == "edge"
