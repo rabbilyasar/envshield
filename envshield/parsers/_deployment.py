@@ -2,6 +2,7 @@
 # Best-effort content-sniffing to tell a docker-compose file apart from a
 # Kubernetes manifest -- both are plain YAML, so extension alone can't do it.
 import os
+import re
 
 import yaml
 
@@ -30,3 +31,33 @@ def detect_deployment_format(file_path: str) -> str | None:
     if any("apiVersion" in d and "kind" in d for d in docs):
         return "kubernetes"
     return None
+
+
+# A complete Go-template expression -- the specific syntax ('{{ ... }}')
+# that breaks YAML parsing for the extremely common real-world case of
+# checking a Helm chart template directly instead of its rendered output
+# (e.g. 'value: {{ .Values.databaseUrl | quote }}'). Deliberately requires
+# the full '{{...}}' pair, not a bare '{{' -- valid YAML essentially never
+# contains a literal, unquoted '{{ ... }}' pair (an unquoted '{' alone
+# already starts YAML's own flow-mapping syntax), so this doesn't fire on
+# ordinary invalid YAML that's broken for an unrelated reason.
+_HELM_TEMPLATE_EXPRESSION_RE = re.compile(r"\{\{.*?\}\}", re.DOTALL)
+
+
+def looks_like_unrendered_helm_template(file_path: str) -> bool:
+    """
+    True when `file_path` contains at least one '{{ ... }}' Go-template
+    expression. Intended for a caller that already knows detect_deployment_
+    format() (or get_parser()) couldn't make sense of this file, to tell
+    the common "this is a Helm template, not a renderable manifest" cause
+    apart from genuinely invalid/unrelated YAML, so it can give a specific,
+    actionable message instead of a generic one.
+    """
+    if not os.path.exists(file_path):
+        return False
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+            content = f.read()
+    except OSError:
+        return False
+    return bool(_HELM_TEMPLATE_EXPRESSION_RE.search(content))

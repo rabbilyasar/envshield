@@ -2,7 +2,10 @@
 import pytest
 
 from envshield.core.exceptions import EnvShieldException
-from envshield.parsers._deployment import detect_deployment_format
+from envshield.parsers._deployment import (
+    detect_deployment_format,
+    looks_like_unrendered_helm_template,
+)
 from envshield.parsers._docker_compose import DockerComposeParser
 
 
@@ -18,6 +21,50 @@ def test_detect_deployment_format_returns_none_for_unrelated_yaml(tmp_path):
     f.write_text("foo: bar\nbaz: 1\n")
 
     assert detect_deployment_format(str(f)) is None
+
+
+class TestLooksLikeUnrenderedHelmTemplate:
+    """
+    Regression coverage for PDF finding 3.9: a '.yml'/'.yaml' file whose
+    YAML parse fails because of unrendered '{{ ... }}' Go-template syntax
+    is a distinct, common cause from genuinely invalid/unrelated YAML, and
+    schema_manager's error message should be able to tell them apart.
+    """
+
+    def test_true_for_a_helm_style_template_expression(self, tmp_path):
+        f = tmp_path / "deployment.yaml"
+        f.write_text(
+            "apiVersion: apps/v1\n"
+            "kind: Deployment\n"
+            "metadata:\n"
+            "  name: {{ .Release.Name }}-server\n"
+        )
+
+        assert looks_like_unrendered_helm_template(str(f)) is True
+
+    def test_false_for_ordinary_invalid_yaml(self, tmp_path):
+        f = tmp_path / "broken.yaml"
+        f.write_text(
+            "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: [unterminated\n"
+        )
+
+        assert looks_like_unrendered_helm_template(str(f)) is False
+
+    def test_false_for_ordinary_valid_yaml(self, tmp_path):
+        f = tmp_path / "normal.yaml"
+        f.write_text("apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: x\n")
+
+        assert looks_like_unrendered_helm_template(str(f)) is False
+
+    def test_false_for_a_bare_unmatched_brace(self, tmp_path):
+        """A single stray '{' (no closing '}}') isn't a template expression -- must not be mistaken for one."""
+        f = tmp_path / "weird.yaml"
+        f.write_text("apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: {\n")
+
+        assert looks_like_unrendered_helm_template(str(f)) is False
+
+    def test_false_for_missing_file(self, tmp_path):
+        assert looks_like_unrendered_helm_template(str(tmp_path / "nope.yaml")) is False
 
 
 def test_parser_auto_selects_the_sole_service(tmp_path):

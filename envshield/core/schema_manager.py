@@ -10,9 +10,34 @@ from envshield.config import manager as config_manager
 from envshield.core import file_updater, schema_types
 from envshield.core.exceptions import EnvShieldException
 from envshield.parsers._base import BaseParser
+from envshield.parsers._deployment import looks_like_unrendered_helm_template
 from envshield.parsers.factory import get_parser
 
 console = Console()
+
+
+def _no_parser_found_message(file_path: str) -> str:
+    """
+    The message to show when get_parser() returns None for `file_path`.
+
+    Detects the specific, common cause of a Helm chart template checked
+    directly instead of its rendered output -- a '.yml'/'.yaml' file
+    get_parser() couldn't recognize as either a docker-compose or
+    Kubernetes manifest because it isn't valid YAML at all, on account of
+    unrendered '{{ ... }}' Go-template syntax -- and gives a specific,
+    actionable message for that case instead of the generic one.
+    """
+    _, extension = os.path.splitext(file_path)
+    if extension in (".yml", ".yaml") and looks_like_unrendered_helm_template(
+        file_path
+    ):
+        return (
+            f"'{file_path}' looks like an unrendered Helm chart template (it "
+            "contains '{{ ... }}' template syntax). Render it first with "
+            "'helm template' -- EnvShield validates a Kubernetes manifest's "
+            "final YAML, not Helm's template source."
+        )
+    return f"No parser found for file type '{file_path}'."
 
 
 class SchemaDiff:
@@ -201,7 +226,7 @@ def check_schema(
     parser = get_parser(file_path, container=container, prefer=service_name)
 
     if not parser:
-        console.print(f"[red]Error:[/red] No parser found for file type '{file_path}'.")
+        console.print(f"[red]Error:[/red] {_no_parser_found_message(file_path)}")
         return False
 
     try:
@@ -296,7 +321,7 @@ def check_result(
                 "file": file_path,
                 "service": service_name,
                 "clean": False,
-                "error": f"No parser found for file type '{file_path}'.",
+                "error": _no_parser_found_message(file_path),
             }
         local_values = parser.get_vars(file_path, get_values=True)
     except FileNotFoundError:

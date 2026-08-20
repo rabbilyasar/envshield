@@ -839,6 +839,147 @@ def test_doctor_deployment_manifest_check_handles_renamed_interpolation(
     assert "is in sync" in message
 
 
+class TestUnrenderedHelmTemplateProducesAHelpfulError:
+    """
+    Regression coverage for PDF finding 3.9: checking an unrendered Helm
+    chart template used to fail with a generic "No parser found for file
+    type" message, identical to genuinely invalid/unrelated YAML -- no
+    hint that the actual, very common cause is unrendered Helm template
+    syntax, or that 'helm template' fixes it.
+    """
+
+    def test_check_schema_rich_output_names_helm_and_suggests_helm_template(
+        self, mocker, tmp_path, capsys
+    ):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            mocker.patch(
+                "envshield.config.manager.load_schema",
+                return_value={"DATABASE_URL": {"description": "x"}},
+            )
+            with open("deployment.yaml", "w") as f:
+                f.write(
+                    "apiVersion: apps/v1\n"
+                    "kind: Deployment\n"
+                    "metadata:\n"
+                    "  name: {{ .Release.Name }}-server\n"
+                    "spec:\n"
+                    "  template:\n"
+                    "    spec:\n"
+                    "      containers:\n"
+                    "        - name: server\n"
+                    "          env:\n"
+                    "            - name: DATABASE_URL\n"
+                    "              value: {{ .Values.databaseUrl | quote }}\n"
+                )
+
+            is_in_sync = schema_manager.check_schema(
+                "deployment.yaml", service_name="app"
+            )
+
+            assert is_in_sync is False
+            output = capsys.readouterr().out
+            assert "Helm chart template" in output
+            assert "helm template" in output
+
+    def test_check_result_json_names_helm_and_suggests_helm_template(
+        self, mocker, tmp_path
+    ):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            mocker.patch(
+                "envshield.config.manager.load_schema",
+                return_value={"DATABASE_URL": {"description": "x"}},
+            )
+            with open("deployment.yaml", "w") as f:
+                f.write(
+                    "apiVersion: apps/v1\n"
+                    "kind: Deployment\n"
+                    "metadata:\n"
+                    "  name: {{ .Release.Name }}-server\n"
+                )
+
+            result = schema_manager.check_result("deployment.yaml", service_name="app")
+
+            assert result["clean"] is False
+            assert "Helm chart template" in result["error"]
+            assert "helm template" in result["error"]
+
+    def test_check_result_json_still_reports_generic_error_for_invalid_yaml(
+        self, mocker, tmp_path
+    ):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            mocker.patch(
+                "envshield.config.manager.load_schema",
+                return_value={"DATABASE_URL": {"description": "x"}},
+            )
+            with open("broken.yaml", "w") as f:
+                f.write(
+                    "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: [unterminated\n"
+                )
+
+            result = schema_manager.check_result("broken.yaml", service_name="app")
+
+            assert result["clean"] is False
+            assert result["error"] == "No parser found for file type 'broken.yaml'."
+
+    def test_check_schema_still_parses_normal_kubernetes_yaml(self, mocker, tmp_path):
+        """Non-regression: an ordinary, non-templated Kubernetes manifest is unaffected."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            mocker.patch(
+                "envshield.config.manager.load_schema",
+                return_value={"DATABASE_URL": {"description": "x"}},
+            )
+            with open("deployment.yaml", "w") as f:
+                f.write(
+                    "apiVersion: apps/v1\n"
+                    "kind: Deployment\n"
+                    "metadata:\n"
+                    "  name: server\n"
+                    "spec:\n"
+                    "  template:\n"
+                    "    spec:\n"
+                    "      containers:\n"
+                    "        - name: server\n"
+                    "          env:\n"
+                    "            - name: DATABASE_URL\n"
+                    "              value: postgres://localhost/db\n"
+                )
+
+            is_in_sync = schema_manager.check_schema(
+                "deployment.yaml", service_name="app"
+            )
+
+            assert is_in_sync is True
+
+    def test_check_schema_still_parses_rendered_helm_output(self, mocker, tmp_path):
+        """Non-regression: a manifest that's already been through 'helm template' (no '{{ }}' left) is unaffected."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            mocker.patch(
+                "envshield.config.manager.load_schema",
+                return_value={"DATABASE_URL": {"description": "x"}},
+            )
+            with open("deployment.yaml", "w") as f:
+                f.write(
+                    "apiVersion: apps/v1\n"
+                    "kind: Deployment\n"
+                    "metadata:\n"
+                    "  name: myrelease-server\n"
+                    "spec:\n"
+                    "  template:\n"
+                    "    spec:\n"
+                    "      containers:\n"
+                    "        - name: server\n"
+                    "          env:\n"
+                    "            - name: DATABASE_URL\n"
+                    "              value: postgres://localhost/db\n"
+                )
+
+            is_in_sync = schema_manager.check_schema(
+                "deployment.yaml", service_name="app"
+            )
+
+            assert is_in_sync is True
+
+
 def test_check_schema_against_kubernetes_deployment_manifest(mocker, tmp_path):
     with runner.isolated_filesystem(temp_dir=tmp_path):
         mocker.patch(
