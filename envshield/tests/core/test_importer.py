@@ -2,6 +2,127 @@
 import toml
 
 from envshield.core import importer
+from envshield.core.scanner import MAX_SCANNABLE_SIZE_BYTES
+
+
+class TestOversizedValuesAreSkippedNotEmbedded:
+    """
+    Regression coverage for PDF finding 3.7: 'import' used to bake an
+    oversized value verbatim into the generated schema as a suggested
+    defaultValue, with no guard at all (scan already had one for exactly
+    this class of problem -- see MAX_SCANNABLE_SIZE_BYTES). The variable
+    itself is still kept; only the oversized default is withheld.
+    """
+
+    def test_value_just_below_threshold_is_imported_normally(self, tmp_path):
+        value = "A" * (MAX_SCANNABLE_SIZE_BYTES - 1)
+        env_file = tmp_path / ".env"
+        env_file.write_text(f"BELOW_LIMIT={value}\n")
+
+        schema_content = importer.generate_schema_from_file(str(env_file))
+        schema = toml.loads(schema_content)
+
+        assert schema["BELOW_LIMIT"]["defaultValue"] == value
+
+    def test_value_above_threshold_is_not_written_as_default(self, tmp_path):
+        value = "A" * (MAX_SCANNABLE_SIZE_BYTES + 1)
+        env_file = tmp_path / ".env"
+        env_file.write_text(f"OVER_LIMIT={value}\n")
+
+        schema_content = importer.generate_schema_from_file(str(env_file))
+        schema = toml.loads(schema_content)
+
+        assert "defaultValue" not in schema["OVER_LIMIT"]
+        # Not truncated and partially embedded either -- no prefix of the
+        # oversized value appears anywhere in the generated schema.
+        assert value[:1000] not in schema_content
+
+    def test_variable_is_preserved_without_its_oversized_default(self, tmp_path):
+        value = "A" * (MAX_SCANNABLE_SIZE_BYTES + 1)
+        env_file = tmp_path / ".env"
+        env_file.write_text(f"OVER_LIMIT={value}\n")
+
+        schema_content = importer.generate_schema_from_file(str(env_file))
+        schema = toml.loads(schema_content)
+
+        assert "OVER_LIMIT" in schema
+        assert schema["OVER_LIMIT"]["secret"] is False
+        assert schema["OVER_LIMIT"]["description"] == "TODO: Add description."
+
+    def test_warning_is_emitted_for_an_oversized_value(self, tmp_path, capsys):
+        value = "A" * (MAX_SCANNABLE_SIZE_BYTES + 1)
+        env_file = tmp_path / ".env"
+        env_file.write_text(f"OVER_LIMIT={value}\n")
+
+        importer.generate_schema_from_file(str(env_file))
+
+        warning = capsys.readouterr().out
+        assert "Skipped 1 value(s)" in warning
+        assert "OVER_LIMIT" in warning
+
+    def test_multiple_oversized_values_are_all_skipped_and_counted(
+        self, tmp_path, capsys
+    ):
+        value = "A" * (MAX_SCANNABLE_SIZE_BYTES + 1)
+        env_file = tmp_path / ".env"
+        env_file.write_text(f"FIRST_BIG={value}\nSECOND_BIG={value}\nNORMAL=fine\n")
+
+        schema_content = importer.generate_schema_from_file(str(env_file))
+        schema = toml.loads(schema_content)
+
+        assert "defaultValue" not in schema["FIRST_BIG"]
+        assert "defaultValue" not in schema["SECOND_BIG"]
+        assert schema["NORMAL"]["defaultValue"] == "fine"
+
+        warning = capsys.readouterr().out
+        assert "Skipped 2 value(s)" in warning
+        assert "FIRST_BIG" in warning
+        assert "SECOND_BIG" in warning
+
+    def test_no_warning_when_nothing_is_oversized(self, tmp_path, capsys):
+        env_file = tmp_path / ".env"
+        env_file.write_text("NORMAL=fine\n")
+
+        importer.generate_schema_from_file(str(env_file))
+
+        assert "Skipped" not in capsys.readouterr().out
+
+    def test_oversized_secret_value_still_never_gets_a_default(self, tmp_path, capsys):
+        """
+        Non-regression: an oversized *secret* value was already never
+        written as a defaultValue (secret classification withholds it
+        unconditionally) -- confirms this fix doesn't change that, and
+        doesn't add a spurious size warning for a value that was never
+        going to get a default in the first place.
+        """
+        value = "A" * (MAX_SCANNABLE_SIZE_BYTES + 1)
+        env_file = tmp_path / ".env"
+        env_file.write_text(f"API_SECRET_KEY={value}\n")
+
+        schema_content = importer.generate_schema_from_file(str(env_file))
+        schema = toml.loads(schema_content)
+
+        assert schema["API_SECRET_KEY"]["secret"] is True
+        assert "defaultValue" not in schema["API_SECRET_KEY"]
+        assert value[:1000] not in schema_content
+        assert "Skipped" not in capsys.readouterr().out
+
+    def test_merge_variables_from_other_sources_also_skips_oversized_default(
+        self, tmp_path
+    ):
+        """The same guard applies to init's secondary 'other sources' merge path -- the identical bug shape, a different call site."""
+        value = "A" * (MAX_SCANNABLE_SIZE_BYTES + 1)
+        other_file = tmp_path / ".env"
+        other_file.write_text(f"OVER_LIMIT={value}\n")
+        schema_dict = {}
+
+        added = importer.merge_variables_from_other_sources(
+            schema_dict, [str(other_file)]
+        )
+
+        assert added == {str(other_file): ["OVER_LIMIT"]}
+        assert "defaultValue" not in schema_dict["OVER_LIMIT"]
+        assert schema_dict["OVER_LIMIT"]["secret"] is False
 
 
 class TestCommentedOutAssignmentsAreWarnedNotImported:

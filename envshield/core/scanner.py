@@ -20,6 +20,15 @@ from . import discovery
 
 console = Console()
 
+# Files (and, for importer.py's default-value suggestion path, individual
+# values) larger than this are skipped rather than fully read/embedded --
+# reading a multi-MB file/value in full, or baking one into a generated
+# artifact verbatim, is a real cost (and, for a generated schema, a
+# correctness problem) with no proportional benefit. Named and exported so
+# any other caller with the same "don't fully process something this
+# large" concern reuses this exact threshold instead of picking its own.
+MAX_SCANNABLE_SIZE_BYTES = 1_000_000
+
 SECRET_PATTERNS: List[Dict[str, str]] = [
     {
         # Value may be quoted (Python/JSON-style: KEY = "value") or bare
@@ -657,7 +666,7 @@ def _scan_files(
                 content = git_utils.get_staged_file_content(file_path)
                 if content is None:
                     continue
-                if len(content) > 1_000_000:
+                if len(content) > MAX_SCANNABLE_SIZE_BYTES:
                     skipped_large_files.append(file_path)
                     continue
 
@@ -688,7 +697,10 @@ def _scan_files(
                     new_lines_only=new_lines_only,
                 )
             else:
-                if os.path.exists(file_path) and os.path.getsize(file_path) > 1_000_000:
+                if (
+                    os.path.exists(file_path)
+                    and os.path.getsize(file_path) > MAX_SCANNABLE_SIZE_BYTES
+                ):
                     skipped_large_files.append(file_path)
                     continue
                 secrets, undeclared = _scan_single_file(file_path, schema_vars)

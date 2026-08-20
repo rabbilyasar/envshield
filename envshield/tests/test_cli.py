@@ -7,6 +7,7 @@ from typer.testing import CliRunner
 from envshield.cli import app
 from envshield.config import manager as config_manager
 from envshield.config.manager import CONFIG_FILE_NAME, SCHEMA_FILE_NAME
+from envshield.core.scanner import MAX_SCANNABLE_SIZE_BYTES
 
 runner = CliRunner()
 
@@ -363,6 +364,34 @@ def test_import_command_warns_about_commented_out_variables(tmp_path):
             assert "PAPERLESS_REDIS" in content
             assert "PAPERLESS_OCR_LANGUAGE" not in content
             assert "PAPERLESS_SECRET_KEY" not in content
+
+
+def test_import_command_skips_oversized_value_as_default(tmp_path):
+    """
+    End-to-end PDF finding 3.7 regression, through the actual 'import'
+    command: a single oversized value (e.g. a misconfigured multi-MB
+    variable) must not balloon the generated schema file, and the
+    variable must still show up in it, just without that value as its
+    suggested default.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        oversized_value = "A" * (MAX_SCANNABLE_SIZE_BYTES + 1)
+        with open(".env", "w") as f:
+            f.write(f"BIG_VALUE={oversized_value}\nNORMAL=fine\n")
+
+        result = runner.invoke(app, ["import", ".env"])
+
+        assert result.exit_code == 0
+        assert "Skipped 1 value(s)" in result.stdout
+        assert "BIG_VALUE" in result.stdout
+        with open(SCHEMA_FILE_NAME, "r") as f:
+            content = f.read()
+        assert "[BIG_VALUE]" in content
+        assert oversized_value[:1000] not in content
+        assert 'defaultValue = "fine"' in content
+        # The generated schema itself must stay small -- the whole point
+        # of the guard, not just an absence-of-substring check.
+        assert os.path.getsize(SCHEMA_FILE_NAME) < 10_000
 
 
 def test_generate_command_creates_typed_config_module(tmp_path):

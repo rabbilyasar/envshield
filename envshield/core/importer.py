@@ -12,7 +12,7 @@ from ..parsers._dotenv import DotenvParser
 from ..parsers.factory import get_parser
 from . import discovery
 from .exceptions import EnvShieldException
-from .scanner import SECRET_PATTERNS
+from .scanner import MAX_SCANNABLE_SIZE_BYTES, SECRET_PATTERNS
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
@@ -131,6 +131,22 @@ def _infer_type(key: str, value: str) -> Optional[str]:
     return None
 
 
+def _is_oversized_for_default(value: str) -> bool:
+    """
+    True when `value` is too large to responsibly suggest as a schema
+    `defaultValue` -- reuses scan's own file-size threshold (see
+    MAX_SCANNABLE_SIZE_BYTES) rather than a second, independently-chosen
+    limit, since the underlying concern is the same one scan already
+    guards against: fully embedding something this large into a generated
+    artifact. Secret classification/type inference are untouched by this
+    -- they still see the real value; only the *defaultValue write* is
+    gated, and only for a value that would otherwise be suggested as one
+    (a secret's default is already withheld unconditionally by
+    _classify_variable, oversized or not).
+    """
+    return len(value) > MAX_SCANNABLE_SIZE_BYTES
+
+
 def _discover_python_variables(file_path: str) -> Dict[str, str]:
     """
     Variable discovery for a '.py' source, specifically for
@@ -227,6 +243,7 @@ def generate_schema_from_file(
     secrets_found = 0
     defaults_found = 0
     types_found = 0
+    oversized_defaults: list = []
 
     console.print("\n[bold]Analyzing variables...[/bold]")
 
@@ -266,8 +283,16 @@ def generate_schema_from_file(
         else:
             schema_dict[key]["secret"] = False
             if default_value is not None:
-                schema_dict[key]["defaultValue"] = default_value
-                defaults_found += 1
+                # An oversized value is never written into the schema, not
+                # even truncated -- the variable itself is still kept (it
+                # was already added above, just without a defaultValue),
+                # since classification/type-inference above didn't need
+                # the value to fit in memory-friendly form to run.
+                if _is_oversized_for_default(default_value):
+                    oversized_defaults.append(key)
+                else:
+                    schema_dict[key]["defaultValue"] = default_value
+                    defaults_found += 1
         if inferred_type:
             schema_dict[key]["type"] = inferred_type
             types_found += 1
@@ -318,6 +343,13 @@ def generate_schema_from_file(
             f"[bold yellow]Warning:[/] Found {commented_out_count} commented-out "
             "variable assignment(s); these were not imported."
         )
+    if oversized_defaults:
+        console.print(
+            f"[bold yellow]Warning:[/] Skipped {len(oversized_defaults)} value(s) "
+            f"over {MAX_SCANNABLE_SIZE_BYTES // 1_000_000}MB as a suggested "
+            "default (variable(s) kept without one): "
+            + ", ".join(sorted(oversized_defaults))
+        )
 
     return SCHEMA_HEADER + toml.dumps(schema_dict)
 
@@ -362,7 +394,11 @@ def merge_variables_from_other_sources(
 
             entry: Dict[str, Any] = {"description": "TODO: Add description."}
             entry["secret"] = is_secret
-            if not is_secret and default_value is not None:
+            if (
+                not is_secret
+                and default_value is not None
+                and not _is_oversized_for_default(default_value)
+            ):
                 entry["defaultValue"] = default_value
             if inferred_type:
                 entry["type"] = inferred_type
