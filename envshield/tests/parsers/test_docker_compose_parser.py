@@ -233,3 +233,157 @@ class TestVariableInterpolation:
         variables = DockerComposeParser().get_vars(str(f), get_values=True)
 
         assert variables["URL"] == "https://${HOST:-localhost}/api"
+
+
+class TestInterpolationComparesAgainstHostVariableName:
+    """
+    Regression coverage for PDF finding 3.6: a whole-value '${VAR}' /
+    '${VAR:-default}' reference used to be stored under the
+    container-facing key it's assigned to, not the host-facing name it
+    actually references -- e.g. 'AUTHENTIK_POSTGRESQL__PASSWORD: ${PG_PASS}'
+    contributed an AUTHENTIK_POSTGRESQL__PASSWORD entry instead of a
+    PG_PASS one, which made schema comparison check the wrong name
+    entirely (PG_PASS reported missing; the container-internal rename
+    reported as a spurious "extra" variable). DI-2 already fixed the
+    *value* side of interpolation (see TestVariableInterpolation above);
+    this class covers the *key* side.
+    """
+
+    def test_renamed_variable_with_no_default_is_keyed_by_host_name(self, tmp_path):
+        f = tmp_path / "docker-compose.yml"
+        f.write_text(
+            "services:\n"
+            "  server:\n"
+            "    environment:\n"
+            "      AUTHENTIK_POSTGRESQL__PASSWORD: ${PG_PASS}\n"
+        )
+
+        variables = DockerComposeParser().get_vars(str(f), get_values=True)
+
+        assert variables == {"PG_PASS": DockerComposeParser.UNRESOLVED_VALUE}
+        assert "AUTHENTIK_POSTGRESQL__PASSWORD" not in variables
+
+    def test_renamed_variable_with_default_is_keyed_by_host_name(self, tmp_path):
+        f = tmp_path / "docker-compose.yml"
+        f.write_text(
+            "services:\n"
+            "  server:\n"
+            "    environment:\n"
+            "      AUTHENTIK_POSTGRESQL__HOST: ${PG_HOST:-localhost}\n"
+        )
+
+        variables = DockerComposeParser().get_vars(str(f), get_values=True)
+
+        assert variables == {"PG_HOST": "localhost"}
+        assert "AUTHENTIK_POSTGRESQL__HOST" not in variables
+
+    def test_same_name_interpolation_is_unaffected(self, tmp_path):
+        """Non-regression: the container key already equals the host name in the common case."""
+        f = tmp_path / "docker-compose.yml"
+        f.write_text(
+            "services:\n  api:\n    environment:\n      DB_PORT: ${DB_PORT:-3307}\n"
+        )
+
+        variables = DockerComposeParser().get_vars(str(f), get_values=True)
+
+        assert variables == {"DB_PORT": "3307"}
+
+    def test_explicit_empty_default_is_keyed_by_host_name_and_reported_blank_ready(
+        self, tmp_path
+    ):
+        f = tmp_path / "docker-compose.yml"
+        f.write_text(
+            "services:\n"
+            "  server:\n"
+            "    environment:\n"
+            "      AUTHENTIK_POSTGRESQL__PASSWORD: ${PG_PASS:-}\n"
+        )
+
+        variables = DockerComposeParser().get_vars(str(f), get_values=True)
+
+        assert variables == {"PG_PASS": ""}
+
+    def test_multiple_renamed_variables_each_keyed_by_their_own_host_name(
+        self, tmp_path
+    ):
+        f = tmp_path / "docker-compose.yml"
+        f.write_text(
+            "services:\n"
+            "  server:\n"
+            "    environment:\n"
+            "      AUTHENTIK_POSTGRESQL__PASSWORD: ${PG_PASS}\n"
+            "      AUTHENTIK_POSTGRESQL__HOST: ${PG_HOST:-localhost}\n"
+        )
+
+        variables = DockerComposeParser().get_vars(str(f), get_values=True)
+
+        assert variables == {
+            "PG_PASS": DockerComposeParser.UNRESOLVED_VALUE,
+            "PG_HOST": "localhost",
+        }
+
+    def test_multiple_container_keys_referencing_the_same_host_variable_collapse(
+        self, tmp_path
+    ):
+        """
+        Two container-facing names both interpolating the same host
+        variable collapse to one schema-comparison entry -- the schema's
+        contract is about the host variable, not about how many container
+        keys happen to consume it.
+        """
+        f = tmp_path / "docker-compose.yml"
+        f.write_text(
+            "services:\n"
+            "  server:\n"
+            "    environment:\n"
+            "      FIRST_CONSUMER: ${SHARED_SECRET}\n"
+            "      SECOND_CONSUMER: ${SHARED_SECRET}\n"
+        )
+
+        variables = DockerComposeParser().get_vars(str(f), get_values=True)
+
+        assert variables == {"SHARED_SECRET": DockerComposeParser.UNRESOLVED_VALUE}
+
+    def test_list_style_renamed_variable_is_keyed_by_host_name(self, tmp_path):
+        f = tmp_path / "docker-compose.yml"
+        f.write_text(
+            "services:\n"
+            "  server:\n"
+            "    environment:\n"
+            "      - AUTHENTIK_POSTGRESQL__PASSWORD=${PG_PASS}\n"
+        )
+
+        variables = DockerComposeParser().get_vars(str(f), get_values=True)
+
+        assert variables == {"PG_PASS": DockerComposeParser.UNRESOLVED_VALUE}
+
+    def test_embedded_reference_is_still_keyed_by_container_name(self, tmp_path):
+        """Non-regression: an embedded (not whole-value) reference never triggers the rename -- no host name to extract."""
+        f = tmp_path / "docker-compose.yml"
+        f.write_text(
+            "services:\n"
+            "  api:\n"
+            "    environment:\n"
+            "      URL: https://${HOST:-localhost}/api\n"
+        )
+
+        variables = DockerComposeParser().get_vars(str(f), get_values=True)
+
+        assert variables == {"URL": "https://${HOST:-localhost}/api"}
+
+    def test_environment_block_rename_still_overrides_env_file(self, tmp_path):
+        """The existing 'environment: wins over env_file:' precedence still applies when the winning entry is a rename."""
+        (tmp_path / ".env").write_text("PG_PASS=from-env-file\n")
+        f = tmp_path / "docker-compose.yml"
+        f.write_text(
+            "services:\n"
+            "  server:\n"
+            "    env_file:\n"
+            "      - .env\n"
+            "    environment:\n"
+            "      AUTHENTIK_POSTGRESQL__PASSWORD: ${PG_PASS:-from-default}\n"
+        )
+
+        variables = DockerComposeParser().get_vars(str(f), get_values=True)
+
+        assert variables["PG_PASS"] == "from-default"

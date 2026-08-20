@@ -31,6 +31,14 @@ class DockerComposeParser(BaseParser):
     -- is reported as present with a placeholder value rather than as
     missing or blank, since the real value legitimately lives outside this
     file.
+
+    A whole-value '${VAR}'/'${VAR:-default}' reference is reported under
+    VAR (the host-facing name the schema declares), not under the
+    container-facing key it's assigned to -- e.g.
+    'AUTHENTIK_POSTGRESQL__PASSWORD: ${PG_PASS}' contributes a PG_PASS
+    entry, not an AUTHENTIK_POSTGRESQL__PASSWORD one, since the rename is
+    purely internal to the container and isn't itself part of the
+    contract being validated.
     """
 
     is_deployment_manifest = True
@@ -105,19 +113,21 @@ class DockerComposeParser(BaseParser):
         if isinstance(environment, dict):
             for key, value in environment.items():
                 raw = str(value) if value is not None else self.UNRESOLVED_VALUE
-                variables[key] = self._resolve_interpolation(raw)
+                host_var, resolved = self._resolve_interpolation(raw)
+                variables[host_var or key] = resolved
         elif isinstance(environment, list):
             for entry in environment:
                 entry = str(entry)
                 if "=" in entry:
                     key, value = entry.split("=", 1)
-                    variables[key.strip()] = self._resolve_interpolation(value)
+                    host_var, resolved = self._resolve_interpolation(value)
+                    variables[host_var or key.strip()] = resolved
                 else:
                     variables[entry.strip()] = self.UNRESOLVED_VALUE
 
         return variables if get_values else set(variables.keys())
 
-    def _resolve_interpolation(self, value: str) -> str:
+    def _resolve_interpolation(self, value: str) -> tuple[str | None, str]:
         """
         Resolves a value that is entirely one '${VAR}'/'${VAR:-default}'
         Compose variable-substitution reference. With a fallback, the
@@ -127,9 +137,18 @@ class DockerComposeParser(BaseParser):
         lives outside this file, so it's reported the same way as any other
         statically-unknowable value (see UNRESOLVED_VALUE) rather than as
         the literal, un-interpolated template text.
+
+        Also returns the referenced host-facing variable name (or None if
+        `value` isn't a whole-value interpolation reference) -- e.g.
+        'AUTHENTIK_POSTGRESQL__PASSWORD: ${PG_PASS}' is a schema-relevant
+        statement about PG_PASS, not about AUTHENTIK_POSTGRESQL__PASSWORD,
+        which is purely a container-internal rename. The caller compares
+        against the schema using this name instead of the container key
+        whenever one is returned.
         """
         match = _INTERPOLATION_RE.match(value.strip())
         if not match:
-            return value
-        _var_name, has_default, default = match.groups()
-        return default if has_default else self.UNRESOLVED_VALUE
+            return None, value
+        var_name, has_default, default = match.groups()
+        resolved = default if has_default else self.UNRESOLVED_VALUE
+        return var_name, resolved

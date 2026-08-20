@@ -749,6 +749,96 @@ def test_check_schema_against_docker_compose_with_explicit_container(mocker, tmp
         assert is_in_sync is True
 
 
+def test_check_schema_against_docker_compose_with_renamed_interpolation(
+    mocker, tmp_path
+):
+    """
+    End-to-end PDF finding 3.6 regression: 'AUTHENTIK_POSTGRESQL__PASSWORD:
+    ${PG_PASS}' used to report PG_PASS as missing (the schema-declared
+    name was never checked) and AUTHENTIK_POSTGRESQL__PASSWORD as a
+    spurious extra variable (the container-internal rename was checked
+    instead). Fixed at the parser level, so this is in sync once PG_PASS
+    is correctly recognized as present-but-unresolved.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        mocker.patch(
+            "envshield.config.manager.load_schema",
+            return_value={
+                "PG_PASS": {"secret": True},
+                "PG_HOST": {"defaultValue": "localhost"},
+            },
+        )
+        with open("docker-compose.yml", "w") as f:
+            f.write(
+                "services:\n"
+                "  server:\n"
+                "    environment:\n"
+                "      AUTHENTIK_POSTGRESQL__PASSWORD: ${PG_PASS}\n"
+                "      AUTHENTIK_POSTGRESQL__HOST: ${PG_HOST:-localhost}\n"
+            )
+
+        is_in_sync = schema_manager.check_schema(
+            "docker-compose.yml", service_name="app"
+        )
+
+        assert is_in_sync is True
+
+
+def test_check_result_against_docker_compose_with_renamed_interpolation(
+    mocker, tmp_path
+):
+    """Same finding-3.6 case as above, through the --json path (check_result)."""
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        mocker.patch(
+            "envshield.config.manager.load_schema",
+            return_value={"PG_PASS": {"secret": True}},
+        )
+        with open("docker-compose.yml", "w") as f:
+            f.write(
+                "services:\n"
+                "  server:\n"
+                "    environment:\n"
+                "      AUTHENTIK_POSTGRESQL__PASSWORD: ${PG_PASS}\n"
+            )
+
+        result = schema_manager.check_result("docker-compose.yml", service_name="app")
+
+        assert result["clean"] is True
+        assert result["missing"] == []
+        assert result["extra"] == []
+        assert result["unresolved"] == []
+
+
+def test_doctor_deployment_manifest_check_handles_renamed_interpolation(
+    tmp_path, monkeypatch
+):
+    """
+    Same finding-3.6 case through doctor's own deployment-manifest check,
+    which shares diff_against_schema with check_schema/check_result but
+    is reached through a separate call path (config_manager.
+    get_deployment_manifests + parser.get_vars), worth its own coverage.
+    """
+    from envshield.core import doctor
+
+    monkeypatch.chdir(tmp_path)
+    config_manager.add_service("app", SCHEMA_FILE_NAME)
+    config_manager.add_manifest("docker-compose.yml", {"server": "app"})
+    with open(SCHEMA_FILE_NAME, "w") as f:
+        f.write('[PG_PASS]\ndescription = "x"\nsecret = true\n')
+    with open("docker-compose.yml", "w") as f:
+        f.write(
+            "services:\n"
+            "  server:\n"
+            "    environment:\n"
+            "      AUTHENTIK_POSTGRESQL__PASSWORD: ${PG_PASS}\n"
+        )
+
+    passed, message = doctor._check_deployment_manifest(service_name="app")
+
+    assert passed is True
+    assert "is in sync" in message
+
+
 def test_check_schema_against_kubernetes_deployment_manifest(mocker, tmp_path):
     with runner.isolated_filesystem(temp_dir=tmp_path):
         mocker.patch(
