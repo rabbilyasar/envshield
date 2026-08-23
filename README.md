@@ -6,7 +6,7 @@ Environment variables, as a version-controlled configuration contract.
 
 Free, open source (MIT), and fully local. EnvShield never sends your configuration or secrets anywhere.
 
-[Documentation](https://docs.envshield.dev) · [GitHub](https://github.com/rabbilyasar/envshield) · [PyPI](https://pypi.org/project/envshield/)
+[Website](https://www.envshield.dev) · [Documentation](https://docs.envshield.dev) · [GitHub](https://github.com/rabbilyasar/envshield) · [PyPI](https://pypi.org/project/envshield/)
 
 ---
 
@@ -320,7 +320,7 @@ EnvShield is built around the patterns real projects actually use. A few narrowe
 - **Source discovery:** Python is AST-based; JavaScript/TypeScript is pattern-based. No other language is discovered yet.
 - **.env:** multiline quoted values aren't supported.
 
-These are bounded, tracked engineering work — see [ROADMAP.md](https://github.com/rabbilyasar/envshield/blob/main/ROADMAP.md).
+These are bounded, tracked engineering work — see the [roadmap](ROADMAP.md) for what's next and what EnvShield deliberately isn't building.
 
 ---
 
