@@ -1,4 +1,4 @@
-# **Contributing to EnvShield 🛡️**
+# **Contributing to EnvShield**
 
 First off, thank you for considering contributing to EnvShield. It's people like you that make open-source such an amazing community. We welcome any and all contributions, from bug reports to feature requests and pull requests.
 
