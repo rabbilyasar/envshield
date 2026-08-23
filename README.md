@@ -103,7 +103,7 @@ What each field actually means:
 | `type` | `string` (default), `int`, `float`, `bool`, `port` (1–65535), `url`, `email`. Enforced by `check`/`doctor`/`setup`. |
 | `enum` | Value must be one of this list. Implies an enum type regardless of `type`. |
 | `pattern` | A regex the value must also match, e.g. `pattern = "^v\\d+\\.\\d+\\.\\d+$"`. |
-| `secret` | Marks the variable sensitive — masked input in `setup`, never inferred by `import`, masked in generated code. |
+| `secret` | Marks the variable sensitive — masked input in `setup`, masked in generated code. `import` auto-suggests it from the variable's name/value; it never overwrites a `secret` value you've already committed. |
 | `defaultValue` | What `setup` writes automatically. A variable still has to be explicitly present in your local file even with a default — `check`/`doctor` name the default inline so a missing one is obvious. |
 | `description` | Shown in `setup`, copied into generated code. |
 
@@ -149,7 +149,7 @@ Four stages, in order: define the contract, validate against it, discover what c
 
 ### Validate
 
-**`envshield check`** — validate local configuration and supported deployment manifests such as Docker Compose and Kubernetes against the same schema.
+**`envshield check`** — validate local configuration, and commonly-used Docker Compose and Kubernetes deployment-manifest patterns, against the same schema (see [Known limitations](#known-limitations)).
 
 ```bash
 $ envshield check
@@ -308,6 +308,19 @@ A supporting check alongside the contract, not the product itself. `secret = tru
 
 - **`envshield scan`** looks for hardcoded secrets by pattern (Stripe, AWS, GitHub tokens, and more), and for env-var reads the schema doesn't declare, in one pass. Values are always redacted in output — a Stripe *publishable* key (`pk_...`) is never flagged, since detection matches the secret-key pattern (`sk_...`) by shape, not the variable's name.
 - **`envshield hook install`** wires `scan --staged` into a pre-commit hook, so a real secret is caught before it's committed, not after.
+
+---
+
+## Known limitations
+
+EnvShield is built around the patterns real projects actually use. A few narrower cases aren't handled yet — none of them let a secret leak or let a genuinely missing required variable pass as clean:
+
+- **Docker Compose:** `${VAR}` and `${VAR:-default}` are supported. The no-colon `${VAR-default}` form, the `${VAR:?}`/`${VAR:+}` forms, and embedded/multiple interpolation references in one value aren't evaluated yet.
+- **Kubernetes:** `secretKeyRef`/`configMapKeyRef` are matched by the container's environment-variable name (`env[].name`), not the referenced Secret/ConfigMap's internal key — name your schema variable after the env var, not the key. `envFrom.prefix` isn't applied yet.
+- **Source discovery:** Python is AST-based; JavaScript/TypeScript is pattern-based. No other language is discovered yet.
+- **.env:** multiline quoted values aren't supported.
+
+These are bounded, tracked engineering work — see [ROADMAP.md](https://github.com/rabbilyasar/envshield/blob/main/ROADMAP.md).
 
 ---
 

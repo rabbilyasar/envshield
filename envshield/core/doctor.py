@@ -466,7 +466,7 @@ def _build_checks(service_name: str) -> List[HealthCheck]:
 
 def run_health_check(fix: bool, service_name: str):
     """Runs a suite of health checks on one service's EnvShield setup."""
-    console.print("\n[bold cyan]🛡️  Running EnvShield Health Check...[/bold cyan]")
+    console.print("\n[bold cyan]Running EnvShield Health Check...[/bold cyan]")
 
     checks = _build_checks(service_name)
 

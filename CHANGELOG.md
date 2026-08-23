@@ -23,8 +23,9 @@ release-readiness fixes found during end-to-end validation.
   currently-undeclared read across the whole codebase regardless of when it was
   introduced.
 - **Source-code configuration discovery for Python and JavaScript/TypeScript** —
-  AST-based analysis of where a variable is actually read in source (`os.environ`,
-  `os.getenv`, `process.env`), independent of the CLI, powering `undeclared` and
+  AST-based analysis for Python and pattern-based analysis for JavaScript/TypeScript,
+  of where a variable is actually read in source (`os.environ`, `os.getenv`,
+  `process.env`), independent of the CLI, powering `undeclared` and
   `explain`. Correctly scopes to a service's own directory in a multi-service
   project, with no cross-service attribution.
 - **`envshield explain VARIABLE [--service]`** — reports everything EnvShield

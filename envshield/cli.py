@@ -45,7 +45,7 @@ def _version_callback(version: bool) -> None:
 
 app = typer.Typer(
     name="envshield",
-    help="🛡️ EnvShield: Your Environment's First Line of Defense.",
+    help="EnvShield: environment variables as a version-controlled configuration contract.",
     rich_markup_mode="markdown",
     add_completion=False,
 )
@@ -71,7 +71,7 @@ def main(
         is_eager=True,
     ),
 ) -> None:
-    """EnvShield: Your Environment's First Line of Defense."""
+    """EnvShield: environment variables as a version-controlled configuration contract."""
     global INVOCATION_DIR
     INVOCATION_DIR = os.getcwd()
 
@@ -140,8 +140,8 @@ def init(
     """
     console.print(
         Panel(
-            "[bold cyan]Welcome to EnvShield! Setting up your secure foundation...[/bold cyan]",
-            title="🛡️ EnvShield",
+            "[bold cyan]Welcome to EnvShield! Setting up your configuration contract...[/bold cyan]",
+            title="EnvShield",
             border_style="green",
         )
     )

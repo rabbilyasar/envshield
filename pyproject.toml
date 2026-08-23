@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "envshield"
 version = "4.6.0"  # must be a string for PEP 621 compliance
-description = "EnvShield: Schema-first environment configuration governance CLI."
+description = "EnvShield: environment variables as a version-controlled configuration contract."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE.md" }
@@ -24,7 +24,6 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
-    "Topic :: Security",
     "Topic :: Software Development :: Build Tools",
     "Topic :: Utilities"
 ]
