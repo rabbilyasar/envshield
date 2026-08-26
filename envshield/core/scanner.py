@@ -666,29 +666,42 @@ def _scan_files(
                 content = git_utils.get_staged_file_content(file_path)
                 if content is None:
                     continue
-                if len(content) > MAX_SCANNABLE_SIZE_BYTES:
+
+                # Diff-aware scanning for excluded files -- resolved BEFORE
+                # the size check (see BL-004): an excluded file's total
+                # size must never matter unless the whole file is actually
+                # about to be read. A bounded diff-only scan of an excluded
+                # file is never "incomplete" just because the file itself
+                # happens to be large (e.g. a vendored lockfile).
+                new_lines_only = None
+                is_excluded = file_path in excluded_files
+                if is_excluded:
+                    new_lines = _get_diff_lines(file_path)
+                    if new_lines is not None:
+                        if len(new_lines) == 0:
+                            # File is excluded and has no new lines - skip it
+                            continue
+                        new_lines_only = new_lines
+
+                # The size check applies only when the whole file's content
+                # is about to be read: a non-excluded file, or an
+                # excluded-but-brand-new one (new_lines_only still None --
+                # scanned in full despite the exclusion, below).
+                if new_lines_only is None and len(content) > MAX_SCANNABLE_SIZE_BYTES:
                     skipped_large_files.append(file_path)
                     continue
 
-                # Diff-aware scanning for excluded files
-                new_lines_only = None
-                if file_path in excluded_files:
-                    new_lines = _get_diff_lines(file_path)
-                    if new_lines is None:
+                if is_excluded:
+                    if new_lines_only is not None:
+                        # File is excluded, but scan only newly-added lines
+                        console.print(
+                            f"[dim]ℹ️  {os.path.basename(file_path)} (excluded; diffs only: {len(new_lines_only)} new line(s))[/dim]"
+                        )
+                    else:
                         # Brand new file - scan all lines despite exclusion
                         console.print(
                             f"[yellow]ℹ️  Scanning new file {os.path.basename(file_path)} (despite exclusion)[/yellow]"
                         )
-                        new_lines_only = None
-                    elif len(new_lines) == 0:
-                        # File is excluded and has no new lines - skip it
-                        continue
-                    else:
-                        # File is excluded, but scan only newly-added lines
-                        console.print(
-                            f"[dim]ℹ️  {os.path.basename(file_path)} (excluded; diffs only: {len(new_lines)} new line(s))[/dim]"
-                        )
-                        new_lines_only = new_lines
 
                 secrets, undeclared = _scan_single_file(
                     file_path,
@@ -783,10 +796,25 @@ def run_scan(
             "\n[bold]Suggestion:[/bold] Please add these variables to your 'env.schema.toml' to maintain your configuration contract."
         )
 
-    if not found_issues:
-        console.print(
-            "\n[bold green]✓ No issues found. Your configuration is secure and compliant![/bold green]"
-        )
+    # A skip means eligible content was never actually inspected -- this
+    # scan cannot honestly be called "clean" outright, even when nothing
+    # was found in what *was* scanned (see BL-004). Staged mode is exactly
+    # what the installed pre-commit hook and CI gates invoke, so
+    # incompleteness must be fatal there even with zero findings; a bare
+    # interactive scan keeps its existing exit-0 UX, but never claims full
+    # coverage in its printed message either.
+    incomplete = bool(skipped_large_files)
+    fatal_incomplete = incomplete and staged_only
+
+    if not found_issues and not fatal_incomplete:
+        if incomplete:
+            console.print(
+                "\n[bold yellow]⚠ Scan finished, but coverage was incomplete -- see the skipped file(s) above.[/bold yellow]"
+            )
+        else:
+            console.print(
+                "\n[bold green]✓ No issues found. Your configuration is secure and compliant![/bold green]"
+            )
         return
 
     if staged_only:
@@ -823,6 +851,16 @@ def scan_result(
         "secrets": secrets,
         "undeclared_variables": undeclared,
         "skipped_files": skipped,
+        # True iff every eligible file was actually inspected -- False
+        # when eligible content was skipped for a reason `scan` couldn't
+        # verify around (today, only the >1MB case; see BL-004/BL-095).
+        # Deliberately independent of `clean`: `clean` states whether
+        # anything was *found* in what was scanned, `complete` states
+        # whether the scan actually covered everything eligible -- a
+        # caller that wants "should I trust this as fully clean" needs
+        # both, since `clean=True` alone was exactly BL-004's false-clean
+        # bug (skipped content never affected `clean`).
+        "complete": not skipped,
     }
 
 

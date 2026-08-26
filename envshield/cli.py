@@ -1565,7 +1565,12 @@ def scan(
                 service_name=service,
             )
             print(json.dumps(result, indent=2))
-            if not result["clean"]:
+            # Incomplete coverage is fatal here unconditionally -- '--json'
+            # output is inherently a machine/automation signal, and a
+            # consumer that only checks the exit code (the standard
+            # integration pattern -- see BL-004) must never be told this
+            # scan succeeded when eligible content was actually skipped.
+            if not result["clean"] or not result["complete"]:
                 raise typer.Exit(code=1)
         else:
             scanner.run_scan(

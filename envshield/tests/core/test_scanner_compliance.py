@@ -491,6 +491,13 @@ def test_scan_reports_skipped_large_files(tmp_path):
     Regression: files over 1MB were silently skipped with zero warning --
     coverage was incomplete and nobody was told, so a real secret padded
     past the size threshold would sail through unnoticed.
+
+    A bare, non-staged interactive `scan` deliberately keeps exit 0 here
+    (see BL-004's design: incompleteness is informational, not fatal,
+    outside staged/CI-facing modes) -- but it must never claim the scan
+    was fully clean when it wasn't, so the old "secure and compliant"
+    message must be gone in favor of an honest "coverage was incomplete"
+    one.
     """
     with runner.isolated_filesystem(temp_dir=tmp_path):
         with open("big.env", "w") as f:
@@ -501,6 +508,232 @@ def test_scan_reports_skipped_large_files(tmp_path):
         assert result.exit_code == 0
         assert "Skipped 1 file(s) over 1MB" in result.stdout
         assert "big.env" in result.stdout
+        assert "coverage was incomplete" in result.stdout
+        assert "secure and compliant" not in result.stdout
+
+
+class TestScanCompletenessContract:
+    """
+    Regression coverage for BL-004: a skipped file (over MAX_SCANNABLE_SIZE_BYTES)
+    used to have zero effect on `clean`/exit code in any mode, including
+    `--staged` -- the exact mode EnvShield's own generated pre-commit hook
+    invokes -- so padding a secret-bearing file past 1MB fully bypassed the
+    scanner. The fix adds a `complete` field (True iff nothing was skipped)
+    alongside the unchanged `clean` field, and makes incompleteness fatal
+    for `--staged` and/or `--json` (machine/automation-facing modes) while
+    a bare interactive `scan` keeps its existing exit-0 UX.
+    """
+
+    SECRET_LINE = "AWS_SECRET_ACCESS_KEY=SYNTHETIC0000FAKEKEYNOTAREALSECRET1234\n"
+
+    def _git_init(self):
+        os.system("git init -q")
+        os.system('git config user.email "test@example.com"')
+        os.system('git config user.name "Test"')
+
+    def _write_oversized_secret_file(self, name="big.env"):
+        with open(name, "w") as f:
+            f.write(self.SECRET_LINE)
+            f.write("PADDING=" + ("a" * (1_000_010 - len(self.SECRET_LINE))) + "\n")
+
+    def test_complete_is_true_for_a_fully_scanned_result(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            with open("app.env", "w") as f:
+                f.write("SOME_VALUE=fine\n")
+
+            result = runner.invoke(app, ["scan", "--json"])
+
+            assert result.exit_code == 0
+            payload = json.loads(result.stdout)
+            assert payload["clean"] is True
+            assert payload["complete"] is True
+            assert payload["skipped_files"] == []
+
+    def test_complete_is_false_for_an_eligible_oversized_file(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._write_oversized_secret_file()
+
+            result = runner.invoke(app, ["scan", "--json"])
+
+            payload = json.loads(result.stdout)
+            assert payload["complete"] is False
+            assert payload["skipped_files"] == ["./big.env"]
+
+    def test_bare_staged_scan_exits_nonzero_when_an_eligible_file_is_skipped(
+        self, tmp_path
+    ):
+        """The exact shape the installed pre-commit hook invokes
+        (`envshield scan --staged`, no `--json`) -- this is BL-004's own
+        primary evidenced bypass, and must be fixed without any change to
+        the hook script itself."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._git_init()
+            self._write_oversized_secret_file()
+            os.system("git add big.env")
+
+            result = runner.invoke(app, ["scan", "--staged"])
+
+            assert result.exit_code == 1
+            assert "Commit aborted" in result.stdout
+            assert "coverage is incomplete" in result.stdout
+
+    def test_staged_json_scan_exits_nonzero_and_reports_complete_false(
+        self, tmp_path
+    ):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._git_init()
+            self._write_oversized_secret_file()
+            os.system("git add big.env")
+
+            result = runner.invoke(app, ["scan", "--staged", "--json"])
+
+            assert result.exit_code == 1
+            payload = json.loads(result.stdout)
+            assert payload["complete"] is False
+            assert payload["clean"] is True  # nothing found in what *was* scanned
+
+    def test_nonstaged_json_scan_exits_nonzero_on_incompleteness(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._write_oversized_secret_file()
+
+            result = runner.invoke(app, ["scan", "--json"])
+
+            assert result.exit_code == 1
+            payload = json.loads(result.stdout)
+            assert payload["complete"] is False
+
+    def test_ordinary_nonstaged_interactive_scan_retains_exit_zero(self, tmp_path):
+        """The one mode BL-004's design deliberately leaves unaffected --
+        see `test_scan_reports_skipped_large_files` for the full case."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._write_oversized_secret_file()
+
+            result = runner.invoke(app, ["scan"])
+
+            assert result.exit_code == 0
+
+    def test_excluded_oversized_file_with_a_small_diff_is_not_flagged_incomplete(
+        self, tmp_path
+    ):
+        """The corrected exclusion ordering: an excluded file's *total*
+        size must not matter when only a small, already-bounded diff is
+        actually being scanned."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._git_init()
+            with open("envshield.yml", "w") as f:
+                f.write("secret_scanning:\n  exclude_files:\n    - vendor.bin\n")
+            with open("vendor.bin", "w") as f:
+                f.write("A" * 1_000_010)
+            os.system("git add -A")
+            os.system('git commit -q -m "baseline"')
+
+            # A small, genuinely new line appended to the already-committed,
+            # oversized, excluded file.
+            with open("vendor.bin", "a") as f:
+                f.write("NEW_LINE\n")
+            os.system("git add vendor.bin")
+
+            result = runner.invoke(app, ["scan", "--staged", "--json"])
+
+            payload = json.loads(result.stdout)
+            assert payload["complete"] is True
+            assert payload["skipped_files"] == []
+
+    def test_excluded_but_brand_new_oversized_file_is_marked_incomplete(
+        self, tmp_path
+    ):
+        """The other half of the corrected ordering: an excluded file that's
+        brand new (not in HEAD) is scanned in full *despite* the exclusion
+        -- so its size still legitimately matters."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._git_init()
+            with open("envshield.yml", "w") as f:
+                f.write("secret_scanning:\n  exclude_files:\n    - vendor.bin\n")
+            os.system("git add envshield.yml")
+            os.system('git commit -q -m "baseline"')
+
+            with open("vendor.bin", "w") as f:
+                f.write("A" * 1_000_010)
+            os.system("git add vendor.bin")
+
+            result = runner.invoke(app, ["scan", "--staged", "--json"])
+
+            payload = json.loads(result.stdout)
+            assert payload["complete"] is False
+            # --staged reports the absolute path (see get_staged_file_content);
+            # only its basename is asserted, matching that existing convention.
+            assert len(payload["skipped_files"]) == 1
+            assert payload["skipped_files"][0].endswith("vendor.bin")
+
+    def test_excluded_oversized_file_no_longer_incorrectly_marked_skipped_when_staged(
+        self, tmp_path
+    ):
+        """Parity with non-staged mode: an excluded oversized file with a
+        staged change that adds no *new* lines (a pure deletion) must not
+        appear in `skipped_files` under `--staged` either -- only a
+        bounded, already-small diff is actually being scanned."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._git_init()
+            with open("envshield.yml", "w") as f:
+                f.write("secret_scanning:\n  exclude_files:\n    - vendor.bin\n")
+            with open("vendor.bin", "w") as f:
+                f.write("A" * 1_000_010)
+            os.system("git add -A")
+            os.system('git commit -q -m "baseline"')
+
+            # A pure deletion (no line inserted/replaced) -- _get_diff_lines
+            # returns an empty set for this, distinct from "identical
+            # content re-added", which git wouldn't even list as staged.
+            with open("vendor.bin") as f:
+                content = f.read()
+            with open("vendor.bin", "w") as f:
+                f.write(content[:-100])
+            os.system("git add vendor.bin")
+
+            result = runner.invoke(app, ["scan", "--staged", "--json"])
+
+            payload = json.loads(result.stdout)
+            assert payload["complete"] is True
+            assert payload["skipped_files"] == []
+
+    def test_multiple_skipped_files_are_all_reported(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._write_oversized_secret_file("big1.env")
+            self._write_oversized_secret_file("big2.env")
+
+            result = runner.invoke(app, ["scan", "--json"])
+
+            payload = json.loads(result.stdout)
+            assert payload["complete"] is False
+            assert sorted(payload["skipped_files"]) == ["./big1.env", "./big2.env"]
+
+    def test_json_output_is_a_single_valid_document_when_incomplete(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._write_oversized_secret_file()
+
+            result = runner.invoke(app, ["scan", "--json"])
+
+            # json.loads succeeding on the whole of stdout is itself the
+            # proof there's exactly one well-formed document -- any stray
+            # print mixed in (e.g. a leaked Rich progress bar) would break
+            # this the same way it would for a real machine consumer.
+            payload = json.loads(result.stdout)
+            assert payload["complete"] is False
+
+    def test_skipped_file_reporting_contains_no_secret_or_file_content(self, tmp_path):
+        """Security requirement: skipped-file entries are a bare path
+        string -- the secret-shaped content that made this file worth
+        scanning in the first place must never appear anywhere in output
+        just because the file itself couldn't be inspected."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._write_oversized_secret_file()
+
+            result = runner.invoke(app, ["scan", "--json"])
+
+            assert "SYNTHETIC0000FAKEKEYNOTAREALSECRET1234" not in result.stdout
+            payload = json.loads(result.stdout)
+            assert payload["skipped_files"] == ["./big.env"]
+            assert isinstance(payload["skipped_files"][0], str)
 
 
 def test_scan_gracefully_handles_missing_schema_file(tmp_path):
