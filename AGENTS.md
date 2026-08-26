@@ -5,14 +5,29 @@ engineering/security principles, and target architecture. It changes rarely,
 and only when reality (a shipped capability, a market shift, an audit)
 requires it to.
 
-For the current phase, open work, and the audit-derived backlog, see
-[ROADMAP.md](ROADMAP.md). This charter says what EnvShield *is* and *is not*;
-ROADMAP.md says what's *done*, *in progress*, and *next*.
+For the current strategic direction, see [ROADMAP.md](ROADMAP.md). For the
+itemized, evidence-tagged engineering backlog — confirmed bugs, security
+findings, limitations, and their reproduction evidence — see
+[BACKLOG.md](BACKLOG.md). This charter says what EnvShield *is* and *is
+not*; ROADMAP.md says what's *done*, *in progress*, and *next*; BACKLOG.md
+is the operational record behind both.
 
-Last revised: 2026-08-10, following a full-repository audit (see
-[ROADMAP.md](ROADMAP.md) for the findings that drove this revision). Anyone
-reading this charter should assume ROADMAP.md's phase-status table is the
-source of truth for "does X actually exist," not this document's prose.
+Last revised: 2026-08-26, adding an explicit "Engineering Task Workflow"
+index (read → understand → implement → test → self-review → finding
+reconciliation → documentation consistency → final report → commit
+boundary) ahead of the pre-existing "Finding and Evidence Management"
+section, and correcting §22's commit-boundary diagram to include the
+finding-reconciliation and documentation-consistency steps it previously
+omitted. Prior same-day revision: reconciling this file against
+[CLAUDE.md](CLAUDE.md) (its Claude-specific counterpart, which had received
+several updates this one hadn't): a corrected §19 release-readiness claim
+against live-verified findings (see BACKLOG.md's BL-001–BL-004), the §2
+external secret-provider references direction, and this pointer to
+BACKLOG.md itself. Prior revision: 2026-08-10, following a full-repository
+audit. Anyone reading this charter should assume BACKLOG.md is the source
+of truth for "is this bug still open," and ROADMAP.md's phase-status
+framing is the source of truth for "does X actually exist," not this
+document's prose.
 
 ---
 
@@ -89,6 +104,30 @@ occupy the same ground. Close the gap there before investing anywhere else.
   correct; more languages/frameworks isn't where the leverage is.
 - Any feature justified only by "a competitor has it." See §12.
 
+### Future direction: external secret-provider references (exploratory, demand-gated)
+
+EnvShield may eventually let a schema field describe *where* a secret is
+expected to come from — a provider reference (1Password, HashiCorp Vault,
+AWS Secrets Manager, a platform-native Kubernetes Secret, etc.) — without
+EnvShield ever storing, retrieving, or transmitting the actual value. The
+boundary is exact and permanent: **EnvShield owns the contract describing
+the secret; an external system owns the secret value.** This is a natural
+extension of this section's existing stance toward Infisical/Doppler/Vault
+above — a provider reference is configuration-contract metadata, not a
+secret value, and validating that a deployment manifest points at the
+expected provider is the same category of work as validating any other
+deployment reference (§7).
+
+This is exploratory and demand-gated, not a committed feature: no schema
+field, provider abstraction, or integration exists today, and none should
+be added to production code merely because the concept has been discussed
+— design the exact schema representation only after real use cases
+validate the shape. See ROADMAP.md's "Post-v1 direction" for tracking.
+Building this must never turn into building a secret vault, secret
+storage, secret rotation, or credentials-management platform — that
+boundary above is permanent, not something this direction is allowed to
+erode.
+
 ---
 
 ## 3. Engineering principles
@@ -108,6 +147,128 @@ occupy the same ground. Close the gap there before investing anywhere else.
    `doctor`, and `setup` with no drift) and it is why the one place it broke
    down (a masking gap shared by all three callers) was a single-point fix.
    Keep it that way as new engines (discovery, deployment, graph) are added.
+
+## Engineering Task Workflow
+
+Every engineering task — bug fix, feature, refactor, or architectural
+change — follows this loop. Most steps are already governed in full by the
+section named; this is the index that makes the sequence itself mandatory,
+not a restatement of rules that live elsewhere.
+
+1. **Read.** Before changing anything: read the relevant BACKLOG.md
+   item(s), the relevant ROADMAP.md phase/direction, the applicable rules
+   in this document, and the existing implementation, adjacent code, and
+   tests for the area being touched.
+2. **Understand.** Identify the actual root cause, not the symptom named by
+   the bug report — a fix that patches only the reported call site while
+   leaving the same defect reachable through a sibling caller is not done
+   (this is exactly why §4's security invariants require testing the
+   *class* of failure, not the reported instance). Identify which product
+   requirement, engineering principle (§3), and security invariant (§4) the
+   work touches. Check whether it overlaps an existing BACKLOG.md item or
+   ROADMAP.md phase. Per §3's "reuse existing architecture" principle,
+   confirm the existing implementation can't be safely extended before
+   introducing anything new.
+3. **Implement.** Smallest coherent change (§3). Do not silently expand
+   scope, and do not implement unrelated backlog findings encountered along
+   the way — record them instead (§13), unless a fix is directly required
+   for the correctness/security of the current change, the relationship is
+   clear, and the change is small and safe.
+4. **Test.** Per §15.
+5. **Self-review.** Per §20's Pass 1 (Engineering Review).
+6. **Finding reconciliation.** Per "Finding and Evidence Management" below,
+   including its Required review closeout.
+7. **Documentation consistency.** Per "Finding and Evidence Management"'s
+   Synchronization rules — update ROADMAP.md/CLAUDE.md/AGENTS.md only for
+   what they respectively own; never move an individual finding into
+   ROADMAP.md merely because it surfaced during implementation.
+8. **Final report.** State what changed, why, the tests actually run and
+   their results, security and architectural implications, documentation
+   changed, BACKLOG.md items created or updated, new findings discovered,
+   and anything intentionally deferred. Per §18: never claim a test passed
+   unless it was run, never claim a bug is fixed without regression
+   coverage where practical, never claim the working tree is clean without
+   checking it.
+9. **Commit boundary.** Per §22 — do not commit automatically; wait for
+   explicit instruction.
+
+For feature work, also run §20's Pass 2 (Product Review) — user value,
+competitive overlap, differentiation, adoption friction — and apply §14's
+rule against building a feature merely because a competitor has it.
+
+**Scope discipline.** This loop does not mean "fix every problem
+discovered." It means: discover → classify → record → decide separately. A
+newly discovered issue normally becomes a BACKLOG.md item, not a silent
+expansion of the current change.
+
+---
+
+## Finding and Evidence Management
+
+BACKLOG.md is the single source of truth for engineering findings.
+
+Whenever Claude/Codex discovers a bug, security issue, reliability problem,
+incorrect documentation claim, compatibility issue, architectural limitation,
+performance concern, user-feedback item, or other material finding:
+
+1. Check BACKLOG.md for an existing finding before creating a new one.
+2. If the finding already exists, update that item's evidence/status rather
+   than creating a duplicate.
+3. If it is new, create a stable BL-NNN entry with:
+   - source/provenance
+   - evidence status
+   - priority
+   - affected component
+   - problem
+   - current behavior
+   - expected behavior
+   - reproduction/evidence
+   - impact
+   - dependencies/relationships
+   - decision/status
+4. Preserve the original audit/report identifier as an alias where one exists.
+5. Never silently discard a finding because it is inconvenient, low priority,
+   already known, or outside the current implementation task.
+6. Never promote NEEDS_EVIDENCE to CONFIRMED without recording the evidence
+   that established it.
+7. Never delete a historical finding. Mark it Fixed, Stale, Refuted, or
+   otherwise appropriately resolved.
+8. If a source report is unavailable, record the missing source explicitly
+   rather than reconstructing or guessing its contents.
+9. If a finding cannot be mapped confidently to its original source, preserve
+   the ambiguity and record it as unresolved rather than inventing a mapping.
+
+### Synchronization rules
+
+- BACKLOG.md owns individual findings and their evidence/status.
+- ROADMAP.md owns phase status, strategic prioritization, and release direction.
+- CLAUDE.md and AGENTS.md own engineering principles and agent workflow.
+- Do not duplicate detailed finding lists across these files.
+- When a finding materially changes release status or current phase, update the
+  relevant summary in ROADMAP.md and/or the current-phase section of the
+  applicable agent charter, while keeping BACKLOG.md as the authoritative
+  record.
+- When fixing a finding, update BACKLOG.md as part of the same task. The
+  finding must remain in the backlog with its resolution and evidence.
+- Before declaring a task complete, reconcile any findings discovered during
+  the task against BACKLOG.md.
+
+
+### Required review closeout
+
+At the end of every engineering investigation or implementation task, before
+reporting completion:
+
+1. Review all findings discovered during the task.
+2. Search BACKLOG.md for each finding.
+3. Add missing findings or update existing entries.
+4. Update evidence/status for anything that was verified, refuted, or fixed.
+5. Check whether ROADMAP.md or the current-phase section of CLAUDE.md/AGENTS.md
+   is now materially stale because of the work.
+6. Report the documentation reconciliation explicitly in the final response.
+
+A task is not considered complete if a newly discovered material finding has
+not been recorded or explicitly justified as already represented.
 
 ### Target architecture
 
@@ -406,8 +567,9 @@ Whenever you touch an area of the codebase: inspect adjacent code, existing
 tests, and look for related bugs, security issues, edge cases, backwards
 compatibility problems, inconsistent behavior, and documentation that no
 longer matches reality. Classify anything found (P0–P3). Do not silently fix
-unrelated issues — report them into ROADMAP.md's backlog unless fixing them
-is directly related to the current change and clearly safe.
+unrelated issues — record them in [BACKLOG.md](BACKLOG.md) (see "Finding
+and Evidence Management" above) unless fixing them is directly related to
+the current change and clearly safe.
 
 ---
 
@@ -456,7 +618,10 @@ Not done on the happy path alone. Done when: implementation complete, tests
 exist, edge cases addressed, security implications reviewed, backwards
 compatibility considered, documentation updated, CLI behavior coherent,
 errors useful, machine-readable output correct, architecture clean, no
-obvious related bug remains, product value is clear.
+obvious related bug remains, product value is clear, and finding
+reconciliation is complete (see "Finding and Evidence Management" above —
+every material finding discovered during the task is in BACKLOG.md, updated,
+or explicitly justified as already represented).
 
 ---
 
@@ -498,12 +663,100 @@ backlog (revision-aware service-directory resolution for the explicit
 two-revision form, discovered-file size cap, `DEFAULT_EXCLUDED_DIRS`-style
 pruning) — none are blockers, and none require another Phase 2C milestone.
 
-**Current task:** none assigned yet. Phase 2C being complete does not by
-itself select the next phase — Phase 0C (DI-1/DI-2, hook-scoping, CI lint
-restoration, coverage tooling) remains open and non-blocking per
-ROADMAP.md's own gating rules, but this section does not declare it, or any
-other phase, the current implementation task. The next implementation
-direction is an open decision.
+**Current phase: v1 release preparation — blocked on confirmed findings.**
+A 2026-08-21 release-readiness and marketing-claim audit reviewed the full
+shipped surface (Phases 0-2C) end-to-end against live CLI reproductions.
+This section previously summarized that audit as having returned "GO WITH
+QUALIFICATIONS: no P0/P1 findings (no secret leakage, no false-clean on a
+genuinely missing required variable)." **That summary was inaccurate and
+was corrected on 2026-08-26** after a live-verification pass reproduced,
+against current code, exactly the class of issue it claimed didn't exist:
+
+- A P0 — a schema field with `secret = true` plus a real `defaultValue` is
+  accepted and propagates into `.env.example`, generated Python, and
+  generated TypeScript (`BACKLOG.md`'s `BL-001`). This is secret leakage.
+- Three P1s — malformed Python config breaks the `check --json`/
+  `doctor --json` machine-readable contract and can produce
+  `"success": true` (`BL-002`, a false-clean); generated TypeScript's
+  `z.coerce.boolean()` turns the string `"false"` into `true` at runtime
+  (`BL-003`); `scan`/`scan --staged` fail open on files over 1MB, reporting
+  `clean: true` while silently skipping the one file that mattered
+  (`BL-004`).
+
+All four are open as of this revision. Per this section's own release
+philosophy below, each independently answers "yes" to "can this produce
+secret leakage" or "can this produce a silent false-clean" — **v4.6.0 must
+not be treated as release-ready, and no new release should be prepared,
+until `BL-001` through `BL-004` are resolved.** The documentation/
+positioning pass this section previously described as having "closed out"
+the audit — README's `secret`-field wording and new Known Limitations
+section, the CLI tagline, CHANGELOG's Python-vs-JS/TS discovery wording,
+ROADMAP.md's reconciliation against shipped code — did happen and remains
+accurate; it addressed the audit's documentation/marketing-claim findings
+only. The error being corrected here is that this section then described
+the *entire* audit as closed out, when its P0/P1 code-correctness findings
+were not addressed and, per direct re-verification, still aren't. Phase
+0C's DI-1, DI-2, hook-scoping, and CI-lint items remain shipped; only
+`pytest-cov`/coverage tooling remains open there (P3, non-blocking,
+tracked as `BL-015`). The same audit's three P2 deployment-parser gaps
+(Kubernetes `secretKeyRef`/`configMapKeyRef` key-vs-name matching,
+Kubernetes `envFrom.prefix`, Docker Compose `${VAR-default}`) are tracked
+in **[BACKLOG.md](BACKLOG.md)** as `BL-011` — not "filed in ROADMAP.md's
+backlog" as previously stated; ROADMAP.md does not itemize individual
+findings and never did. 3.8 (secret-keyword semantic classification) and
+3.10 (batch/all-container check) remain explicitly deferred; their exact
+original content could not be located during the 2026-08-26 reconciliation
+pass and is not represented in BACKLOG.md — this numbering is a loose end,
+not a resolved cross-reference, until someone locates what it originally
+referred to. The next implementation direction past resolving `BL-001`
+through `BL-004` is still an open decision.
+
+**Release philosophy — optimize for a trustworthy v1, not zero known
+bugs.** A known, bounded, honestly-documented P2/P3 limitation is
+acceptable to ship with. A P0/P1 secret-safety or correctness issue is not
+— see ROADMAP.md's severity scheme. Before proposing a new pre-release
+engineering task, ask:
+
+1. Does this break a core v1 promise?
+2. Can it produce secret leakage?
+3. Can it produce a silent false-clean on genuinely missing/invalid
+   required configuration?
+4. Can it corrupt generated schemas or cause destructive behavior?
+5. Does it affect a common workflow EnvShield explicitly claims to
+   support?
+
+If every answer is no and the behavior can be honestly documented, it
+belongs in [BACKLOG.md](BACKLOG.md) as post-v1 work, not immediate
+implementation — do not fix a P2/P3 finding just because it was found (see
+BACKLOG.md's Part 2/3 for current examples of exactly this).
+
+**Release status (2026-08-19; do not disturb without explicit
+instruction).** `v4.6.0` was tagged and pushed to GitHub; the test job
+passed, but the publish job failed at the Sigstore attestation step
+(`RekorClientError: Rekor returned an unknown error with HTTP 502` —
+confirmed directly from the workflow log; external Sigstore infrastructure,
+not a package or test failure). PyPI's currently published version is
+therefore still `4.5.1` — `v4.6.0` exists as a pushed tag/GitHub state but
+is not yet live on PyPI. Do not recreate or modify the `v4.6.0` tag, bump
+the version, or rerun the publish workflow without explicit instruction —
+resolving that failed publish is a separate release operation from any
+documentation or roadmap work. Five further engineering fixes (3.2/3.3/3.5,
+3.4, 3.6, 3.7, 3.9) are committed locally on top of `v4.6.0` and are not
+yet part of any released version.
+
+**Post-v1 direction (2026-08-23 pass).** ROADMAP.md's post-release backlog
+was reconciled against the actual shipped code and reorganized into
+committed/exploratory/demand-gated tiers (see ROADMAP.md's "Post-v1
+direction" section). One new durable architectural boundary came out of
+this pass and is captured in §2 above: external secret-provider
+references. Everything else discussed in that pass — broader
+source-language discovery beyond Python/JS-TS, a runtime leak-defense
+wrapper, and deployment targets beyond Compose/Kubernetes — stays
+exploratory/demand-gated backlog in ROADMAP.md, not a charter-level
+commitment; do not treat any of it as already decided or scoped. A
+separate marketing/SEO strategy was also developed in that pass; it is
+deliberately not reflected here or in ROADMAP.md — this charter and
+ROADMAP.md describe product/engineering direction only.
 
 **Relevant existing modules:** `envshield/core/scanner.py`,
 `envshield/core/schema_types.py`, `envshield/core/schema_manager.py`,
@@ -571,7 +824,8 @@ Codex may create commits when explicitly instructed to do so. Codex must
 NOT automatically commit every change. The normal workflow is:
 
 ```
-implementation → tests → self-review → user review
+implementation → tests → self-review → finding reconciliation
+  → documentation consistency → user review
   → explicit instruction to commit → commit
 ```
 
