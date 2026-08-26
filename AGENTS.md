@@ -12,7 +12,12 @@ findings, limitations, and their reproduction evidence — see
 not*; ROADMAP.md says what's *done*, *in progress*, and *next*; BACKLOG.md
 is the operational record behind both.
 
-Last revised: 2026-08-26, updating §19 to record that `BL-001` (the
+Last revised: 2026-08-26, adding a "Versioning and Release Cadence"
+section between §22 and §23 — the durable rule that an engineering task or
+backlog item being completed must never, by itself, trigger a version
+bump or release — and correcting §4's "Release blockers" subsection,
+which still pointed at ROADMAP.md's non-existent per-finding table.
+Prior same-day revision: updating §19 to record that `BL-001` (the
 secret-plus-`defaultValue` leak) is now fixed in code, following the
 first implementation pass done under this charter's own new Engineering
 Task Workflow — see BACKLOG.md's `BL-001` entry for the full account.
@@ -351,13 +356,17 @@ invariant's *class* of failure, not just the reported case:
 
 ### Release blockers
 
-The six P0 findings from the 2026-08-10 audit are explicit release
-blockers: no new feature work ships, and no release is tagged, while any of
-them remains open. See ROADMAP.md's Release Blockers table for status,
-file:line references, and fix direction. Secret-file permission handling
-(a freshly-created local secrets file inheriting the process umask instead
-of `chmod 0600`) is elevated to a **P1 security-hardening item**, tracked
-alongside the P0s even though it doesn't block a release on its own.
+The six P0 findings (plus one P1 — secret-file permission handling, a
+freshly-created local secrets file inheriting the process umask instead of
+`chmod 0600`) from the 2026-08-10 audit were the original release
+blockers; all closed 2026-08-11 (see §19). This paragraph is kept as the
+historical record, not as the current mechanism — it doesn't name today's
+blockers and its "see ROADMAP.md's Release Blockers table" pointer is
+stale (ROADMAP.md doesn't itemize individual findings). **The durable,
+general rule — what counts as a release blocker, and where the current
+list lives — is the "Versioning and Release Cadence" section's own
+"Release blockers" subsection below, which points at BACKLOG.md's Part 0
+as the living list.**
 
 ---
 
@@ -853,6 +862,86 @@ Before committing:
 
 ---
 
+## Versioning and Release Cadence
+
+The pipeline, in order, with a hard boundary in the middle:
+
+```
+engineering commits → accumulated changes → release candidate / release review
+  → version bump → tag + push → CI publication
+```
+
+Everything left of "release candidate / release review" is §22's territory
+(normal development). Everything from "version bump" onward is §23's
+territory (the mechanical publish steps, run only after explicit
+authorization). This section owns the boundary itself — the judgment call
+of *whether* accumulated commits currently constitute something worth
+proposing as a release. **An engineering task or backlog item being
+completed must never, by itself, trigger a version bump or a release.**
+Closing `BL-001` did not make v4.6.1 happen; nothing does, until this
+section's own process runs and the user authorizes it.
+
+### Development commits
+
+- Bug fixes, features, documentation changes, refactors, and backlog work
+  may be committed during normal development, per §22.
+- A commit does not imply a release.
+- Do not bump the application version for every commit.
+- Do not create release tags for normal development commits.
+- Do not push automatically (§22).
+- Do not publish automatically (§23).
+
+### Release decision
+
+A release should happen only when there is a coherent, user-facing set of
+changes appropriate to publish — not on a schedule and not because a task
+finished. Before proposing one, evaluate:
+
+1. What user-facing changes have accumulated since the previous release
+   (the most recent tag — `git log <last-tag>..HEAD`, mirroring how §19's
+   own "committed locally on top of v4.6.0, not yet released" tracking
+   already works)?
+2. Do the accumulated fixes/features form a coherent release, or is this
+   an arbitrary midpoint?
+3. Are there open release blockers (see below)?
+4. Is the current state actually safe to publish?
+5. Do `CHANGELOG.md` and any other release-facing documentation accurately
+   describe what's included?
+6. Per `.bumpversion.cfg`'s existing patch/minor/major convention (§23),
+   which increment does this set of changes actually call for?
+7. Is there an actual reason to publish *now*, rather than continuing to
+   accumulate changes?
+
+Do not adopt an arbitrary "release every N commits" or "release every N
+days" cadence — question 7 above exists specifically to rule that out.
+
+### Release triggers
+
+A release *may* be appropriate when, for example:
+
+- one or more important user-facing features are complete,
+- important bug or security fixes form a meaningful release,
+- a milestone or phase reaches a coherent shipped state,
+- compatibility or behavior changes need to be distributed, or
+- accumulated changes have reached a meaningful release boundary.
+
+These are illustrative, not automatic triggers — each one still has to
+clear the full "Release decision" evaluation above before it turns into a
+proposal, and even then only into a *proposal*, not an action.
+
+### Release blockers
+
+Before proposing or performing a release, check BACKLOG.md's **Part 0 —
+Release Blockers** for open P0/P1 findings, and this charter's §4 release
+principles. Do not recommend or perform a release while a release-blocking
+finding remains open, unless this policy is explicitly overridden by the
+user for that specific release. BACKLOG.md's Part 0 is the current, living
+list — not §4's "Release blockers" subsection, which is historical (see
+its own note), and not ROADMAP.md, which does not itemize individual
+findings.
+
+---
+
 ## 23. Release and Publishing Policy
 
 EnvShield uses the repository's existing `bump2version` release workflow.
@@ -961,10 +1050,26 @@ release commits, pushing tags, or triggering publication.
 
 ### Release review
 
-Before publishing, Codex should provide: current version, target version,
-release type, changelog summary, commits included, working tree status,
-tests run, expected tag, and the publishing workflow that will be
-triggered. Then wait for explicit authorization to execute the release.
+When the "Versioning and Release Cadence" section's Release decision
+evaluation concludes a release is worth proposing, do NOT immediately run
+`bump2version`. First provide a release-readiness report — this is the
+"release candidate / release review" step in that section's pipeline —
+containing:
+
+- current version and proposed version
+- proposed release type (patch/minor/major) and why
+- user-facing changes included since the previous release (commits and,
+  where relevant, the backlog items they close)
+- remaining open release blockers, if any (BACKLOG.md's Part 0)
+- tests and lint status (actually run, not assumed)
+- `CHANGELOG.md` status (updated and accurate, or what's missing)
+- working-tree status
+- the expected tag and the publishing workflow that will be triggered
+- the reason this is a meaningful release boundary, not merely "a task
+  finished" (see Release decision, question 7)
+
+Then wait for explicit authorization to execute the release. Never publish
+merely because an engineering task or backlog item is complete.
 
 ### Important
 
