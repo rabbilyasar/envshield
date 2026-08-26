@@ -705,18 +705,21 @@ against current code, exactly the class of issue it claimed didn't exist:
   the same investigation also found and fixed `BL-092`, an uncaught crash
   on a binary/non-UTF-8 `.py` file in the same function, and left
   `BL-093`, a lower-confidence sibling gap in the Kubernetes parser, open
-  as `NEEDS_EVIDENCE`). Generated TypeScript's `z.coerce.boolean()` turns
+  as `NEEDS_EVIDENCE`). Generated TypeScript's `z.coerce.boolean()` turned
   the string `"false"` into `true` at runtime (`BL-003`); `scan`/
-  `scan --staged` fail open on files over 1MB, reporting `clean: true`
-  while silently skipping the one file that mattered (`BL-004`). Both
-  remain open as of this revision.
+  `scan --staged` failed open on files over 1MB, reporting `clean: true`
+  while silently skipping the one file that mattered (`BL-004`). **Both
+  fixed 2026-08-26** (code committed locally, not yet released — see each
+  item's own `BACKLOG.md` entry).
 
 Per this section's own release philosophy below, each independently
-answers "yes" to "can this produce secret leakage" or "can this produce a
-silent false-clean" — **v4.6.0 must not be treated as release-ready, and
-no new release should be prepared, until `BL-001` through `BL-004` are
-resolved** (`BL-001` and `BL-002` are fixed but not yet released;
-`BL-003`/`BL-004` still need both). The documentation/
+answered "yes" to "can this produce secret leakage" or "can this produce a
+silent false-clean." **All four of `BL-001` through `BL-004` are now fixed
+in code and committed locally** (commits `63d6581`, `77be1e5`, `f478f9f`,
+`134ef7e`) **— but none of the four have been released.** `v4.6.0` remains
+the latest released/tagged version; per the "Versioning and Release
+Cadence" section below, all four blockers being fixed does not by itself
+mean a release should be proposed. The documentation/
 positioning pass this section previously described as having "closed out"
 the audit — README's `secret`-field wording and new Known Limitations
 section, the CLI tagline, CHANGELOG's Python-vs-JS/TS discovery wording,
