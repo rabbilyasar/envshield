@@ -5,11 +5,13 @@ import toml
 import yaml
 from rich.console import Console
 
+from envshield.core import schema_types
 from envshield.core.exceptions import (
     ConfigNotFoundError,
     ConfigParseError,
     SchemaNotFoundError,
     SchemaParseError,
+    SecretDefaultConflictError,
     UnsafePathError,
 )
 from envshield.utils import git_utils
@@ -145,7 +147,9 @@ def load_schema(service_name: str) -> Dict[str, Any]:
             f"Schema file not found: {schema_path}. Run 'envshield init' to "
             "recreate it, or restore the file at that path."
         )
-    return _load_schema_file(schema_path)
+    schema = _load_schema_file(schema_path)
+    _reject_secret_defaults(schema, schema_path)
+    return schema
 
 
 def load_bare_schema(path: str = SCHEMA_FILE_NAME) -> Dict[str, Any]:
@@ -169,7 +173,30 @@ def load_bare_schema(path: str = SCHEMA_FILE_NAME) -> Dict[str, Any]:
             f"Schema file not found: {path}. Run 'envshield import <file>' to "
             "generate one from an existing config, or 'envshield init'."
         )
-    return _load_schema_file(path)
+    schema = _load_schema_file(path)
+    _reject_secret_defaults(schema, path)
+    return schema
+
+
+def _reject_secret_defaults(schema: Dict[str, Any], schema_path: str) -> None:
+    """
+    Refuses a schema where any field is 'secret' and also carries a real
+    defaultValue -- see schema_types.secret_default_conflict. Called from
+    every entry point that resolves a full (post-extends-merge) schema, so
+    every downstream command ('check', 'doctor', 'setup', 'schema sync',
+    'generate', 'explain', 'scan') inherits the same refusal instead of
+    each re-deciding whether it's safe to echo the field's default -- the
+    same reasoning that makes an unsafe schema key name rejected outright
+    here rather than left for each generator to notice on its own (see
+    schema_manager.sync_schema).
+    """
+    offending = sorted(
+        key
+        for key, details in schema.items()
+        if schema_types.secret_default_conflict(details)
+    )
+    if offending:
+        raise SecretDefaultConflictError(schema_path, offending)
 
 
 def load_toml_schema(schema_path: str) -> Dict[str, Any]:

@@ -38,6 +38,48 @@ def test_validate_value_bool_only_accepts_true_false():
     assert schema_types.validate_value("False", schema) is None
 
 
+class TestSecretDefaultConflict:
+    """
+    BL-001 regression: a 'secret' field with a real defaultValue must be
+    flagged as a conflict -- this is the shared predicate every load-time
+    and render-time guard is built on, so its own edge cases matter most.
+    """
+
+    def test_secret_with_non_empty_default_conflicts(self):
+        assert schema_types.secret_default_conflict(
+            {"secret": True, "defaultValue": "sk_live_abc123"}
+        )
+
+    def test_secret_with_non_string_default_conflicts(self):
+        # A schema's own literal type (TOML int/bool/float) must still
+        # trigger the conflict once stringified -- not just a str default.
+        assert schema_types.secret_default_conflict(
+            {"secret": True, "defaultValue": 0}
+        )
+        assert schema_types.secret_default_conflict(
+            {"secret": True, "defaultValue": False}
+        )
+
+    def test_secret_with_empty_string_default_is_not_a_conflict(self):
+        assert not schema_types.secret_default_conflict(
+            {"secret": True, "defaultValue": ""}
+        )
+
+    def test_secret_with_no_default_is_not_a_conflict(self):
+        assert not schema_types.secret_default_conflict({"secret": True})
+
+    def test_non_secret_with_default_is_not_a_conflict(self):
+        assert not schema_types.secret_default_conflict(
+            {"secret": False, "defaultValue": "info"}
+        )
+        assert not schema_types.secret_default_conflict({"defaultValue": "info"})
+
+    def test_secret_false_explicitly_is_not_a_conflict(self):
+        assert not schema_types.secret_default_conflict(
+            {"secret": False, "defaultValue": "sk_live_abc123"}
+        )
+
+
 def test_validate_value_port_enforces_range():
     schema = {"type": "port"}
     assert schema_types.validate_value("0", schema) is not None

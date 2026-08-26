@@ -182,6 +182,38 @@ def test_sync_schema_withholds_a_secret_requiredif_trigger_value(mocker, tmp_pat
         assert "# required if STRIPE_TOKEN is set\nPAYMENTS_ENABLED=\n" in content
 
 
+def test_sync_schema_withholds_a_secret_fields_own_default_value(mocker, tmp_path):
+    """
+    BL-001 regression: a secret field's own defaultValue must never be
+    written into '.env.example' -- a tracked, committed file. config_manager.
+    load_schema already refuses this schema shape outright (see
+    test_config_manager.py's TestLoadSchemaRejectsSecretDefaults); this
+    exercises sync_schema's own defense-in-depth guard directly, the same
+    way test_sync_schema_withholds_a_secret_requiredif_trigger_value above
+    does for the sibling requiredIf leak. The key line itself, and the
+    '# secret' annotation, must still be present -- only the value is
+    withheld, so the contract stays fully documented.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path) as td:
+        schema_data = {
+            "STRIPE_SECRET_KEY": {
+                "description": "Stripe secret key",
+                "secret": True,
+                "defaultValue": "sk_live_SYNTHETIC_NOT_A_REAL_SECRET",
+            },
+        }
+        mocker.patch("envshield.config.manager.load_schema", return_value=schema_data)
+        config_manager.add_service("app", SCHEMA_FILE_NAME)
+
+        schema_manager.sync_schema(service_name="app")
+
+        with open(os.path.join(td, ".env.example")) as f:
+            content = f.read()
+
+        assert "sk_live_SYNTHETIC_NOT_A_REAL_SECRET" not in content
+        assert "# secret\nSTRIPE_SECRET_KEY=\n" in content
+
+
 def test_sync_schema_warns_before_replacing_pre_existing_non_envshield_example(
     mocker, tmp_path, capsys
 ):
@@ -406,6 +438,44 @@ def test_check_schema_flags_defaulted_vars_missing_from_local(mocker, tmp_path):
         is_in_sync = schema_manager.check_schema(".env.local", service_name="app")
 
         assert is_in_sync is False
+
+
+class TestSourceLabelWithholdsSecretDefaults:
+    """
+    BL-001 regression (check's Rich table surface): '_source_label' feeds
+    the "Missing in Local"/"Blank in Local" rows check_schema prints -- a
+    secret field's real default must never appear there either, the same
+    invariant as the '.env.example' and codegen surfaces.
+    """
+
+    def test_secret_field_with_a_default_is_labeled_without_the_value(self):
+        schema = {
+            "STRIPE_SECRET_KEY": {
+                "secret": True,
+                "defaultValue": "sk_live_SYNTHETIC_NOT_A_REAL_SECRET",
+            }
+        }
+
+        label = schema_manager._source_label("STRIPE_SECRET_KEY", schema)
+
+        assert "sk_live_SYNTHETIC_NOT_A_REAL_SECRET" not in label
+        assert label == "env.schema.toml (default: <hidden, secret>)"
+
+    def test_secret_field_with_no_default_is_unaffected(self):
+        schema = {"API_KEY": {"secret": True}}
+
+        assert (
+            schema_manager._source_label("API_KEY", schema)
+            == "env.schema.toml (Required)"
+        )
+
+    def test_non_secret_field_with_a_default_is_unaffected(self):
+        schema = {"LOG_LEVEL": {"defaultValue": "info"}}
+
+        assert (
+            schema_manager._source_label("LOG_LEVEL", schema)
+            == "env.schema.toml (default: 'info')"
+        )
 
 
 def test_check_result_json_flags_defaulted_vars_missing_from_local(

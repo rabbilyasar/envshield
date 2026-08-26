@@ -136,6 +136,29 @@ def validate_value(value: str, field_schema: dict[str, Any]) -> str | None:
     return None
 
 
+def secret_default_conflict(field_schema: dict[str, Any]) -> bool:
+    """
+    True if a field is declared `secret` and also carries a real
+    (non-empty) `defaultValue`. This combination is never valid: a
+    defaultValue is written verbatim into every place a schema's defaults
+    are surfaced -- '.env.example', generated Python, generated
+    TypeScript, `explain`'s field description, `check`'s "missing/blank"
+    report -- and `secret` exists specifically to keep a value out of
+    exactly those committed, generated, or displayed surfaces. An
+    empty-string default ("this secret is optional, with no value if
+    unset") is not a conflict; it carries nothing to leak.
+
+    This mirrors the invariant `importer.py`'s schema generation already
+    enforces unconditionally when *writing* a new schema (a variable
+    classified secret never gets a defaultValue in the first place) --
+    this function is the corresponding check for code that *reads* a
+    schema that may not have gone through that writer.
+    """
+    if not field_schema.get("secret"):
+        return False
+    return str(field_schema.get("defaultValue", "")) != ""
+
+
 def is_required_now(field_schema: dict[str, Any], local_values: dict[str, str]) -> bool:
     """
     Whether a field is currently required, given its `requiredIf` condition

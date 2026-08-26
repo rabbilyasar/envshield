@@ -191,8 +191,22 @@ def diff_against_schema(
 
 
 def _source_label(var: str, schema: Dict[str, Any]) -> str:
-    """Describes a missing/blank variable's source for the report table -- naming its default, if it has one, so the fix is obvious without a separate lookup."""
-    default = schema.get(var, {}).get("defaultValue")
+    """
+    Describes a missing/blank variable's source for the report table --
+    naming its default, if it has one, so the fix is obvious without a
+    separate lookup. Never echoes the default for a 'secret' field: this
+    table is normal CLI output, and a secret's default value must not
+    appear there even though config_manager.load_schema already refuses
+    to load a schema where this combination exists (defense in depth, same
+    reasoning as schema_manager.sync_schema's own secret_default_conflict
+    check).
+    """
+    field_schema = schema.get(var, {})
+    default = field_schema.get("defaultValue")
+    if field_schema.get("secret"):
+        if default is not None:
+            return "env.schema.toml (default: <hidden, secret>)"
+        return "env.schema.toml (Required)"
     if default is not None:
         return f"env.schema.toml (default: {default!r})"
     return "env.schema.toml (Required)"
@@ -439,7 +453,15 @@ def sync_schema(service_name: str) -> bool:
         if annotations:
             body += f"# {'; '.join(annotations)}\n"
 
-        default_value = str(details.get("defaultValue", ""))
+        # Defense in depth: config_manager.load_schema already refuses a
+        # schema where this combination exists at all (see
+        # SecretDefaultConflictError) -- this still never renders the
+        # literal default for a secret field even if this function is
+        # ever called with a schema dict that bypassed that gate.
+        if schema_types.secret_default_conflict(details):
+            default_value = ""
+        else:
+            default_value = str(details.get("defaultValue", ""))
         safe_default = default_value.replace("\r", "\\r").replace("\n", "\\n")
         body += f"{key}={safe_default}\n\n"
 

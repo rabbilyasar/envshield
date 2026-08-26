@@ -12,7 +12,11 @@ findings, limitations, and their reproduction evidence — see
 not*; ROADMAP.md says what's *done*, *in progress*, and *next*; BACKLOG.md
 is the operational record behind both.
 
-Last revised: 2026-08-26, adding an explicit "Engineering Task Workflow"
+Last revised: 2026-08-26, updating §19 to record that `BL-001` (the
+secret-plus-`defaultValue` leak) is now fixed in code, following the
+first implementation pass done under this charter's own new Engineering
+Task Workflow — see BACKLOG.md's `BL-001` entry for the full account.
+Prior same-day revision: adding an explicit "Engineering Task Workflow"
 index (read → understand → implement → test → self-review → finding
 reconciliation → documentation consistency → final report → commit
 boundary) ahead of the pre-existing "Finding and Evidence Management"
@@ -672,22 +676,28 @@ genuinely missing required variable)." **That summary was inaccurate and
 was corrected on 2026-08-26** after a live-verification pass reproduced,
 against current code, exactly the class of issue it claimed didn't exist:
 
-- A P0 — a schema field with `secret = true` plus a real `defaultValue` is
-  accepted and propagates into `.env.example`, generated Python, and
-  generated TypeScript (`BACKLOG.md`'s `BL-001`). This is secret leakage.
+- A P0 — a schema field with `secret = true` plus a real `defaultValue` was
+  accepted and propagated into `.env.example`, generated Python, and
+  generated TypeScript (`BACKLOG.md`'s `BL-001`). This was secret leakage.
+  **Fixed 2026-08-26** (code committed locally, not yet released — see
+  `BL-001`'s own entry for the full root-cause/fix account, including two
+  further manifestations of the same root cause found and fixed in the
+  same pass, in `explain` and `check`'s Rich table, that the original
+  report and this section's prior wording didn't name).
 - Three P1s — malformed Python config breaks the `check --json`/
   `doctor --json` machine-readable contract and can produce
   `"success": true` (`BL-002`, a false-clean); generated TypeScript's
   `z.coerce.boolean()` turns the string `"false"` into `true` at runtime
   (`BL-003`); `scan`/`scan --staged` fail open on files over 1MB, reporting
   `clean: true` while silently skipping the one file that mattered
-  (`BL-004`).
+  (`BL-004`). All three remain open as of this revision.
 
-All four are open as of this revision. Per this section's own release
-philosophy below, each independently answers "yes" to "can this produce
-secret leakage" or "can this produce a silent false-clean" — **v4.6.0 must
-not be treated as release-ready, and no new release should be prepared,
-until `BL-001` through `BL-004` are resolved.** The documentation/
+Per this section's own release philosophy below, each independently
+answers "yes" to "can this produce secret leakage" or "can this produce a
+silent false-clean" — **v4.6.0 must not be treated as release-ready, and
+no new release should be prepared, until `BL-001` through `BL-004` are
+resolved** (`BL-001` is fixed but not yet released; `BL-002`–`BL-004`
+still need both). The documentation/
 positioning pass this section previously described as having "closed out"
 the audit — README's `secret`-field wording and new Known Limitations
 section, the CLI tagline, CHANGELOG's Python-vs-JS/TS discovery wording,

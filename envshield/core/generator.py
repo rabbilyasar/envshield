@@ -139,6 +139,15 @@ def _render_python_field(key: str, details: dict[str, Any]) -> tuple[str, set[st
     description = details.get("description", "")
     is_secret = bool(details.get("secret", False))
     default_value = details.get("defaultValue")
+    # Defense in depth: config_manager.load_schema already refuses a
+    # schema with this combination (see SecretDefaultConflictError) -- this
+    # still never embeds a secret's literal default into generated,
+    # committed source even if this function is ever called with a schema
+    # dict that bypassed that gate. Treated exactly as "no default", same
+    # as an absent defaultValue -- the field becomes required (or optional-
+    # via-requiredIf) instead of silently defaulting to a hidden value.
+    if schema_types.secret_default_conflict(details):
+        default_value = None
     field_type = _effective_field_type(details)
 
     imports: set[str] = set()
@@ -317,6 +326,11 @@ def _escape_jsdoc_comment(text: str) -> str:
 def _render_ts_field(key: str, details: dict[str, Any]) -> str:
     description = details.get("description", "")
     default_value = details.get("defaultValue")
+    # Defense in depth: see the matching comment in _render_python_field --
+    # config_manager.load_schema already refuses this combination; this is
+    # a second guarantee for a schema dict passed in directly.
+    if schema_types.secret_default_conflict(details):
+        default_value = None
     field_type = _effective_field_type(details)
     conditional = "requiredIf" in details and default_value is None
     has_pattern = bool(details.get("pattern"))

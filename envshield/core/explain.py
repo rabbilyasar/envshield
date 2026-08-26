@@ -181,12 +181,20 @@ def _describe_field(field_schema: Dict[str, Any]) -> Dict[str, Any]:
     else:
         requiredness = "required"
 
+    is_secret = bool(field_schema.get("secret", False))
+    # A secret field's default is never surfaced here, even though
+    # config_manager.load_schema already refuses a schema with a real
+    # defaultValue on a secret field (defense in depth for a field_schema
+    # dict that reached this function some other way) -- 'requiredness'
+    # above still reflects a default's presence without echoing its value.
+    default_value = None if is_secret else field_schema.get("defaultValue")
+
     return {
         "type": schema_types.resolve_field_type(field_schema),
         "requiredness": requiredness,
         "requiredIf": field_schema.get("requiredIf"),
-        "default": field_schema.get("defaultValue"),
-        "secret": bool(field_schema.get("secret", False)),
+        "default": default_value,
+        "secret": is_secret,
         "enum": schema_types.enum_values(field_schema) or None,
         "pattern": field_schema.get("pattern"),
         "description": field_schema.get("description"),

@@ -46,6 +46,37 @@ class TestVariableFound:
         assert report.schema["default"] == "info"
 
 
+class TestDescribeFieldWithholdsSecretDefaults:
+    """
+    BL-001 regression (explain's field-description surface): a secret
+    field's real defaultValue must never be echoed in 'explain's schema
+    description, in Rich output or --json. config_manager.load_schema
+    already refuses this schema shape outright (see test_config_manager.py's
+    TestLoadSchemaRejectsSecretDefaults); this exercises _describe_field's
+    own defense-in-depth guard directly, for a field_schema dict that
+    reached it some other way.
+    """
+
+    def test_secret_field_with_a_default_reports_default_as_none(self):
+        described = explain._describe_field(
+            {
+                "secret": True,
+                "defaultValue": "sk_live_SYNTHETIC_NOT_A_REAL_SECRET",
+            }
+        )
+
+        assert described["default"] is None
+        assert described["secret"] is True
+        # 'requiredness' still reflects that a default exists, without
+        # echoing its value -- distinct concerns, both correct.
+        assert described["requiredness"] == "optional"
+
+    def test_non_secret_field_with_a_default_is_unaffected(self):
+        described = explain._describe_field({"defaultValue": "info"})
+
+        assert described["default"] == "info"
+
+
 class TestVariableNotFound:
     def test_raises_a_clear_error_not_an_empty_report(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)

@@ -901,8 +901,13 @@ def test_setup_requiredif_explanation_never_leaks_a_secret_triggers_value(
     with runner.isolated_filesystem(temp_dir=tmp_path):
         _write_root_service_config()
         with open(SCHEMA_FILE_NAME, "w") as f:
+            # STRIPE_TOKEN deliberately has no schema-authored defaultValue
+            # (secret=true + defaultValue is itself rejected at schema-load
+            # time as of BL-001) -- its real value comes from the example
+            # file below instead, which is all this test actually needs to
+            # exercise the requiredIf-trigger-masking invariant.
             f.write(
-                f'[STRIPE_TOKEN]\ndescription="x"\nsecret=true\ndefaultValue="{sentinel}"\n\n'
+                '[STRIPE_TOKEN]\ndescription="x"\nsecret=true\n\n'
                 f'[PAYMENTS_ENABLED]\ndescription="x"\nrequiredIf={{var="STRIPE_TOKEN", equals="{sentinel}"}}\n'
             )
         with open(setup_manager.EXAMPLE_FILE, "w") as f:

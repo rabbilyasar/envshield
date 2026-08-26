@@ -51,6 +51,14 @@ def test_generate_config_infers_types_from_default_values():
 
 
 def test_generate_config_secret_with_default_stays_secret_str():
+    """
+    A secret field's declared type (SecretStr) is unaffected by BL-001's
+    fix -- only the literal default value is withheld. config_manager.
+    load_schema already refuses this schema shape outright (see
+    test_config_manager.py's TestLoadSchemaRejectsSecretDefaults); this
+    exercises generate_config's own defense-in-depth guard directly, for a
+    schema dict that reached it some other way.
+    """
     schema = {
         "API_KEY": {
             "description": "3rd party key.",
@@ -62,7 +70,10 @@ def test_generate_config_secret_with_default_stays_secret_str():
     content = generator.generate_config(schema)
 
     assert "api_key: SecretStr = Field(" in content
-    assert "'changeme', description='3rd party key.', alias='API_KEY'" in content
+    # BL-001: the literal default must never appear in generated, committed
+    # source -- the field becomes required instead of silently defaulting.
+    assert "changeme" not in content
+    assert "..., description='3rd party key.', alias='API_KEY'" in content
 
 
 def test_generate_config_empty_schema():
@@ -265,6 +276,32 @@ def test_generate_typescript_explicit_port_type_with_default():
     content = generator.generate_config(schema, lang="typescript")
 
     assert '"API_PORT": z.coerce.number().min(1).max(65535).default(8080),' in content
+
+
+def test_generate_typescript_secret_with_default_never_embeds_the_literal():
+    """
+    BL-001 regression (TypeScript surface): a secret field's real default
+    must never be embedded in the generated '.default(...)' literal.
+    config_manager.load_schema already refuses this schema shape outright;
+    this exercises generate_config's own defense-in-depth guard for a
+    schema dict that reached it some other way. The field still renders as
+    required (no '.default(' / '.optional()' at all) rather than silently
+    dropping the field, and it's still wrapped in Secret(...) at export.
+    """
+    content = generator.generate_config(
+        {
+            "STRIPE_SECRET_KEY": {
+                "description": "Stripe key.",
+                "secret": True,
+                "defaultValue": "sk_live_SYNTHETIC_NOT_A_REAL_SECRET",
+            }
+        },
+        lang="typescript",
+    )
+
+    assert "sk_live_SYNTHETIC_NOT_A_REAL_SECRET" not in content
+    assert '"STRIPE_SECRET_KEY": z.string().min(1),' in content
+    assert 'new Secret(_parsed["STRIPE_SECRET_KEY"])' in content
 
 
 def test_generate_typescript_explicit_url_type():

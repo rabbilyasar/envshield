@@ -858,11 +858,21 @@ def test_init_force_preserves_a_hand_corrected_secret_classification(tmp_path, m
             )
         runner.invoke(app, ["init"])
 
-        # Hand-correct the (wrongly guessed non-secret) classification.
+        # Hand-correct the (wrongly guessed non-secret) classification for
+        # DATABASE_URL only -- also dropping its inferred defaultValue,
+        # since secret=true alongside a defaultValue is itself rejected at
+        # schema-load time as of BL-001 (correctly: a hand-corrected secret
+        # field's old placeholder default is exactly the kind of leftover
+        # this should force the user to reconsider, not silently keep).
         with open(SCHEMA_FILE_NAME) as f:
             content = f.read()
         with open(SCHEMA_FILE_NAME, "w") as f:
-            f.write(content.replace("secret = false", "secret = true"))
+            f.write(
+                content.replace(
+                    'secret = false\ndefaultValue = "plain-placeholder"',
+                    "secret = true",
+                )
+            )
 
         result = runner.invoke(app, ["init", "--force"])
 

@@ -8,6 +8,7 @@ from envshield.core.exceptions import (
     ConfigParseError,
     SchemaNotFoundError,
     SchemaParseError,
+    SecretDefaultConflictError,
     UnsafePathError,
 )
 
@@ -420,6 +421,108 @@ def test_load_schema_without_extends_is_unaffected(tmp_path, monkeypatch):
     schema = config_manager._load_schema_file("env.schema.toml")
 
     assert schema == {"FOO": {"description": "x"}}
+
+
+class TestLoadSchemaRejectsSecretDefaults:
+    """
+    BL-001 regression: a schema field marked 'secret' must never also carry
+    a real defaultValue -- that value is written verbatim into
+    '.env.example', generated Python, and generated TypeScript. The fix is
+    enforced at schema load time, the single choke point every schema-
+    consuming command (check/doctor/setup/sync/generate/explain/scan)
+    already routes through, so one guard protects all of them.
+    """
+
+    def test_load_schema_rejects_secret_field_with_a_real_default(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        with open("env.schema.toml", "w") as f:
+            f.write(
+                '[STRIPE_SECRET_KEY]\ndescription="x"\nsecret=true\n'
+                'defaultValue="sk_live_SYNTHETIC_NOT_A_REAL_SECRET"\n'
+            )
+        with open("envshield.yml", "w") as f:
+            f.write("services:\n  api:\n    schema: env.schema.toml\n")
+
+        with pytest.raises(SecretDefaultConflictError) as exc_info:
+            config_manager.load_schema("api")
+
+        # The field name is named so the fix is obvious; the actual
+        # default value must never appear in the error message itself.
+        assert "STRIPE_SECRET_KEY" in str(exc_info.value)
+        assert "sk_live_SYNTHETIC_NOT_A_REAL_SECRET" not in str(exc_info.value)
+
+    def test_load_bare_schema_rejects_secret_field_with_a_real_default(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        with open("env.schema.toml", "w") as f:
+            f.write(
+                '[API_TOKEN]\nsecret=true\ndefaultValue="SYNTHETIC_NOT_A_REAL_SECRET"\n'
+            )
+
+        with pytest.raises(SecretDefaultConflictError):
+            config_manager.load_bare_schema()
+
+    def test_load_schema_rejects_secret_default_inherited_via_extends(
+        self, tmp_path, monkeypatch
+    ):
+        """The conflict must be caught after the extends-merge, not just on the schema's own directly-declared fields."""
+        monkeypatch.chdir(tmp_path)
+        with open("base.schema.toml", "w") as f:
+            f.write(
+                '[DB_PASSWORD]\nsecret=true\ndefaultValue="SYNTHETIC_NOT_A_REAL_SECRET"\n'
+            )
+        with open("env.schema.toml", "w") as f:
+            f.write('extends = "base.schema.toml"\n')
+        with open("envshield.yml", "w") as f:
+            f.write("services:\n  api:\n    schema: env.schema.toml\n")
+
+        with pytest.raises(SecretDefaultConflictError):
+            config_manager.load_schema("api")
+
+    def test_load_schema_allows_secret_field_with_no_default(
+        self, tmp_path, monkeypatch
+    ):
+        """Sanity check: a secret field with no defaultValue at all -- the ordinary, correct case -- still loads."""
+        monkeypatch.chdir(tmp_path)
+        with open("env.schema.toml", "w") as f:
+            f.write('[API_TOKEN]\nsecret=true\n')
+        with open("envshield.yml", "w") as f:
+            f.write("services:\n  api:\n    schema: env.schema.toml\n")
+
+        schema = config_manager.load_schema("api")
+
+        assert schema["API_TOKEN"]["secret"] is True
+
+    def test_load_schema_allows_secret_field_with_empty_string_default(
+        self, tmp_path, monkeypatch
+    ):
+        """An empty-string default on a secret field ('optional, blank if unset') carries nothing to leak."""
+        monkeypatch.chdir(tmp_path)
+        with open("env.schema.toml", "w") as f:
+            f.write('[API_TOKEN]\nsecret=true\ndefaultValue=""\n')
+        with open("envshield.yml", "w") as f:
+            f.write("services:\n  api:\n    schema: env.schema.toml\n")
+
+        schema = config_manager.load_schema("api")
+
+        assert schema["API_TOKEN"]["defaultValue"] == ""
+
+    def test_load_schema_allows_non_secret_field_with_a_default(
+        self, tmp_path, monkeypatch
+    ):
+        """Sanity check: ordinary non-secret defaults are completely untouched by this change."""
+        monkeypatch.chdir(tmp_path)
+        with open("env.schema.toml", "w") as f:
+            f.write('[LOG_LEVEL]\ndefaultValue="info"\n')
+        with open("envshield.yml", "w") as f:
+            f.write("services:\n  api:\n    schema: env.schema.toml\n")
+
+        schema = config_manager.load_schema("api")
+
+        assert schema["LOG_LEVEL"]["defaultValue"] == "info"
 
 
 def test_add_service_creates_envshield_yml_when_missing(tmp_path, monkeypatch):
