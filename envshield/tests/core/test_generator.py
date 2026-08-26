@@ -1,4 +1,5 @@
 # envshield/tests/core/test_generator.py
+import json
 import subprocess
 
 import pytest
@@ -125,7 +126,11 @@ def test_generate_typescript_infers_types_from_default_values():
 
     assert '"LOG_LEVEL": z.string().default("info"),' in content
     assert '"MAX_RETRIES": z.coerce.number().default(3),' in content
-    assert '"DEBUG": z.coerce.boolean().default(true),' in content
+    assert (
+        '"DEBUG": z.string().transform((s) => s.toLowerCase())'
+        '.pipe(z.enum(["true", "false"])).transform((s) => s === "true")'
+        ".default(true)," in content
+    )
 
     # Non-secret fields are passed through directly, not wrapped in Secret.
     assert '"LOG_LEVEL": _parsed["LOG_LEVEL"],' in content
@@ -466,3 +471,226 @@ class TestTypeScriptJSDocInjectionIsPrevented:
         )
         assert comment_line.count("*/") == 1
         assert comment_line.rstrip().endswith("*/")
+
+
+def _extract_field_expr(content: str, key: str) -> str:
+    """Pulls the zod builder expression for one field out of generated TS
+    source, e.g. content containing '"ALLOW_EMAILS": z.string()...,' returns
+    'z.string()...' with the trailing comma stripped."""
+    prefix = f'"{key}": '
+    line = next(line for line in content.splitlines() if line.strip().startswith(prefix))
+    return line.strip()[len(prefix) :].rstrip(",")
+
+
+# A minimal, faithful stand-in for the exact five zod methods BL-003's fix
+# uses (z.string, z.enum, .transform, .pipe, .default, .optional) -- NOT a
+# general zod reimplementation, and not a substitute for verifying against
+# the real npm package. This repo has no package.json/npm dependency
+# management and no node/npm setup step in CI (see BL-003's BACKLOG.md
+# entry) -- adding real `zod` as a devDependency to runtime-test generated
+# TypeScript is a real infrastructure decision, not something to introduce
+# silently inside this fix. Real-zod verification (real `npm install zod`,
+# real `node`, the actual generator output) was performed ad hoc in an
+# isolated scratch directory during implementation and is recorded in
+# BACKLOG.md's BL-003 entry, but is not part of the committed test suite.
+# This harness instead runs the *actual* generated expression text through
+# real, bare `node` (already an unconditional test dependency -- see
+# `_node_check` above) against hand-written stand-ins that implement these
+# five methods' real, documented parse semantics -- proving the generated
+# code is syntactically valid and behaves as intended, without a new
+# project dependency.
+_MINI_ZOD_JS = """
+class MiniSchema {
+  constructor(parseFn) { this._parse = parseFn; }
+  parse(input) { return this._parse(input); }
+  transform(fn) { return new MiniSchema((input) => fn(this._parse(input))); }
+  pipe(next) { return new MiniSchema((input) => next.parse(this._parse(input))); }
+  default(value) {
+    return new MiniSchema((input) => (input === undefined ? value : this._parse(input)));
+  }
+  optional() {
+    return new MiniSchema((input) => (input === undefined ? undefined : this._parse(input)));
+  }
+}
+const z = {
+  string: () => new MiniSchema((input) => {
+    if (typeof input !== "string") throw new Error("expected string, got " + typeof input);
+    return input;
+  }),
+  enum: (values) => new MiniSchema((input) => {
+    if (!values.includes(input)) throw new Error("invalid enum value: " + JSON.stringify(input));
+    return input;
+  }),
+};
+"""
+
+
+def _to_js_literal(value) -> str:
+    """`None` represents JS `undefined` (an absent env var) -- the only
+    value this generated pipeline's callers ever actually pass besides a
+    string, since `process.env[...]` is either a string or undefined,
+    never `null`."""
+    if value is None:
+        return "undefined"
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    if isinstance(value, str):
+        return json.dumps(value)
+    if isinstance(value, int):
+        return str(value)
+    raise TypeError(f"unsupported test input type: {type(value)!r}")
+
+
+def _run_bool_matrix(tmp_path, expr: str, inputs: list) -> dict:
+    """Runs `expr.parse(input)` (via the mini-zod stand-in above) for every
+    input in `inputs`, returning {JSON-stringified-input: "ok:<value>" |
+    "rejected"}. A real SyntaxError/crash in `expr` itself surfaces as a
+    non-zero exit with a Python-side assertion failure, distinct from a
+    controlled per-input rejection."""
+    js_inputs = "[" + ", ".join(_to_js_literal(v) for v in inputs) + "]"
+    script = (
+        _MINI_ZOD_JS
+        + f"\nconst _schema = {expr};\n"
+        + f"const _inputs = {js_inputs};\n"
+        + "const _results = {};\n"
+        + "for (const input of _inputs) {\n"
+        "  const key = input === undefined ? 'undefined' : JSON.stringify(input);\n"
+        "  try {\n"
+        "    const value = _schema.parse(input);\n"
+        "    _results[key] = 'ok:' + (value === undefined ? 'undefined' : JSON.stringify(value));\n"
+        "  } catch (e) {\n"
+        "    _results[key] = 'rejected';\n"
+        "  }\n"
+        "}\n"
+        "console.log(JSON.stringify(_results));\n"
+    )
+    script_path = tmp_path / "bool_matrix.js"
+    script_path.write_text(script)
+    result = subprocess.run(
+        ["node", str(script_path)], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+class TestTypeScriptBooleanCoercionMatchesTheContract:
+    """
+    Regression coverage for BL-003: z.coerce.boolean() followed JavaScript
+    truthiness, so an explicit "false" silently became `true` at runtime --
+    inverting a developer's explicit intent (e.g. a safety switch like
+    ALLOW_EMAILS=false actually enabling emails). The fix must accept only
+    a case-insensitive "true"/"false", matching schema_types._BOOL_VALUES/
+    validate_value exactly, and reject everything else it rejects --
+    without silently broadening what's accepted.
+    """
+
+    def test_required_bool_field_renders_the_explicit_parser(self):
+        content = generator.generate_config(
+            {"ALLOW_EMAILS": {"description": "Safety switch.", "type": "bool"}},
+            lang="typescript",
+        )
+
+        assert (
+            '"ALLOW_EMAILS": z.string().transform((s) => s.toLowerCase())'
+            '.pipe(z.enum(["true", "false"])).transform((s) => s === "true"),'
+            in content
+        )
+        assert "z.coerce.boolean()" not in content
+
+    def test_bool_field_true_and_false_round_trip_correctly(self, tmp_path):
+        """The exact BL-003 scenario: an explicit "false" must parse to
+        `false`, not silently invert to `true`."""
+        content = generator.generate_config(
+            {"ALLOW_EMAILS": {"description": "Safety switch.", "type": "bool"}},
+            lang="typescript",
+        )
+        expr = _extract_field_expr(content, "ALLOW_EMAILS")
+
+        results = _run_bool_matrix(tmp_path, expr, ["true", "false"])
+
+        assert results['"true"'] == "ok:true"
+        assert results['"false"'] == "ok:false"
+
+    def test_bool_field_accepts_case_variants(self, tmp_path):
+        content = generator.generate_config(
+            {"ALLOW_EMAILS": {"description": "Safety switch.", "type": "bool"}},
+            lang="typescript",
+        )
+        expr = _extract_field_expr(content, "ALLOW_EMAILS")
+
+        results = _run_bool_matrix(
+            tmp_path, expr, ["True", "FALSE", "TrUe", "fAlSe"]
+        )
+
+        assert results['"True"'] == "ok:true"
+        assert results['"FALSE"'] == "ok:false"
+        assert results['"TrUe"'] == "ok:true"
+        assert results['"fAlSe"'] == "ok:false"
+
+    def test_bool_field_rejects_values_the_validator_also_rejects(self, tmp_path):
+        """Mirrors schema_types._BOOL_VALUES = {"true", "false"} exactly --
+        must not silently broaden what's accepted."""
+        content = generator.generate_config(
+            {"ALLOW_EMAILS": {"description": "Safety switch.", "type": "bool"}},
+            lang="typescript",
+        )
+        expr = _extract_field_expr(content, "ALLOW_EMAILS")
+
+        results = _run_bool_matrix(
+            tmp_path, expr, ["0", "1", "", "no", "yes", " true", "true "]
+        )
+
+        for value, outcome in results.items():
+            assert outcome == "rejected", f"{value} should have been rejected"
+
+    def test_bool_field_rejects_non_string_input(self, tmp_path):
+        """A required field (no default, not optional) must also reject a
+        genuinely absent value -- `undefined` is not a string either."""
+        content = generator.generate_config(
+            {"ALLOW_EMAILS": {"description": "Safety switch.", "type": "bool"}},
+            lang="typescript",
+        )
+        expr = _extract_field_expr(content, "ALLOW_EMAILS")
+
+        results = _run_bool_matrix(tmp_path, expr, [123, True, None])
+
+        assert results["123"] == "rejected"
+        assert results["true"] == "rejected"
+        assert results["undefined"] == "rejected"
+
+    def test_bool_field_with_default_still_defaults_correctly(self, tmp_path):
+        content = generator.generate_config(
+            {
+                "DEBUG": {
+                    "description": "Debug flag.",
+                    "defaultValue": "true",
+                    "type": "bool",
+                }
+            },
+            lang="typescript",
+        )
+        expr = _extract_field_expr(content, "DEBUG")
+
+        results = _run_bool_matrix(tmp_path, expr, [None])
+
+        assert results["undefined"] == "ok:true"
+
+    def test_bool_field_marked_optional_still_allows_undefined(self, tmp_path):
+        content = generator.generate_config(
+            {
+                "MAINTENANCE_MODE": {
+                    "description": "Maintenance toggle.",
+                    "type": "bool",
+                    "requiredIf": {"OTHER_FIELD": "x"},
+                }
+            },
+            lang="typescript",
+        )
+        expr = _extract_field_expr(content, "MAINTENANCE_MODE")
+
+        results = _run_bool_matrix(tmp_path, expr, [None, "false"])
+
+        assert results["undefined"] == "ok:undefined"
+        assert results['"false"'] == "ok:false"

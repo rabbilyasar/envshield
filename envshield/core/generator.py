@@ -281,7 +281,16 @@ def _zod_base_type(field_type: str, details: dict[str, Any]) -> str:
     if field_type in ("int", "float"):
         return "z.coerce.number()"
     if field_type == "bool":
-        return "z.coerce.boolean()"
+        # z.coerce.boolean() is JS truthiness (Boolean("false") === true) --
+        # it would silently invert an explicit "false" to true (see BL-003).
+        # This instead accepts only a case-insensitive "true"/"false",
+        # matching schema_types._BOOL_VALUES/validate_value exactly, and
+        # rejects everything else (including non-string input) the same
+        # way that validator does.
+        return (
+            "z.string().transform((s) => s.toLowerCase())"
+            '.pipe(z.enum(["true", "false"])).transform((s) => s === "true")'
+        )
     if field_type == "port":
         return "z.coerce.number().min(1).max(65535)"
     if field_type == "url":
