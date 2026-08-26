@@ -236,7 +236,11 @@ def _check_config_source_drift(service_name: str):
             continue
         try:
             source_vars = parser.get_vars(source)
-        except (FileNotFoundError, OSError):
+        except (FileNotFoundError, OSError, EnvShieldException):
+            # A malformed "other source" is skipped, not fatal to this
+            # whole check -- otherwise one bad file would blank out every
+            # other source's findings via HealthCheck.run()'s coarser outer
+            # catch (see BL-002).
             continue
         extra = sorted(set(source_vars) - schema_vars)
         if extra:

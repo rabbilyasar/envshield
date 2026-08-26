@@ -38,6 +38,20 @@ def test_detect_env_style_finds_python_config_module(tmp_path):
     )
 
 
+def test_looks_like_python_config_module_skips_a_malformed_candidate(tmp_path):
+    """
+    BL-002 regression: this is opportunistic discovery over arbitrary
+    directory contents, not validation of a file the user pointed at -- a
+    malformed '.py' candidate must be disqualified (False), not raise and
+    abort the whole scan, now that PythonParser.get_vars raises instead of
+    silently returning empty.
+    """
+    path = tmp_path / "broken.py"
+    path.write_text("SECRET_KEY =")  # unterminated -- invalid syntax
+
+    assert service_discovery._looks_like_python_config_module(str(path)) is False
+
+
 def test_detect_env_style_finds_mastodon_style_production_only_env(tmp_path):
     """
     Regression: Mastodon's actual, documented convention is a single

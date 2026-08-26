@@ -383,7 +383,10 @@ def merge_variables_from_other_sources(
                 if not parser:
                     continue
                 variables = parser.get_vars(path, get_values=True)
-        except (FileNotFoundError, OSError):
+        except (FileNotFoundError, OSError, EnvShieldException):
+            # A malformed "other source" is skipped, not fatal to the merge
+            # -- one bad file must not stop the remaining sources from
+            # contributing their own variables (see BL-002).
             continue
 
         for key, value in variables.items():

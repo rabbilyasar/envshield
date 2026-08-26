@@ -1249,6 +1249,78 @@ def test_check_json_never_echoes_an_invalid_value(tmp_path):
         }
 
 
+def test_check_json_is_valid_single_document_on_a_malformed_python_local_file(
+    tmp_path,
+):
+    """
+    BL-002 regression: a malformed Python local file used to print a
+    'Warning: ...' line to stdout before the JSON document, corrupting it
+    -- json.loads(stdout) must succeed regardless of schema shape.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_root_service()
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[API_KEY]\ndescription = "Test"\nsecret = true\n')
+        with open("config.py", "w") as f:
+            f.write("API_KEY = ")  # unterminated -- invalid syntax
+
+        result = runner.invoke(app, ["check", "config.py", "--json"])
+
+        assert result.exit_code == 1
+        payload = json.loads(result.stdout)  # raises if stdout isn't one clean document
+        assert payload["success"] is False
+        assert payload["results"][0]["clean"] is False
+        assert "error" in payload["results"][0]
+
+
+def test_check_json_does_not_false_clean_on_a_malformed_python_local_file(tmp_path):
+    """
+    BL-002 regression, the false-clean half: with an all-optional/no-
+    constraint schema, the old behavior silently treated the unparseable
+    file as "declares nothing needed" and reported success. A parse
+    failure must be reported as such regardless of whether the schema
+    would otherwise have anything to flag as missing.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_root_service()
+        # A genuinely empty schema -- the exact shape that previously
+        # produced "success": true, "clean": true despite the local file
+        # being unparseable.
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write("")
+        with open("config.py", "w") as f:
+            f.write("API_KEY = ")  # unterminated -- invalid syntax
+
+        result = runner.invoke(app, ["check", "config.py", "--json"])
+
+        assert result.exit_code == 1
+        payload = json.loads(result.stdout)
+        assert payload["success"] is False
+        assert payload["results"][0]["clean"] is False
+
+
+def test_doctor_json_is_valid_single_document_on_a_malformed_python_local_file(
+    tmp_path,
+):
+    """BL-002 regression: same stdout-corruption bug, reproduced through 'doctor --json'."""
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.system("git init -q")
+        config_manager.add_service(
+            "app", SCHEMA_FILE_NAME, local_file="config.py"
+        )
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[API_KEY]\ndescription = "Test"\nsecret = true\n')
+        with open("config.py", "w") as f:
+            f.write("API_KEY = ")  # unterminated -- invalid syntax
+
+        result = runner.invoke(app, ["doctor", "--json"])
+
+        payload = json.loads(result.stdout)  # raises if stdout isn't one clean document
+        checks = payload["results"][0]["checks"]
+        sync_check = next(c for c in checks if c["name"] == "Local Environment Sync")
+        assert sync_check["passed"] is False
+
+
 def test_check_json_with_multiple_services_runs_all_without_prompting(tmp_path):
     """Regression: --json must never fall into the interactive 'Which service?' picker."""
     with runner.isolated_filesystem(temp_dir=tmp_path):

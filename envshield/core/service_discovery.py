@@ -10,6 +10,7 @@ import yaml
 
 from ..parsers.factory import get_parser
 from . import inspector
+from .exceptions import EnvShieldException
 from .scanner import DEFAULT_EXCLUDED_DIRS
 
 # Directories whose immediate children are conventionally one-service-per-
@@ -143,7 +144,11 @@ def _looks_like_python_config_module(path: str) -> bool:
         return False
     try:
         names = parser.get_vars(path)
-    except (FileNotFoundError, OSError):
+    except (FileNotFoundError, OSError, EnvShieldException):
+        # An unreadable or malformed candidate simply doesn't look like a
+        # config module -- this is opportunistic discovery over arbitrary
+        # directory contents, not validation of a file the user pointed at,
+        # so one bad file must not abort the scan (see BL-002).
         return False
     upper_names = [n for n in names if n.isupper()]
     return len(upper_names) >= MIN_CONFIG_VARS

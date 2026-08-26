@@ -5,6 +5,7 @@ import ast
 import os
 from typing import Dict, Set, Union
 
+from ..core.exceptions import EnvShieldException
 from ._base import BaseParser
 
 
@@ -38,10 +39,16 @@ class PythonParser(BaseParser):
                             # We only care about simple name assignments (e.g., VAR = ...)
                             if isinstance(target, ast.Name):
                                 variables[target.id] = self._resolve_value(node.value)
-            except (SyntaxError, TypeError) as e:
-                # Handle cases where the file is not valid Python
-                print(f"Warning: Could not parse Python file '{file_path}': {e}")
-                return {} if get_values else set()
+            except (SyntaxError, TypeError, UnicodeDecodeError) as e:
+                # A malformed or non-UTF-8 file can never safely be treated
+                # as "declares nothing" -- every caller that diffs this
+                # result against a schema would silently read that as a
+                # false-clean (see BL-002/BL-092). Raise instead, matching
+                # DockerComposeParser.get_vars's existing pattern for the
+                # equivalent case. str(e) only -- never an attribute like
+                # SyntaxError.text -- so the file's actual content, which
+                # may contain a secret value, is never echoed here.
+                raise EnvShieldException(f"Could not parse '{file_path}': {e}")
 
         return variables if get_values else set(variables.keys())
 

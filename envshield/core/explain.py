@@ -140,7 +140,7 @@ def _manifest_references(
             continue
         try:
             declared_vars = parser.get_vars(path, get_values=False)
-        except (FileNotFoundError, OSError, ValueError) as e:
+        except (FileNotFoundError, OSError, ValueError, EnvShieldException) as e:
             references.append(
                 ManifestReference(
                     path=path, container=container, status="error", detail=str(e)

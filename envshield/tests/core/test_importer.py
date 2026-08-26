@@ -544,6 +544,30 @@ def test_merge_variables_from_other_sources_adds_only_new_keys(tmp_path):
     assert schema_dict["DEBUG"]["type"] == "bool"
 
 
+def test_merge_variables_from_other_sources_skips_a_malformed_source(tmp_path):
+    """
+    BL-002 regression: one malformed '.py' source must be skipped, not
+    abort the whole merge -- the other, well-formed source's variables
+    still get added. discover_python_env_vars returns [] for invalid
+    Python (never raises), so this falls through to PythonParser.get_vars,
+    which now raises EnvShieldException; the loop must catch it and
+    continue.
+    """
+    broken_file = tmp_path / "broken.py"
+    broken_file.write_text("SECRET_KEY =")  # unterminated -- invalid syntax
+    good_file = tmp_path / "settings.py"
+    good_file.write_text("LOG_LEVEL = 'info'\n")
+    schema_dict = {}
+
+    added = importer.merge_variables_from_other_sources(
+        schema_dict, [str(broken_file), str(good_file)]
+    )
+
+    assert str(broken_file) not in added
+    assert added == {str(good_file): ["LOG_LEVEL"]}
+    assert schema_dict["LOG_LEVEL"]["defaultValue"] == "info"
+
+
 def test_generate_schema_from_file_does_not_leak_a_sentry_style_dsn(tmp_path):
     """
     Regression, confirmed via real onboarding testing: a DSN-style value

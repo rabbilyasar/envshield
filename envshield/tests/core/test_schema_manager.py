@@ -494,6 +494,30 @@ def test_check_result_json_flags_defaulted_vars_missing_from_local(
     assert result["missing"] == ["LOG_LEVEL"]
 
 
+def test_check_result_reports_a_structured_error_for_a_malformed_python_local_file(
+    tmp_path, monkeypatch
+):
+    """
+    BL-002 regression, unit-level: check_result already has an
+    except (ValueError, EnvShieldException) handler that produces this
+    exact structured-error shape -- this locks in that PythonParser.get_vars
+    now actually raises into it, instead of silently returning {} and
+    letting the dict below report a false 'clean'.
+    """
+    monkeypatch.chdir(tmp_path)
+    config_manager.add_service("app", SCHEMA_FILE_NAME)
+    with open(SCHEMA_FILE_NAME, "w") as f:
+        f.write("")  # empty schema -- the exact shape that used to false-clean
+    with open("config.py", "w") as f:
+        f.write("API_KEY = ")  # unterminated -- invalid syntax
+
+    result = schema_manager.check_result("config.py", service_name="app")
+
+    assert result["clean"] is False
+    assert "error" in result
+    assert "config.py" in result["error"]
+
+
 class TestUnresolvedSource:
     """
     Regression coverage for the Kubernetes envFrom external-reference gap:

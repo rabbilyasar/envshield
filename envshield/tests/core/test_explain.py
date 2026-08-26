@@ -272,6 +272,32 @@ class TestManifestReferences:
 
         assert report.manifest_references[0].status == "unresolved"
 
+    def test_a_malformed_manifest_is_reported_as_a_structured_error(
+        self, tmp_path, monkeypatch
+    ):
+        """
+        BL-002 regression: a manifest EnvShield can't parse must surface as
+        one 'error' entry in the report, not propagate EnvShieldException
+        out of build_report entirely and abort the whole command. Uses a
+        '.py' file registered as a manifest -- get_parser resolves by
+        extension regardless of the file's intended role, so this is a
+        real, reachable path even though it's an unusual one.
+        """
+        monkeypatch.chdir(tmp_path)
+        _write_root_service()
+        config_manager.add_manifest("broken_manifest.py", {"app": "app"})
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[API_KEY]\ndescription = "x"\n')
+        with open("broken_manifest.py", "w") as f:
+            f.write("API_KEY =")  # unterminated -- invalid syntax
+
+        report = explain.build_report("API_KEY", "app")
+
+        assert len(report.manifest_references) == 1
+        ref = report.manifest_references[0]
+        assert ref.status == "error"
+        assert "broken_manifest.py" in ref.detail
+
     def test_no_manifests_registered_reports_an_empty_list(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         _write_root_service()

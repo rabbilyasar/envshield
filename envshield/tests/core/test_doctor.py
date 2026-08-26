@@ -363,6 +363,41 @@ def test_check_config_source_drift_passes_when_no_other_source_exists(
     assert passed is True, message
 
 
+def test_check_config_source_drift_skips_a_malformed_other_source(
+    tmp_path, monkeypatch, mocker
+):
+    """
+    BL-002 regression: a malformed 'other source' must be skipped, not
+    abort the whole health check via HealthCheck.run()'s coarser outer
+    EnvShieldException catch. In practice find_other_config_sources already
+    filters a malformed candidate out via _looks_like_python_config_module
+    before this loop ever sees it (see BL-002's BACKLOG entry) -- this test
+    forces the defense-in-depth path directly by mocking that discovery
+    step to return a genuinely malformed file, the same way it could reach
+    _check_config_source_drift's loop through some other future caller.
+    """
+    monkeypatch.chdir(tmp_path)
+    with open(CONFIG_FILE_NAME, "w") as f:
+        f.write(
+            "services:\n  api:\n    schema: env.schema.toml\n    config_source: .env\n"
+        )
+    with open("env.schema.toml", "w") as f:
+        f.write('[API_KEY]\ndescription="x"\nsecret=true\n')
+    with open(".env", "w") as f:
+        f.write("API_KEY=abc\n")
+    with open("broken.py", "w") as f:
+        f.write("API_KEY =")  # unterminated -- invalid syntax
+
+    mocker.patch(
+        "envshield.core.doctor.service_discovery.find_other_config_sources",
+        return_value=[str(tmp_path / "broken.py")],
+    )
+
+    passed, message = doctor._check_config_source_drift(service_name="api")
+
+    assert passed is True, message
+
+
 def test_check_config_source_drift_passes_when_no_config_source_recorded(
     tmp_path, monkeypatch
 ):

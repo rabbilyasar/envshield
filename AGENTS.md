@@ -12,12 +12,17 @@ findings, limitations, and their reproduction evidence — see
 not*; ROADMAP.md says what's *done*, *in progress*, and *next*; BACKLOG.md
 is the operational record behind both.
 
-Last revised: 2026-08-26, adding a "Versioning and Release Cadence"
-section between §22 and §23 — the durable rule that an engineering task or
-backlog item being completed must never, by itself, trigger a version
-bump or release — and correcting §4's "Release blockers" subsection,
-which still pointed at ROADMAP.md's non-existent per-finding table.
-Prior same-day revision: updating §19 to record that `BL-001` (the
+Last revised: 2026-08-26, updating §19 to record that `BL-002` (the
+`check --json`/`doctor --json` false-clean) is now fixed in code, per the
+Engineering Task Workflow — see BACKLOG.md's `BL-002` entry for the full
+account, including the two related findings (`BL-092` fixed, `BL-093`
+left open) discovered alongside it. Prior same-day revision: adding a
+"Versioning and Release Cadence" section between §22 and §23 — the
+durable rule that an engineering task or backlog item being completed
+must never, by itself, trigger a version bump or release — and correcting
+§4's "Release blockers" subsection, which still pointed at ROADMAP.md's
+non-existent per-finding table. Prior same-day revision: updating §19 to
+record that `BL-001` (the
 secret-plus-`defaultValue` leak) is now fixed in code, following the
 first implementation pass done under this charter's own new Engineering
 Task Workflow — see BACKLOG.md's `BL-001` entry for the full account.
@@ -695,18 +700,23 @@ against current code, exactly the class of issue it claimed didn't exist:
   report and this section's prior wording didn't name).
 - Three P1s — malformed Python config breaks the `check --json`/
   `doctor --json` machine-readable contract and can produce
-  `"success": true` (`BL-002`, a false-clean); generated TypeScript's
-  `z.coerce.boolean()` turns the string `"false"` into `true` at runtime
-  (`BL-003`); `scan`/`scan --staged` fail open on files over 1MB, reporting
-  `clean: true` while silently skipping the one file that mattered
-  (`BL-004`). All three remain open as of this revision.
+  `"success": true` (`BL-002`, a false-clean). **Fixed 2026-08-26**
+  (code committed locally, not yet released — see `BL-002`'s own entry;
+  the same investigation also found and fixed `BL-092`, an uncaught crash
+  on a binary/non-UTF-8 `.py` file in the same function, and left
+  `BL-093`, a lower-confidence sibling gap in the Kubernetes parser, open
+  as `NEEDS_EVIDENCE`). Generated TypeScript's `z.coerce.boolean()` turns
+  the string `"false"` into `true` at runtime (`BL-003`); `scan`/
+  `scan --staged` fail open on files over 1MB, reporting `clean: true`
+  while silently skipping the one file that mattered (`BL-004`). Both
+  remain open as of this revision.
 
 Per this section's own release philosophy below, each independently
 answers "yes" to "can this produce secret leakage" or "can this produce a
 silent false-clean" — **v4.6.0 must not be treated as release-ready, and
 no new release should be prepared, until `BL-001` through `BL-004` are
-resolved** (`BL-001` is fixed but not yet released; `BL-002`–`BL-004`
-still need both). The documentation/
+resolved** (`BL-001` and `BL-002` are fixed but not yet released;
+`BL-003`/`BL-004` still need both). The documentation/
 positioning pass this section previously described as having "closed out"
 the audit — README's `secret`-field wording and new Known Limitations
 section, the CLI tagline, CHANGELOG's Python-vs-JS/TS discovery wording,
