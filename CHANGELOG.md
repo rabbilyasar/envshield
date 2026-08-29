@@ -18,9 +18,29 @@ letting `--fail-on` exit `0` on it.
   `explain`'s output, and `check`'s "Missing in Local" table — every one of
   them a surface `secret` exists to keep values out of, and the first three
   committed to the repository. Such a schema is now refused at load, naming the
-  offending fields but never their values. **This is the one change that can
-  make a previously-loading schema fail:** remove the `defaultValue`, or unset
-  `secret` if the value genuinely isn't sensitive.
+  offending fields but never their values. To upgrade: remove the
+  `defaultValue`, or unset `secret` if the value genuinely isn't sensitive.
+
+### Upgrade impact
+Every change below fixes a defect, and none removes a command, flag, or output
+field. But four of them necessarily make EnvShield refuse or fail something it
+previously accepted, because accepting it was the bug. Read these before
+upgrading a green pipeline:
+- A schema with `secret = true` **and** a real `defaultValue` no longer loads
+  (see Security above). Every command that reads that schema will now fail
+  until it is corrected.
+- `scan --staged` and `scan --json` now **exit non-zero when coverage was
+  incomplete**, even with zero findings. A pre-commit hook or CI job that was
+  passing over silently-skipped large files will now fail — which is the point,
+  but it is a behavior change on upgrade.
+- `scan`'s JSON gains a `complete` field alongside `clean`. Additive; a
+  consumer asserting exact-dict equality on the result would need updating.
+- Regenerated TypeScript config now **rejects** values outside
+  `true`/`false`, where `z.coerce.boolean()` previously coerced anything
+  non-empty to `true`. Already-generated files are untouched until you re-run
+  `envshield generate`.
+- A malformed or unreadable Python config file is now a hard error rather than
+  a warning plus an empty result.
 
 ### Fixed
 - **`envshield schema diff` with no arguments compared the wrong way round.**
@@ -64,7 +84,11 @@ letting `--fail-on` exit `0` on it.
 - **Generated TypeScript turned the string `"false"` into `true`.**
   `z.coerce.boolean()` is JavaScript's truthiness coercion, so every non-empty
   string — including `"false"` and `"no"` — became `true` at runtime, inverting
-  the declared intent of a boolean variable. Generated Python was unaffected.
+  the declared intent of a boolean variable. A `bool` field now generates a
+  parser accepting only a case-insensitive `"true"`/`"false"` and rejecting
+  anything else, matching `schema_types.validate_value` exactly — so a value
+  that was previously coerced to `true` is now a validation error. Generated
+  Python was unaffected.
 
 ### Known limitations
 Unchanged in this release, and documented here so they aren't mistaken for
