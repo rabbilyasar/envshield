@@ -38,7 +38,13 @@ class TestSchemaDiffRevisionPairing:
             assert result.exit_code == 1
             assert "both revisions, or neither" in result.stdout
 
-    def test_no_arguments_compares_working_tree_against_head(self, tmp_path):
+    def test_no_arguments_compares_head_against_the_working_tree(self, tmp_path):
+        """
+        Name corrected alongside the direction fix: this test only ever
+        asserted that both variable names appear, which is true in either
+        direction -- see TestNoArgumentDiffDirection for the assertions
+        that actually pin the direction down.
+        """
         with runner.isolated_filesystem(temp_dir=tmp_path):
             _init_repo()
             _write("envshield.yml", "services:\n  api:\n    schema: env.schema.toml\n")
@@ -50,6 +56,138 @@ class TestSchemaDiffRevisionPairing:
 
             assert "NEW" in result.stdout
             assert "OLD" in result.stdout
+
+
+class TestNoArgumentDiffDirection:
+    """
+    Regression: the no-argument form used to pass the *working tree* as
+    diff_schemas' left (baseline) operand and HEAD as its right,
+    reporting every uncommitted change inside out -- a newly added
+    variable came back as "removed / informational" and a deleted one as
+    "added". Because a required addition is the single change the
+    command most needs to classify as breaking, the inversion also made
+    'has_breaking_changes' false and let --fail-on pass on a genuinely
+    breaking uncommitted change: a silent false-clean, in exactly the
+    pre-commit position this form is meant for.
+
+    The no-argument form must mean HEAD -> working tree, matching both
+    the documented wording and 'undeclared's identical default.
+    """
+
+    @staticmethod
+    def _repo_with_uncommitted_required_addition():
+        """HEAD declares OLD_VAR (defaulted); the working tree replaces it with NEW_VAR (required)."""
+        _init_repo()
+        _write("envshield.yml", "services:\n  api:\n    schema: env.schema.toml\n")
+        _write(
+            "env.schema.toml",
+            '[OLD_VAR]\ndescription = "old"\ntype = "string"\ndefaultValue = "x"\n',
+        )
+        _commit("v1")
+        _write(
+            "env.schema.toml",
+            '[NEW_VAR]\ndescription = "new"\ntype = "string"\nrequired = true\n',
+        )
+
+    def test_an_uncommitted_required_addition_is_breaking(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._repo_with_uncommitted_required_addition()
+
+            result = runner.invoke(app, ["schema", "diff", "--json"])
+            payload = json.loads(result.stdout)
+
+            assert payload["has_breaking_changes"] is True
+            changes = {c["variable"]: c for c in payload["results"][0]["changes"]}
+            assert changes["NEW_VAR"]["category"] == "breaking"
+            assert "was added" in changes["NEW_VAR"]["description"]
+
+    def test_an_uncommitted_removal_is_reported_as_a_removal(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._repo_with_uncommitted_required_addition()
+
+            result = runner.invoke(app, ["schema", "diff", "--json"])
+            payload = json.loads(result.stdout)
+
+            changes = {c["variable"]: c for c in payload["results"][0]["changes"]}
+            assert changes["OLD_VAR"]["category"] == "informational"
+            assert changes["OLD_VAR"]["detail"] == {"removed": True}
+
+    def test_json_labels_head_as_the_baseline_side(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._repo_with_uncommitted_required_addition()
+
+            result = runner.invoke(app, ["schema", "diff", "--json"])
+            payload = json.loads(result.stdout)
+
+            assert payload["results"][0]["revision_a"] == "HEAD"
+            assert payload["results"][0]["revision_b"] == "working tree"
+
+    def test_human_output_labels_head_as_the_baseline_side(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._repo_with_uncommitted_required_addition()
+
+            result = runner.invoke(app, ["schema", "diff"])
+
+            assert "'HEAD' -> 'working tree'" in result.stdout
+
+    def test_fail_on_blocks_an_uncommitted_breaking_change(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._repo_with_uncommitted_required_addition()
+
+            result = runner.invoke(app, ["schema", "diff"])
+
+            assert result.exit_code == 1
+
+    def test_an_uncommitted_defaulted_addition_stays_non_breaking(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            _init_repo()
+            _write("envshield.yml", "services:\n  api:\n    schema: env.schema.toml\n")
+            _write("env.schema.toml", '[KEPT]\ndescription = "k"\n')
+            _commit("v1")
+            _write(
+                "env.schema.toml",
+                '[KEPT]\ndescription = "k"\n\n'
+                '[ADDED]\ndescription = "a"\ntype = "string"\ndefaultValue = "d"\n',
+            )
+
+            result = runner.invoke(app, ["schema", "diff", "--json"])
+            payload = json.loads(result.stdout)
+
+            assert payload["has_breaking_changes"] is False
+            changes = {c["variable"]: c for c in payload["results"][0]["changes"]}
+            assert changes["ADDED"]["category"] == "non_breaking"
+            assert result.exit_code == 0
+
+    def test_it_agrees_with_the_equivalent_explicit_two_revision_form(self, tmp_path):
+        """
+        The two forms must classify the same underlying change
+        identically -- the explicit form was already correct, so
+        committing the working tree and diffing HEAD~1..HEAD must yield
+        the same categories the no-argument form reported beforehand.
+        """
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._repo_with_uncommitted_required_addition()
+
+            implicit = json.loads(
+                runner.invoke(app, ["schema", "diff", "--json"]).stdout
+            )
+            _commit("v2")
+            explicit = json.loads(
+                runner.invoke(
+                    app, ["schema", "diff", "HEAD~1", "HEAD", "--json"]
+                ).stdout
+            )
+
+            def categories(payload):
+                return {
+                    c["variable"]: c["category"]
+                    for c in payload["results"][0]["changes"]
+                }
+
+            assert categories(implicit) == categories(explicit)
+            assert (
+                implicit["has_breaking_changes"] == explicit["has_breaking_changes"]
+            )
 
     def test_two_explicit_revisions_are_compared(self, tmp_path):
         with runner.isolated_filesystem(temp_dir=tmp_path):

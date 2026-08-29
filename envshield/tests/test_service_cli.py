@@ -440,3 +440,110 @@ class TestGitBoundaryPreventsFalseCleanAcrossNestedRepos:
             doctor_result = runner.invoke(app, ["doctor", "--json"])
             doctor_payload = json.loads(doctor_result.stdout)
             assert doctor_payload["results"][0]["service"] == "edge"
+
+
+class TestPythonLocalFileSurfaceIsDefinedOnce:
+    """
+    Regression: a Python config module registered as a service's
+    'local_file' had its schema seeded by 'import' using one definition
+    of "this file's configuration surface" (environment reads discovered
+    anywhere in the file) while 'check' subsequently validated that same
+    file using a different, disjoint one (top-level assignments -- the
+    format PythonParser exists for, and the format
+    service_discovery._looks_like_python_config_module used to recognise
+    the file as a config module in the first place).
+
+    The two rules only ever agree by luck. On a real 'config as code'
+    module -- literal assignments, plus a couple of `os.environ` reads
+    guarding local overrides -- they disagree completely: the schema was
+    seeded with just the handful of read names, and 'check' then
+    reported every genuine assignment as "Extra in Local" and the seeded
+    names as "Missing in Local". A first run that is wrong in both
+    directions at once.
+
+    The rule is now chosen by the file's ROLE, not guessed from its
+    contents: a file being registered as this service's local values
+    file is read exactly the way every command that consumes a local
+    values file reads it. 'import' on some other Python file (a settings
+    module that genuinely resolves its config from the environment)
+    keeps its existing discovery behaviour -- see
+    test_importer.py for that side.
+    """
+
+    LOCAL_CONFIG_MODULE = (
+        "import os\n"
+        "\n"
+        'API_ADMIN_TOKEN = "abc123"\n'
+        'DB_NAME = "app"\n'
+        'DB_USER = ""\n'
+        'EMAIL_FROM_ADDRESS = "support@example.com"\n'
+        "\n"
+        '# Local overrides -- the only os.environ reads in the whole file.\n'
+        'if os.environ.get("USE_LOCAL_DB") == "yes":\n'
+        '    DB_HOST = "db"\n'
+    )
+
+    def _service_with_python_local_file(self):
+        os.makedirs("api/config")
+        with open("api/config/env_config.local.py", "w") as f:
+            f.write(self.LOCAL_CONFIG_MODULE)
+        return runner.invoke(
+            app,
+            [
+                "service",
+                "add",
+                "api",
+                "api",
+                "--local-file",
+                "api/config/env_config.local.py",
+                "--import",
+                "api/config/env_config.local.py",
+            ],
+        )
+
+    def test_seeded_schema_covers_the_modules_real_assignments(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            result = self._service_with_python_local_file()
+
+            assert result.exit_code == 0
+            schema = config_manager.load_schema("api")
+            assert {
+                "API_ADMIN_TOKEN",
+                "DB_NAME",
+                "DB_USER",
+                "EMAIL_FROM_ADDRESS",
+            } <= set(schema)
+
+    def test_check_reports_no_drift_against_the_file_it_was_seeded_from(
+        self, tmp_path
+    ):
+        """
+        The property that actually matters: seeding a schema from a file
+        and immediately validating that same, unmodified file must not
+        invent drift in either direction.
+        """
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._service_with_python_local_file()
+
+            result = runner.invoke(app, ["check", "--service", "api", "--json"])
+            payload = json.loads(result.stdout)
+            local = next(
+                r
+                for r in payload["results"]
+                if r["file"] == "api/config/env_config.local.py"
+            )
+
+            assert local["extra"] == []
+            assert local["missing"] == []
+
+    def test_a_secret_looking_assignment_is_still_classified_as_secret(
+        self, tmp_path
+    ):
+        """Seeding by role must not bypass the importer's secret classification."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._service_with_python_local_file()
+
+            schema = config_manager.load_schema("api")
+
+            assert schema["API_ADMIN_TOKEN"]["secret"] is True
+            assert "defaultValue" not in schema["API_ADMIN_TOKEN"]

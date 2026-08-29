@@ -147,7 +147,9 @@ def _is_oversized_for_default(value: str) -> bool:
     return len(value) > MAX_SCANNABLE_SIZE_BYTES
 
 
-def _discover_python_variables(file_path: str) -> Dict[str, str]:
+def _discover_python_variables(
+    file_path: str, as_local_values: bool = False
+) -> Dict[str, str]:
     """
     Variable discovery for a '.py' source, specifically for
     generate_schema_from_file/merge_variables_from_other_sources -- NOT
@@ -157,6 +159,22 @@ def _discover_python_variables(file_path: str) -> Dict[str, str]:
     IS the real, final value) and must stay exactly as-is for its own,
     different, already-correct callers (setup_manager, schema_manager,
     doctor, explain, service_discovery).
+
+    `as_local_values=True` says the caller already knows this file's
+    role: it is being registered as (or seeded from) a service's own
+    local values file, the exact format PythonParser reads. The content
+    heuristic below is then not merely unnecessary but wrong -- whatever
+    it decides, every command that later consumes this file
+    ('check'/'doctor'/'setup'/'schema sync') will read it with
+    PythonParser, so seeding the schema any other way defines the same
+    file's configuration surface twice, incompatibly. A real config-as-
+    code module (dozens of literal assignments, plus a couple of
+    `os.environ` reads guarding local overrides) is exactly where the
+    two rules diverge hardest, and it is precisely the shape
+    service_discovery recognises as a config module in the first place
+    -- using PythonParser's own definition to do so. Role beats
+    guessing: this parameter carries the decision that was already made
+    rather than re-deriving a different one from the bytes.
 
     Prefers discovery.discover_python_env_vars -- the same AST engine
     'undeclared'/'explain' use for real os.environ.get/os.getenv/
@@ -179,6 +197,10 @@ def _discover_python_variables(file_path: str) -> Dict[str, str]:
     overwrites it, and conflicting defaults between reads are never
     reconciled.
     """
+    if as_local_values:
+        parser = get_parser(file_path)
+        return parser.get_vars(file_path, get_values=True) if parser else {}
+
     with open(file_path, "r") as f:
         content = f.read()
 
@@ -199,6 +221,7 @@ def generate_schema_from_file(
     file_path: str,
     interactive: bool = False,
     existing_schema: Optional[Dict[str, Any]] = None,
+    as_local_values: bool = False,
 ) -> str:
     """
     Reads an environment file and generates a TOML schema string, with an
@@ -218,13 +241,20 @@ def generate_schema_from_file(
     asked about that exact variable above, so their live answer wins
     instead -- keeping the stale existing entry would defeat the entire
     point of `--interactive` re-classification.
+
+    `as_local_values` is passed through to `_discover_python_variables`
+    for a '.py' source: set it when this file is the service's own local
+    values file, so the schema is seeded from the same configuration
+    surface every command that later reads that file will see. It has no
+    effect on any other file format -- a dotenv file or a deployment
+    manifest has only ever had one reading.
     """
     if not os.path.exists(file_path):
         raise EnvShieldException(f"Input file not found at: {file_path}")
 
     commented_out_count = 0
     if file_path.endswith(".py"):
-        variables = _discover_python_variables(file_path)
+        variables = _discover_python_variables(file_path, as_local_values)
     else:
         parser = get_parser(file_path)
         if not parser:

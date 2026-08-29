@@ -103,11 +103,27 @@ hook_app = typer.Typer(
 app.add_typer(hook_app, name="hook")
 
 
-def _seed_schema_from_file(config_file: str, schema_path: str) -> None:
-    """Writes a schema at `schema_path` generated from `config_file`'s real values, unless one already exists there."""
+def _seed_schema_from_file(
+    config_file: str, schema_path: str, local_file: Optional[str] = None
+) -> None:
+    """
+    Writes a schema at `schema_path` generated from `config_file`'s real
+    values, unless one already exists there.
+
+    `local_file` is the path this service is being registered with as its
+    own local values file, when there is one. Seeding from that same file
+    means its configuration surface must be read the way every command
+    that later consumes it reads it -- see
+    importer._discover_python_variables. Seeding from anything else (a
+    template, a settings module the user pointed `--import` at) keeps the
+    importer's own default reading.
+    """
     if os.path.exists(schema_path):
         return
-    content = importer.generate_schema_from_file(config_file)
+    content = importer.generate_schema_from_file(
+        config_file,
+        as_local_values=(local_file is not None and config_file == local_file),
+    )
     with open(schema_path, "w") as f:
         f.write(content)
 
@@ -1142,7 +1158,7 @@ def schema_diff(
     rev_a: Optional[str] = typer.Argument(
         None,
         metavar="[REV_A]",
-        help="First revision. Omit both REV_A and REV_B to compare the working tree against HEAD.",
+        help="Baseline revision. Omit both REV_A and REV_B to compare HEAD against your current working tree (uncommitted changes, staged or not).",
     ),
     rev_b: Optional[str] = typer.Argument(
         None, metavar="[REV_B]", help="Second revision."
@@ -1173,8 +1189,8 @@ def schema_diff(
     """
     Compares a service's schema contract between two Git revisions --
     added/removed/changed variables, classified as breaking, security-
-    sensitive, or informational. With no arguments, compares the current
-    working tree against HEAD (uncommitted changes, staged or not).
+    sensitive, or informational. With no arguments, compares HEAD against
+    your current working tree (uncommitted changes, staged or not).
 
     Exits non-zero when any change falls in a --fail-on category (default:
     breaking, security, requires_review) -- see 'envshield schema diff
@@ -1183,7 +1199,7 @@ def schema_diff(
     if (rev_a is None) != (rev_b is None):
         message = (
             "pass both revisions, or neither -- 'envshield schema diff' alone "
-            "compares the working tree against HEAD."
+            "compares HEAD against your current working tree."
         )
         if json_output:
             print(
@@ -1225,8 +1241,18 @@ def schema_diff(
 
     explicit_revisions = rev_a is not None
     if rev_a is None and rev_b is None:
-        left_revision, right_revision = None, "HEAD"
-        left_label, right_label = "working tree", "HEAD"
+        # HEAD is the BASELINE and the working tree is the target -- the
+        # same direction as the explicit two-revision form (older on the
+        # left), as 'undeclared's identical default, and as this
+        # command's own documented wording. Passing these the other way
+        # round reports every uncommitted change inside out: an added
+        # variable comes back "removed / informational" and a required
+        # addition stops counting as breaking at all, so --fail-on lets
+        # it through -- a silent false-clean in the pre-commit position
+        # this form exists for. `None` means the live working tree; see
+        # schema_snapshot.load_schema_for_diff.
+        left_revision, right_revision = "HEAD", None
+        left_label, right_label = "HEAD", "working tree"
     else:
         # The mismatched-pair case already exited above -- both are
         # guaranteed non-None here.
@@ -1923,7 +1949,7 @@ def service_add(
                     f"[yellow]'{schema_path}' already exists -- not overwriting. Run 'envshield import {import_from} --service {name} --force' to regenerate it.[/yellow]"
                 )
             else:
-                _seed_schema_from_file(import_from, schema_path)
+                _seed_schema_from_file(import_from, schema_path, local_file)
                 console.print(
                     f"[bold green]✓[/bold green] Seeded schema from [bold cyan]{import_from}[/bold cyan]"
                 )
@@ -2102,7 +2128,7 @@ def service_discover(
             c["local_file"] or c["example_file"] or os.path.join(c["dir"], ".env")
         )
         if os.path.exists(config_file) and not os.path.exists(schema_path):
-            _seed_schema_from_file(config_file, schema_path)
+            _seed_schema_from_file(config_file, schema_path, c["local_file"])
             console.print(f"    seeded schema from [dim]{config_file}[/dim]")
 
     console.print(
