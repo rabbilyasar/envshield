@@ -272,8 +272,19 @@ _TS_HEADER = (
 )
 
 
-def _zod_base_type(field_type: str, details: dict[str, Any]) -> str:
-    """The zod builder expression for a field's declared type, before '.default()'/'.optional()' is appended."""
+def _zod_base_type(
+    field_type: str, details: dict[str, Any], default_value: Any = None
+) -> str:
+    """
+    The zod builder expression for a field's declared type, before
+    '.default()'/'.optional()' is appended.
+
+    `default_value` is consumed here for exactly one type -- 'bool' -- which
+    is the only type whose accepted *input* (a string) differs from its
+    parsed *output* (a boolean), and therefore the only one where it matters
+    which end of the chain the default sits on. Every other type renders its
+    default the ordinary way, appended by the caller.
+    """
     if field_type == "enum":
         values = schema_types.enum_values(details)
         literal = ", ".join(json.dumps(v) for v in values)
@@ -287,8 +298,22 @@ def _zod_base_type(field_type: str, details: dict[str, Any]) -> str:
         # matching schema_types._BOOL_VALUES/validate_value exactly, and
         # rejects everything else (including non-string input) the same
         # way that validator does.
+        #
+        # A default belongs on the INNER z.string(), never appended to the
+        # end of this chain. zod 3's ZodDefault re-parses the default value
+        # through the inner schema, so a trailing '.default(false)' feeds a
+        # boolean into z.string() and throws "Expected string, received
+        # boolean" every time the variable is unset -- exactly the case the
+        # default exists for. zod 4 short-circuits instead and returns the
+        # default as-is, which is why this reproduces only on zod 3. Placed
+        # here, the default is a *string* going through the same parse the
+        # environment value would take: correct, and identical, on both.
+        inner = "z.string()"
+        if default_value is not None:
+            literal = "true" if str(default_value).lower() == "true" else "false"
+            inner += f".default({json.dumps(literal)})"
         return (
-            "z.string().transform((s) => s.toLowerCase())"
+            f"{inner}.transform((s) => s.toLowerCase())"
             '.pipe(z.enum(["true", "false"])).transform((s) => s === "true")'
         )
     if field_type == "port":
@@ -353,11 +378,14 @@ def _render_ts_field(key: str, details: dict[str, Any]) -> str:
         # Preserve the exact legacy shape for a plain required string with no constraints.
         zod_type = "z.string().min(1)"
     else:
-        zod_type = _zod_base_type(field_type, details)
+        zod_type = _zod_base_type(field_type, details, default_value)
         if default_value is not None:
-            zod_type += (
-                f".default({_zod_default_literal(field_type, str(default_value))})"
-            )
+            # 'bool' already carries its default on the inner z.string() --
+            # see _zod_base_type for why it cannot be appended here.
+            if field_type != "bool":
+                zod_type += (
+                    f".default({_zod_default_literal(field_type, str(default_value))})"
+                )
         elif conditional:
             # Same reasoning as the Python side: codegen can't evaluate a
             # 'requiredIf' condition ahead of time, so the field is optional

@@ -126,10 +126,15 @@ def test_generate_typescript_infers_types_from_default_values():
 
     assert '"LOG_LEVEL": z.string().default("info"),' in content
     assert '"MAX_RETRIES": z.coerce.number().default(3),' in content
+    # The bool default sits on the inner z.string(), as a string -- not
+    # appended to the end of the chain, where zod 3 would re-parse a
+    # boolean through z.string() and throw. See
+    # TestTypeScriptBooleanCoercionMatchesTheContract for the runtime proof;
+    # this assertion previously encoded the broken trailing form.
     assert (
-        '"DEBUG": z.string().transform((s) => s.toLowerCase())'
-        '.pipe(z.enum(["true", "false"])).transform((s) => s === "true")'
-        ".default(true)," in content
+        '"DEBUG": z.string().default("true").transform((s) => s.toLowerCase())'
+        '.pipe(z.enum(["true", "false"])).transform((s) => s === "true"),'
+        in content
     )
 
     # Non-secret fields are passed through directly, not wrapped in Secret.
@@ -506,7 +511,20 @@ class MiniSchema {
   transform(fn) { return new MiniSchema((input) => fn(this._parse(input))); }
   pipe(next) { return new MiniSchema((input) => next.parse(this._parse(input))); }
   default(value) {
-    return new MiniSchema((input) => (input === undefined ? value : this._parse(input)));
+    // The two zod majors disagree here, and generated code has to be
+    // correct on both:
+    //   zod 3  -- ZodDefault substitutes the default and then parses it
+    //             THROUGH the inner schema, so a default whose type the
+    //             inner schema rejects throws on every unset variable.
+    //   zod 4  -- returns the default as-is, short-circuiting the chain.
+    // DEFAULT_REPARSE selects which is modelled; every bool matrix below
+    // is run under both, so a default that only works on one major can
+    // never pass again (this is exactly how BL-003's follow-up regression
+    // reached a release candidate undetected).
+    return new MiniSchema((input) =>
+      input === undefined
+        ? (DEFAULT_REPARSE ? this._parse(value) : value)
+        : this._parse(input));
   }
   optional() {
     return new MiniSchema((input) => (input === undefined ? undefined : this._parse(input)));
@@ -544,14 +562,39 @@ def _to_js_literal(value) -> str:
 
 
 def _run_bool_matrix(tmp_path, expr: str, inputs: list) -> dict:
-    """Runs `expr.parse(input)` (via the mini-zod stand-in above) for every
+    """
+    Runs `expr.parse(input)` (via the mini-zod stand-in above) for every
     input in `inputs`, returning {JSON-stringified-input: "ok:<value>" |
     "rejected"}. A real SyntaxError/crash in `expr` itself surfaces as a
     non-zero exit with a Python-side assertion failure, distinct from a
-    controlled per-input rejection."""
+    controlled per-input rejection.
+
+    Every matrix is run twice -- once under each zod major's '.default()'
+    semantics (see _MINI_ZOD_JS) -- and the two runs must agree exactly.
+    Generated code has no way to know which major the consuming project
+    installed, so an expression that behaves differently between them is a
+    defect regardless of which one happens to be "right": that is precisely
+    how a trailing '.default(false)' on the bool chain, correct on zod 4 and
+    throwing on zod 3, reached a release candidate. Callers get dual-major
+    coverage without having to ask for it.
+    """
+    zod3 = _run_bool_matrix_under(tmp_path, expr, inputs, reparse=True)
+    zod4 = _run_bool_matrix_under(tmp_path, expr, inputs, reparse=False)
+    assert zod3 == zod4, (
+        "generated expression behaves differently across zod majors -- "
+        f"zod 3 (default re-parsed): {zod3}; zod 4 (default returned as-is): {zod4}"
+    )
+    return zod3
+
+
+def _run_bool_matrix_under(
+    tmp_path, expr: str, inputs: list, *, reparse: bool
+) -> dict:
+    """One matrix run under a single major's '.default()' semantics."""
     js_inputs = "[" + ", ".join(_to_js_literal(v) for v in inputs) + "]"
     script = (
-        _MINI_ZOD_JS
+        f"const DEFAULT_REPARSE = {'true' if reparse else 'false'};\n"
+        + _MINI_ZOD_JS
         + f"\nconst _schema = {expr};\n"
         + f"const _inputs = {js_inputs};\n"
         + "const _results = {};\n"
@@ -566,7 +609,7 @@ def _run_bool_matrix(tmp_path, expr: str, inputs: list) -> dict:
         "}\n"
         "console.log(JSON.stringify(_results));\n"
     )
-    script_path = tmp_path / "bool_matrix.js"
+    script_path = tmp_path / f"bool_matrix_{'zod3' if reparse else 'zod4'}.js"
     script_path.write_text(script)
     result = subprocess.run(
         ["node", str(script_path)], capture_output=True, text=True
@@ -659,6 +702,82 @@ class TestTypeScriptBooleanCoercionMatchesTheContract:
         assert results["123"] == "rejected"
         assert results["true"] == "rejected"
         assert results["undefined"] == "rejected"
+
+    def test_a_defaulted_bool_defaults_correctly_under_zod3_semantics(
+        self, tmp_path
+    ):
+        """
+        The BL-003 follow-up regression, pinned directly.
+
+        A trailing '.default(false)' on the bool chain works on zod 4 (which
+        returns the default untouched) and throws on zod 3 (which re-parses
+        it through the inner z.string(), receiving a boolean). Verified
+        against real zod 3.25.76 and 4.5.4: 'Expected string, received
+        boolean' on every unset variable -- a generated config module that
+        crashes at startup in exactly the case the default exists for.
+
+        The default therefore has to sit on the inner z.string(), as a
+        string, so it takes the same parse path an environment value would.
+        This test asserts the zod-3 semantics specifically; the sibling test
+        below covers zod 4, and _run_bool_matrix cross-checks every other
+        bool case against both.
+        """
+        content = generator.generate_config(
+            {
+                "FEATURE_ON": {
+                    "description": "Flag.",
+                    "defaultValue": "false",
+                    "type": "bool",
+                }
+            },
+            lang="typescript",
+        )
+        expr = _extract_field_expr(content, "FEATURE_ON")
+
+        results = _run_bool_matrix_under(tmp_path, expr, [None], reparse=True)
+
+        assert results["undefined"] == "ok:false"
+
+    def test_a_defaulted_bool_defaults_correctly_under_zod4_semantics(
+        self, tmp_path
+    ):
+        content = generator.generate_config(
+            {
+                "FEATURE_ON": {
+                    "description": "Flag.",
+                    "defaultValue": "false",
+                    "type": "bool",
+                }
+            },
+            lang="typescript",
+        )
+        expr = _extract_field_expr(content, "FEATURE_ON")
+
+        results = _run_bool_matrix_under(tmp_path, expr, [None], reparse=False)
+
+        assert results["undefined"] == "ok:false"
+
+    def test_a_defaulted_bool_never_appends_default_after_the_transform(self):
+        """
+        Structural guard for the same regression: the default must be
+        attached to the inner z.string(), never to the end of the chain,
+        where its type no longer matches what the chain accepts as input.
+        """
+        content = generator.generate_config(
+            {
+                "FEATURE_ON": {
+                    "description": "Flag.",
+                    "defaultValue": "false",
+                    "type": "bool",
+                }
+            },
+            lang="typescript",
+        )
+        expr = _extract_field_expr(content, "FEATURE_ON")
+
+        assert expr.startswith('z.string().default("false")')
+        assert not expr.endswith(".default(false)")
+        assert ".default(false)" not in expr
 
     def test_bool_field_with_default_still_defaults_correctly(self, tmp_path):
         content = generator.generate_config(
