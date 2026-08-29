@@ -87,8 +87,11 @@ upgrading a green pipeline:
   the declared intent of a boolean variable. A `bool` field now generates a
   parser accepting only a case-insensitive `"true"`/`"false"` and rejecting
   anything else, matching `schema_types.validate_value` exactly — so a value
-  that was previously coerced to `true` is now a validation error. Generated
-  Python was unaffected.
+  that was previously coerced to `true` is now a validation error. A bool
+  field's default is emitted on the inner `z.string()` rather than appended
+  to the chain, because zod 3 re-parses a default through the inner schema
+  while zod 4 returns it as-is; the generated output is verified identical on
+  zod 3.25.76 and zod 4.5.4. Generated Python was unaffected.
 
 ### Known limitations
 Unchanged in this release, and documented here so they aren't mistaken for
