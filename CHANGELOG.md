@@ -2,6 +2,88 @@
 
 All notable changes to this project are documented in this file.
 
+## [4.6.1] - 2026-08-30
+
+A security and correctness patch. It carries the first release of four fixes
+that were committed after 4.6.0 was tagged but never published, plus two found
+by a production-repository adoption audit — most importantly, `envshield
+schema diff` with no arguments reported the contract diff backwards in 4.6.0,
+classifying a newly added *required* variable as a non-breaking removal and
+letting `--fail-on` exit `0` on it.
+
+### Security
+- **A schema field marked `secret = true` with a real `defaultValue` no longer
+  loads.** That value was previously written verbatim into `.env.example`,
+  generated Python (`pydantic-settings`), generated TypeScript (`zod`),
+  `explain`'s output, and `check`'s "Missing in Local" table — every one of
+  them a surface `secret` exists to keep values out of, and the first three
+  committed to the repository. Such a schema is now refused at load, naming the
+  offending fields but never their values. **This is the one change that can
+  make a previously-loading schema fail:** remove the `defaultValue`, or unset
+  `secret` if the value genuinely isn't sensitive.
+
+### Fixed
+- **`envshield schema diff` with no arguments compared the wrong way round.**
+  It passed the working tree as the baseline and `HEAD` as the target, so every
+  uncommitted change was reported inverted: a newly added variable came back as
+  `removed` / `informational`, and a deleted one as `added`. Because a required
+  addition is the change this command most needs to classify as breaking, the
+  inversion also made `has_breaking_changes` report `false` and let `--fail-on`
+  exit `0` on a genuinely breaking uncommitted change — a silent false-clean in
+  exactly the pre-commit position the no-argument form exists for. It now means
+  `HEAD` -> working tree, matching the explicit two-revision form and
+  `envshield undeclared`'s identical default. The explicit
+  `schema diff REV_A REV_B` form was never affected.
+- **Seeding a service's schema from a Python config module used a different
+  definition of that file than `check` did.** When `envshield service discover`
+  or `service add --import` seeded a schema from the same file it was
+  registering as that service's `local_file`, the importer read it for
+  environment *reads* while `check`/`doctor`/`setup`/`schema sync` subsequently
+  read it for top-level *assignments*. On a real config-as-code module — many
+  literal assignments plus a couple of `os.environ` reads guarding local
+  overrides — the two disagreed completely, and the first `check` after
+  adoption reported nearly every variable as both extra and missing. The
+  reading is now chosen by the file's role, so a file registered as a local
+  values file is seeded the same way every command that consumes it reads it.
+  Standalone `envshield import` on a settings module that genuinely resolves
+  its config from the environment is unchanged, and only *newly* seeded
+  schemas are affected — an existing schema file is never rewritten.
+- **A malformed or non-UTF-8 Python config file could produce a false clean.**
+  `PythonParser` swallowed the parse failure, printed a warning to stdout, and
+  returned an empty result — so `check --json` / `doctor --json` emitted a
+  warning line *before* the JSON document (breaking `json.loads` on the output
+  entirely) and, against a schema whose fields all have defaults, could report
+  `"success": true` for a local file that could not be read at all. A parse
+  failure is now a structured error with a non-zero exit, and a binary file no
+  longer crashes with an uncaught `UnicodeDecodeError`.
+- **`scan` reported `clean: true` while silently skipping files it never
+  read.** Files over 1 MB were skipped without being counted, so a secret in a
+  large file passed the pre-commit hook. Scan results now carry a `complete`
+  flag alongside `clean`, incomplete coverage is reported explicitly, and it is
+  fatal for `--staged` and `--json`.
+- **Generated TypeScript turned the string `"false"` into `true`.**
+  `z.coerce.boolean()` is JavaScript's truthiness coercion, so every non-empty
+  string — including `"false"` and `"no"` — became `true` at runtime, inverting
+  the declared intent of a boolean variable. Generated Python was unaffected.
+
+### Known limitations
+Unchanged in this release, and documented here so they aren't mistaken for
+regressions:
+- A schema may still declare a `defaultValue` that its own `type` rejects
+  (e.g. `type = "bool"` with `defaultValue = "no"`); `check` will report the
+  schema's own default as invalid. Model `yes`/`no` flags as
+  `enum = ["yes", "no"]`. A fix is written and held for the next minor
+  release, since rejecting such a schema would break projects that currently
+  load.
+- `docker-compose.override.yml` and other Compose *delta* files cannot be
+  registered as manifests — EnvShield validates each registered manifest as a
+  complete deployment, so an override file reports the base file's variables
+  as missing. Register only standalone manifests.
+- `undeclared` and `explain` walk a registered service's own directory only,
+  so environment reads inside a shared library that lives outside every
+  service directory are invisible to them. `scan` is repo-wide and does see
+  them. Registering the library as its own service closes the gap.
+
 ## [4.6.0] - 2026-08-19
 
 This release completes the EnvShield **V1** product milestone: the schema-to-schema
