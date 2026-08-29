@@ -97,6 +97,18 @@ need. None of these exist in any form today, and none are committed:
   monitoring, policy, audit history) and a **hosted offering** — only if
   real teams demonstrate they need them. The CLI itself stays open source
   regardless of what happens here.
+- **Optional runtime attestation** — a possible future signal from an
+  already-running process confirming which resolved contract version it
+  actually started with, purely as an observation layer. Everything
+  EnvShield validates today is a repository artifact (schema, source,
+  deployment manifests) — never the state of a running process, which is a
+  real, currently open gap this direction would address, not a settled
+  non-goal. Unexplored, not designed, and not committed: no attestation
+  mechanism, SDK, or wrapper exists today. The boundary is permanent,
+  matching the external-secret-provider boundary above: this must never
+  become a runtime config resolver, injector, proxy, secret store, or a
+  dependency any EnvShield-managed application needs at runtime to
+  function.
 
 ---
 

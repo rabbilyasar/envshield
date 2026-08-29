@@ -12,7 +12,25 @@ findings, limitations, and their reproduction evidence — see
 not*; ROADMAP.md says what's *done*, *in progress*, and *next*; BACKLOG.md
 is the operational record behind both.
 
-Last revised: 2026-08-26, updating §19 to record that `BL-002` (the
+Last revised: 2026-08-26, adding two durable architectural principles —
+§3's new "domain-layer functions must remain caller-independent" (the
+recurring root shape behind `BL-002`/`BL-004`/`BL-005`/`BL-095`) and an
+addition to the Target Architecture section requiring a future cross-cutting
+capability (e.g. a Configuration Graph) to depend on domain primitives
+directly, never on another command's private helpers — plus a "static vs.
+runtime boundary" paragraph in §7 recording that everything described there
+validates repository artifacts, not running-process state, as a real, open,
+currently-unclosed question rather than a settled non-goal. These follow a
+final evidence-reconciliation pass this same day that also closed out
+`BL-060` (the previously-unavailable "Comprehensive Technical Audit" source
+document surfaced and was reconciled claim-by-claim — most of its
+architecture/code claims describe a codebase that doesn't exist in this
+repository) and recorded two new findings from that same pass, `BL-102`
+(a real `undeclared` discovery gap for a wholesale environment spread) and
+`BL-103` (a tracking record for this session's Configuration Graph
+prototype, explicit that it establishes technical feasibility only, not
+product-market validation). Prior same-day revision: updating §19 to record
+that `BL-002` (the
 `check --json`/`doctor --json` false-clean) is now fixed in code, per the
 Engineering Task Workflow — see BACKLOG.md's `BL-002` entry for the full
 account, including the two related findings (`BL-092` fixed, `BL-093`
@@ -161,6 +179,20 @@ erode.
    `doctor`, and `setup` with no drift) and it is why the one place it broke
    down (a masking gap shared by all three callers) was a single-point fix.
    Keep it that way as new engines (discovery, deployment, graph) are added.
+6. **Domain-layer functions must remain caller-independent.** A domain
+   function's correctness must never silently depend on an assumption that
+   only happens to be true for the caller it was originally written for.
+   `BL-005` is the clearest instance: `_check_example_file_sync`'s
+   unconditional pass for a `.py` local file was correct only inside
+   `doctor`'s own multi-check composite, where a companion check catches
+   real drift — and silently wrong the moment `schema sync --check` reused
+   the same function standalone, with no companion check running alongside
+   it. The same root shape — a function's local correctness was
+   context-dependent, not universal — also produced `BL-002`, `BL-004`, and
+   `BL-095`. When reusing a domain function from a new caller, ask
+   explicitly whether its correctness depended on something only the
+   original caller supplied. A function that was correct once is not
+   thereby correct everywhere it's called from.
 
 ## Engineering Task Workflow
 
@@ -307,6 +339,17 @@ it by removing the duplicate, not by reconciling the two copies.
 This is a documentation of intent, not a mandate to rewrite what already
 works. Apply it going forward, especially as discovery/deployment/graph
 engines are built (§7).
+
+A cross-cutting capability that composes results from more than one existing
+command (a future Configuration Graph, or any similar join) must depend on
+domain/discovery/deployment primitives directly — never on another
+command's own private, presentation-adjacent helpers, even when those
+helpers already do most of the needed work. `scripts/impact_prototype.py`'s
+own design (a prototype only, not shipped — see `BL-103`) is the concrete
+precedent: it deliberately calls `config_manager`, `discovery`, and
+`parsers.factory` directly rather than importing `explain.py`'s private
+`_discover_current_usages`/`_manifest_references`, because `explain.py` is
+a peer consumer of the domain layer, not itself part of it.
 
 ---
 
@@ -486,6 +529,22 @@ services, environments, providers, and deployments. It should eventually
 answer: what uses this variable, what provides it, what breaks if it
 changes, which environments/services/developers are affected. It depends on
 Discovery (§6B) being real, not on the current regex scan.
+
+**Static vs. runtime boundary.** Everything in this section — schema,
+source discovery, deployment-manifest parsing, and the eventual
+Configuration Graph — validates repository *artifacts*: what's declared,
+what's read, what a manifest references. None of it observes the state of
+a running process. This is a real, currently open gap, not a settled
+non-goal: a deployment manifest can be validated as correctly
+*referencing* a required variable and still be wrong at apply-time (a
+stale value, a typo'd Secret, a ConfigMap that never propagated) in a way
+nothing described here can detect. Whether and how to close that gap is a
+separate, unresolved question from everything else in this section — see
+ROADMAP.md's Exploring section for the current, deliberately narrow bound
+on it — and closing it must never turn into EnvShield becoming a runtime
+configuration resolver, injector, proxy, or secret store. That boundary is
+permanent, in the same sense §2's boundary against becoming a secret vault
+is permanent.
 
 **Deployment integrity** (Docker Compose, Kubernetes, and eventually CI
 configuration) is **strategically important, not incidental** — it is one of
@@ -767,9 +826,14 @@ instruction).** `v4.6.0` was tagged and pushed to GitHub; the test job
 passed, but the publish job failed at the Sigstore attestation step
 (`RekorClientError: Rekor returned an unknown error with HTTP 502` —
 confirmed directly from the workflow log; external Sigstore infrastructure,
-not a package or test failure). PyPI's currently published version is
-therefore still `4.5.1` — `v4.6.0` exists as a pushed tag/GitHub state but
-is not yet live on PyPI. Do not recreate or modify the `v4.6.0` tag, bump
+not a package or test failure). **Corrected 2026-08-30: this paragraph
+previously concluded "PyPI's currently published version is therefore still
+`4.5.1`." That is no longer true and should not be relied on — `pip index
+versions envshield` reports `4.6.0` as both INSTALLED-candidate and LATEST,
+and `pip install envshield` into a clean venv yields `4.6.0`. `v4.6.0` is
+published and live on PyPI. The failed Sigstore step evidently did not
+prevent (or was later superseded by) a successful publish; exactly how is
+unrecorded.** Do not recreate or modify the `v4.6.0` tag, bump
 the version, or rerun the publish workflow without explicit instruction —
 resolving that failed publish is a separate release operation from any
 documentation or roadmap work. Five further engineering fixes (3.2/3.3/3.5,
