@@ -2,6 +2,40 @@
 
 All notable changes to this project are documented in this file.
 
+## [4.6.2] - 2026-08-30
+
+A correctness patch. Fixes a silent false-clean in `schema sync --check` —
+and, because the installed pre-commit hook calls nothing else for this
+check, in the hook itself — for any service whose local configuration file
+is a Python module.
+
+### Upgrade impact
+`schema sync --check` and the pre-commit hook now actually inspect whether
+a Python-based local configuration file (`local_file` ending in `.py`)
+covers the schema's declared variables, instead of always reporting
+success. A project that was relying on this check passing, rather than on
+the file genuinely being in sync, will now see it correctly fail until the
+file is updated — this is the fix, not a regression.
+
+### Fixed
+- **`schema sync --check` reported a Python-based local configuration file
+  as in sync with the schema regardless of whether it actually was, and the
+  installed pre-commit hook inherited the same false-clean.**
+  `_check_example_file_sync`'s `.py` branch returned success unconditionally,
+  without ever loading the schema or the file's declared variables. That
+  was true only inside `doctor`'s own multi-check suite, where a companion
+  "Local Environment Sync" check already caught real drift — and false the
+  moment the same function was reused standalone by `schema sync --check`,
+  which runs no companion check. Proven live: an ordinary schema edit adding
+  a new required variable, with the `.py` local file deliberately left
+  un-updated, committed cleanly through a real installed hook and a real
+  `git commit`. The `.py` branch now delegates to the same coverage check
+  `doctor`'s "Local Environment Sync" already performs, so `schema sync
+  --check` and the pre-commit hook now correctly fail exactly when `doctor`
+  already would. Plain `schema sync` (write mode, without `--check`) was
+  never affected — it already wrote missing variables correctly. Non-`.py`
+  local files (`.env`/`.env.example`) were never affected.
+
 ## [4.6.1] - 2026-08-30
 
 A security and correctness patch. It carries the first release of four fixes
