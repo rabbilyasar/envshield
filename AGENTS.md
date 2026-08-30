@@ -12,7 +12,27 @@ findings, limitations, and their reproduction evidence — see
 not*; ROADMAP.md says what's *done*, *in progress*, and *next*; BACKLOG.md
 is the operational record behind both.
 
-Last revised: 2026-08-26, adding two durable architectural principles —
+Last revised: 2026-08-30 (second same-day revision). Same-day follow-up: fixed `BL-005` (a `.py`-local_file service's `schema
+sync --check` no longer returns unconditional success without inspecting
+real coverage — it now delegates to `_check_local_env_sync`'s existing
+check) in the working tree, targeting `v4.6.2`; and corrected §23's release-
+gate wording, which previously read Part 0's contents as coextensive with
+"every open P0/P1 finding" — false, as `BL-005` itself proved by sitting in
+Part 1 with an elevated P0 priority through `v4.6.1`'s entire release
+process. The gate now says explicitly to scan the whole backlog, not just
+Part 0. `v4.6.1`'s own release-status record is preserved unedited: it
+shipped with `BL-005` open, and that fact is not rewritten to look like an
+intentional waiver. Prior revision: 2026-08-30, a post-release reconciliation after `v4.6.1` was
+published to PyPI and GitHub. §19's release-status note was rewritten
+around the real, verified release state (it had accumulated three wrong
+claims, each now recorded rather than silently deleted — see `BL-091`,
+closed by that rewrite), `BL-001`-`BL-004`/`BL-104`/`BL-020` were marked
+released rather than "committed locally, not yet released," and §19's
+current-phase line now says the blockers are shipped and the next direction
+is undecided. No principle, invariant, workflow, or architecture rule was
+added or changed: `v4.6.1` was a defect-fix release and surfaced no durable
+architectural lesson §3 principle 6 doesn't already cover. Prior revision:
+2026-08-26, adding two durable architectural principles —
 §3's new "domain-layer functions must remain caller-independent" (the
 recurring root shape behind `BL-002`/`BL-004`/`BL-005`/`BL-095`) and an
 addition to the Target Architecture section requiring a future cross-cutting
@@ -740,7 +760,8 @@ backlog (revision-aware service-directory resolution for the explicit
 two-revision form, discovered-file size cap, `DEFAULT_EXCLUDED_DIRS`-style
 pruning) — none are blockers, and none require another Phase 2C milestone.
 
-**Current phase: v1 release preparation — blocked on confirmed findings.**
+**Current phase: post-`v4.6.1`. Every release blocker in BACKLOG.md's Part 0
+is fixed and shipped; the next implementation direction is an open decision.**
 A 2026-08-21 release-readiness and marketing-claim audit reviewed the full
 shipped surface (Phases 0-2C) end-to-end against live CLI reproductions.
 This section previously summarized that audit as having returned "GO WITH
@@ -752,15 +773,15 @@ against current code, exactly the class of issue it claimed didn't exist:
 - A P0 — a schema field with `secret = true` plus a real `defaultValue` was
   accepted and propagated into `.env.example`, generated Python, and
   generated TypeScript (`BACKLOG.md`'s `BL-001`). This was secret leakage.
-  **Fixed 2026-08-26** (code committed locally, not yet released — see
+  **Fixed 2026-08-26; released in `v4.6.1` on 2026-08-30** — see
   `BL-001`'s own entry for the full root-cause/fix account, including two
   further manifestations of the same root cause found and fixed in the
   same pass, in `explain` and `check`'s Rich table, that the original
   report and this section's prior wording didn't name).
 - Three P1s — malformed Python config breaks the `check --json`/
   `doctor --json` machine-readable contract and can produce
-  `"success": true` (`BL-002`, a false-clean). **Fixed 2026-08-26**
-  (code committed locally, not yet released — see `BL-002`'s own entry;
+  `"success": true` (`BL-002`, a false-clean). **Fixed 2026-08-26;
+  released in `v4.6.1`** (see `BL-002`'s own entry;
   the same investigation also found and fixed `BL-092`, an uncaught crash
   on a binary/non-UTF-8 `.py` file in the same function, and left
   `BL-093`, a lower-confidence sibling gap in the Kubernetes parser, open
@@ -768,17 +789,20 @@ against current code, exactly the class of issue it claimed didn't exist:
   the string `"false"` into `true` at runtime (`BL-003`); `scan`/
   `scan --staged` failed open on files over 1MB, reporting `clean: true`
   while silently skipping the one file that mattered (`BL-004`). **Both
-  fixed 2026-08-26** (code committed locally, not yet released — see each
+  fixed 2026-08-26; both released in `v4.6.1`** (see each
   item's own `BACKLOG.md` entry).
 
 Per this section's own release philosophy below, each independently
 answered "yes" to "can this produce secret leakage" or "can this produce a
-silent false-clean." **All four of `BL-001` through `BL-004` are now fixed
-in code and committed locally** (commits `63d6581`, `77be1e5`, `f478f9f`,
-`134ef7e`) **— but none of the four have been released.** `v4.6.0` remains
-the latest released/tagged version; per the "Versioning and Release
-Cadence" section below, all four blockers being fixed does not by itself
-mean a release should be proposed. The documentation/
+silent false-clean." **All four of `BL-001` through `BL-004` were fixed
+in code** (commits `63d6581`, `77be1e5`, `f478f9f`, `134ef7e`) **and
+released in `v4.6.1` on 2026-08-30**, together with `BL-104` (a fifth
+blocker, the only one discovered after `v4.6.0` shipped) and `BL-020`.
+`v4.6.1` is the latest released/tagged version. Note that the release did
+not follow from the fixes being complete: per the "Versioning and Release
+Cadence" section below, the blockers being closed did not by itself make a
+release appropriate — that section's own evaluation ran first, and the user
+authorized it. The documentation/
 positioning pass this section previously described as having "closed out"
 the audit — README's `secret`-field wording and new Known Limitations
 section, the CLI tagline, CHANGELOG's Python-vs-JS/TS discovery wording,
@@ -821,24 +845,41 @@ belongs in [BACKLOG.md](BACKLOG.md) as post-v1 work, not immediate
 implementation — do not fix a P2/P3 finding just because it was found (see
 BACKLOG.md's Part 2/3 for current examples of exactly this).
 
-**Release status (2026-08-19; do not disturb without explicit
-instruction).** `v4.6.0` was tagged and pushed to GitHub; the test job
-passed, but the publish job failed at the Sigstore attestation step
-(`RekorClientError: Rekor returned an unknown error with HTTP 502` —
-confirmed directly from the workflow log; external Sigstore infrastructure,
-not a package or test failure). **Corrected 2026-08-30: this paragraph
-previously concluded "PyPI's currently published version is therefore still
-`4.5.1`." That is no longer true and should not be relied on — `pip index
-versions envshield` reports `4.6.0` as both INSTALLED-candidate and LATEST,
-and `pip install envshield` into a clean venv yields `4.6.0`. `v4.6.0` is
-published and live on PyPI. The failed Sigstore step evidently did not
-prevent (or was later superseded by) a successful publish; exactly how is
-unrecorded.** Do not recreate or modify the `v4.6.0` tag, bump
-the version, or rerun the publish workflow without explicit instruction —
-resolving that failed publish is a separate release operation from any
-documentation or roadmap work. Five further engineering fixes (3.2/3.3/3.5,
-3.4, 3.6, 3.7, 3.9) are committed locally on top of `v4.6.0` and are not
-yet part of any released version.
+**Release status (rewritten 2026-08-30, after `v4.6.1` published).**
+`v4.6.1` is the current released version: tagged `dd26c25`, published to
+PyPI, GitHub Release created, all stages of `publish.yml` green including
+the Sigstore attestation. `pip install envshield` into a clean venv yields
+`4.6.1`, and `pip index versions envshield` reports it as LATEST — both
+verified directly, not assumed. It shipped `BL-001` through `BL-004`,
+`BL-104`, and `BL-020`.
+
+The tag is annotated and points at `dd26c25`; note that `git rev-parse
+v4.6.1` returns the *tag object*, so use `v4.6.1^{commit}` when comparing
+against a commit SHA. `dd26c25` is a parent of `main`'s tip rather than the
+tip itself: `main` had diverged from `origin/main` by one documentation-only
+commit, which was merged in after the tag was created. Deliberate, and
+harmless — the merged commit touches only `CONTRIBUTING.md`, which ships in
+neither the wheel nor the sdist.
+
+This paragraph previously carried three claims that were all wrong, kept
+here as a record of what drifted rather than silently deleted:
+- *"PyPI's currently published version is therefore still `4.5.1`."* False
+  by 2026-08-30 — `v4.6.0` had in fact reached PyPI.
+- *"the publish job failed at the Sigstore attestation step
+  (`RekorClientError` ... HTTP 502)"* — true of the 2026-08-19 run, but it
+  was never the whole story: **a second `v4.6.0` publish run succeeded on
+  2026-08-23** (workflow run `32629882893`, versus the failed
+  `32244573871`). That is how `4.6.0` reached PyPI; the earlier note's
+  "exactly how is unrecorded" is now resolved.
+- *"`v4.6.0` was tagged ... 2026-08-19"* and *"five further engineering
+  fixes (3.2/3.3/3.5, 3.4, 3.6, 3.7, 3.9) are committed locally on top of
+  `v4.6.0`."* Both false, exactly as `BL-091` recorded: `v4.6.0` is a
+  **lightweight** tag on commit `332e692`, dated **2026-08-23**, and the
+  "five fixes" labels match nothing in `git log`. `BL-091` is closed by
+  this rewrite.
+
+Do not recreate or modify either the `v4.6.0` or `v4.6.1` tag, bump the
+version, or run the publish workflow without explicit instruction.
 
 **Post-v1 direction (2026-08-23 pass).** ROADMAP.md's post-release backlog
 was reconciled against the actual shipped code and reorganized into
@@ -955,8 +996,10 @@ authorization). This section owns the boundary itself — the judgment call
 of *whether* accumulated commits currently constitute something worth
 proposing as a release. **An engineering task or backlog item being
 completed must never, by itself, trigger a version bump or a release.**
-Closing `BL-001` did not make v4.6.1 happen; nothing does, until this
-section's own process runs and the user authorizes it.
+Closing `BL-001` did not, by itself, make v4.6.1 happen; nothing does,
+until this section's own process runs and the user authorizes it. `v4.6.1`
+did eventually ship (2026-08-30) — but only after that evaluation was
+performed and explicitly approved, which is the point, not a counterexample.
 
 ### Development commits
 
@@ -975,9 +1018,9 @@ changes appropriate to publish — not on a schedule and not because a task
 finished. Before proposing one, evaluate:
 
 1. What user-facing changes have accumulated since the previous release
-   (the most recent tag — `git log <last-tag>..HEAD`, mirroring how §19's
-   own "committed locally on top of v4.6.0, not yet released" tracking
-   already works)?
+   (the most recent tag — `git log <last-tag>..HEAD`, the same tracking
+   §19's own release-status note keeps for what is committed but not yet
+   part of a released version)?
 2. Do the accumulated fixes/features form a coherent release, or is this
    an arbitrary midpoint?
 3. Are there open release blockers (see below)?
@@ -1008,14 +1051,33 @@ proposal, and even then only into a *proposal*, not an action.
 
 ### Release blockers
 
-Before proposing or performing a release, check BACKLOG.md's **Part 0 —
-Release Blockers** for open P0/P1 findings, and this charter's §4 release
-principles. Do not recommend or perform a release while a release-blocking
-finding remains open, unless this policy is explicitly overridden by the
-user for that specific release. BACKLOG.md's Part 0 is the current, living
-list — not §4's "Release blockers" subsection, which is historical (see
-its own note), and not ROADMAP.md, which does not itemize individual
-findings.
+Before proposing or performing a release, check **every open P0/P1
+finding in BACKLOG.md, not only those currently listed under Part 0** — and
+this charter's §4 release principles. Do not recommend or perform a release
+while a release-blocking finding remains open, unless this policy is
+explicitly overridden by the user for that specific release.
+
+**Corrected 2026-08-30, after `v4.6.1` shipped with an open P0 (`BL-005`)
+that this section's own prior wording let slip through.** This section
+previously said to check "BACKLOG.md's Part 0 ... for open P0/P1 findings,"
+phrasing that reads Part 0's contents as coextensive with "every open P0/P1
+finding" — false the moment a finding's priority is elevated after it was
+already filed elsewhere: BACKLOG.md's Parts are organized by a finding's
+provenance (which report or pass surfaced it), not by its current severity,
+and nothing relocates a finding when its priority changes. `BL-005` sat in
+Part 1 (whose own header reads "not P0/P1 in the original report") with a
+live `Priority: P0` line for days before `v4.6.1`'s release-readiness
+review — a review that checked Part 0's contents, found it empty, and
+never surfaced `BL-005` because the check only ever looked there. A release
+gate that can be satisfied by a Part being empty, while an equally-severe
+finding sits one Part over, is not a real gate. Part 0 remains useful as a
+**curated, already-triaged view** of the findings that were release-blockers
+at the time they were filed — it does not relieve anyone performing a
+release-readiness review of scanning the full file (`grep -n 'Priority:.*P[01]' BACKLOG.md` or
+equivalent) for every currently-open P0/P1, wherever it lives.
+BACKLOG.md's Part 0 is a starting point, not the current, complete, living
+list — not §4's "Release blockers" subsection, which is historical (see its
+own note), and not ROADMAP.md, which does not itemize individual findings.
 
 ---
 

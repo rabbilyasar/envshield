@@ -314,6 +314,36 @@ def test_schema_sync_check_fails_without_writing_when_template_is_stale(tmp_path
             assert "NEW_VAR" not in f.read()  # --check never writes
 
 
+def test_schema_sync_check_fails_for_a_stale_python_local_file(tmp_path):
+    """
+    BL-005 regression, at the CLI layer 'schema sync --check' actually
+    runs (not just doctor._check_example_file_sync in isolation): a
+    Python-module local_file used to short-circuit to an unconditional
+    pass here regardless of its real contents, which is exactly the
+    silent false-clean this command exists to prevent -- see this
+    finding's own entry for the live-proven pre-commit-hook bypass this
+    produced.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.makedirs("svc")
+        with open(CONFIG_FILE_NAME, "w") as f:
+            f.write(
+                "services:\n  svc:\n    schema: svc/env.schema.toml\n    local_file: svc/config.py\n"
+            )
+        with open("svc/env.schema.toml", "w") as f:
+            f.write(
+                '[FIELD_PRESENT]\ndescription="p"\ndefaultValue="x"\n\n'
+                '[FIELD_MISSING]\ndescription="m"\nrequired=true\n'
+            )
+        with open("svc/config.py", "w") as f:
+            f.write('FIELD_PRESENT = "hello"\n')  # FIELD_MISSING never declared
+
+        result = runner.invoke(app, ["schema", "sync", "--check", "--service", "svc"])
+
+        assert result.exit_code == 1
+        assert "FIELD_MISSING" in result.stdout
+
+
 def test_import_command_on_python_settings_file(tmp_path):
     """
     Regression test: `envshield import settings.py` used to raise a TypeError

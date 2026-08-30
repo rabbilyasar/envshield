@@ -164,13 +164,19 @@ def _check_example_file_sync(service_name: str):
     example_file = paths["example_file"]
 
     # A Python-module local file (e.g. acme's env_config.local.py) has no
-    # separate tracked template -- it IS the contract. 'Local Environment
-    # Sync' already checks it declares every schema variable.
+    # separate tracked template -- it IS the contract. This used to return
+    # success here unconditionally, reasoning "'Local Environment Sync'
+    # already checks it" -- true only inside doctor's own multi-check
+    # suite, where that check runs alongside this one. It's false the
+    # moment this function is reused standalone by 'schema sync --check'
+    # (cli.py's only caller for '--check'), which never runs a companion
+    # check -- and the installed pre-commit hook calls nothing but that
+    # (see BL-005: a live-proven hook bypass, not a hypothetical). Reusing
+    # _check_local_env_sync's own coverage check makes the comment's
+    # original reasoning actually true for every caller, rather than
+    # re-implementing the same parse-and-diff here.
     if local_file.endswith(".py"):
-        return (
-            True,
-            f"'{local_file}' has no separate template file (see 'Local Environment Sync').",
-        )
+        return _check_local_env_sync(service_name)
 
     if not os.path.exists(example_file):
         return (

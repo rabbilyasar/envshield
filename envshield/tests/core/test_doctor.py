@@ -505,25 +505,134 @@ def test_doctor_omits_config_source_reads_environment_check_for_a_dotenv_source(
         )
 
 
-def test_check_example_file_sync_skips_python_format_local_file(tmp_path, monkeypatch):
+class TestCheckExampleFileSyncValidatesPythonLocalFiles:
     """
-    A Python-module local file has no separate '.env.example' to drift out
-    of sync -- it IS the contract. This check should pass through with an
-    informational message instead of reporting a missing template.
+    BL-005 regression. A Python-module local file has no separate
+    '.env.example' template -- it IS the contract, so there is nothing to
+    keep "in sync" with a template file. But this check previously
+    short-circuited to unconditional success for ANY '.py' local_file
+    without ever inspecting the file's actual variable coverage against
+    the schema, reasoning "'Local Environment Sync' already checks it" --
+    true only inside doctor's own multi-check suite, where that companion
+    check runs alongside this one.
+
+    That reasoning is false the moment this same function is called
+    standalone, which is exactly what 'schema sync --check' does (its
+    only caller for '--check') -- and the generated pre-commit hook calls
+    nothing but 'schema sync --check' for every '.py'-local_file service
+    (scanner.py's _generate_pre_commit_hook_content, unconditionally).
+    Live-proven end to end: with a `.py` local_file, an ordinary staged
+    schema edit adding a required variable, with the local file
+    deliberately left un-updated, committed successfully through a real
+    installed pre-commit hook -- printing a false "no separate template
+    file" success message and never failing the commit. See
+    test_pre_commit_hook.py's own regression for that exact chain.
+
+    The fix delegates to _check_local_env_sync's existing coverage check
+    (schema load -> parse -> schema_manager.diff_against_schema) instead
+    of re-implementing it, so a '.py' local_file gets the exact real
+    validation the old comment claimed it already received.
     """
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "alpha").mkdir(parents=True)
-    with open(CONFIG_FILE_NAME, "w") as f:
-        f.write(
-            "services:\n  alpha:\n    schema: alpha/env.schema.toml\n    local_file: alpha/env_config.local.py\n"
+
+    @staticmethod
+    def _write_project(tmp_path, monkeypatch, schema_toml, local_file_content):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "alpha").mkdir(parents=True)
+        with open(CONFIG_FILE_NAME, "w") as f:
+            f.write(
+                "services:\n  alpha:\n    schema: alpha/env.schema.toml\n    local_file: alpha/env_config.local.py\n"
+            )
+        with open("alpha/env.schema.toml", "w") as f:
+            f.write(schema_toml)
+        with open("alpha/env_config.local.py", "w") as f:
+            f.write(local_file_content)
+
+    def test_passes_when_every_required_variable_is_present(self, tmp_path, monkeypatch):
+        self._write_project(
+            tmp_path,
+            monkeypatch,
+            '[DB_HOST]\ndescription="x"\nrequired=true\n',
+            'DB_HOST = "localhost"\n',
         )
-    with open("alpha/env.schema.toml", "w") as f:
-        f.write('[DB_HOST]\ndescription="x"\n')
 
-    passed, message = doctor._check_example_file_sync(service_name="alpha")
+        passed, message = doctor._check_example_file_sync(service_name="alpha")
 
-    assert passed is True
-    assert "no separate template file" in message
+        assert passed is True
+        assert "DB_HOST" not in message  # a clean pass names nothing missing
+
+    def test_fails_when_a_required_variable_is_missing(self, tmp_path, monkeypatch):
+        """The exact BL-005 reproduction: this must no longer be an
+        unconditional pass regardless of the file's real contents."""
+        self._write_project(
+            tmp_path,
+            monkeypatch,
+            '[DB_HOST]\ndescription="x"\nrequired=true\n',
+            "# DB_HOST is not declared here\n",
+        )
+
+        passed, message = doctor._check_example_file_sync(service_name="alpha")
+
+        assert passed is False
+        assert "DB_HOST" in message
+
+    def test_fails_and_names_every_missing_variable(self, tmp_path, monkeypatch):
+        self._write_project(
+            tmp_path,
+            monkeypatch,
+            '[DB_HOST]\ndescription="x"\nrequired=true\n\n'
+            '[API_KEY]\ndescription="y"\nrequired=true\n\n'
+            '[DB_PORT]\ndescription="z"\nrequired=true\n',
+            "# none of the three schema variables are declared\n",
+        )
+
+        passed, message = doctor._check_example_file_sync(service_name="alpha")
+
+        assert passed is False
+        assert "DB_HOST" in message
+        assert "API_KEY" in message
+        assert "DB_PORT" in message
+
+    def test_a_defaulted_variable_absent_from_the_file_is_still_reported_missing(
+        self, tmp_path, monkeypatch
+    ):
+        """
+        Consistency with the existing local-environment contract (see
+        CHANGELOG's 4.5.1 entry): a defaultValue only ever changes whether
+        'setup' prompts for a value, never whether the local file's own
+        copy can be absent -- confirmed this only reuses
+        _check_local_env_sync's existing rule, not a new one: the
+        identical '.env' case (verified directly, not just for '.py')
+        also reports LOG_LEVEL missing here.
+        """
+        self._write_project(
+            tmp_path,
+            monkeypatch,
+            '[DB_HOST]\ndescription="x"\nrequired=true\n\n'
+            '[LOG_LEVEL]\ndescription="y"\ndefaultValue="info"\n',
+            'DB_HOST = "localhost"\n',  # LOG_LEVEL absent, despite having a default
+        )
+
+        passed, message = doctor._check_example_file_sync(service_name="alpha")
+
+        assert passed is False
+        assert "LOG_LEVEL" in message
+
+    def test_non_python_local_file_behavior_is_unchanged(self, tmp_path, monkeypatch):
+        """
+        Sanity check that the '.py' fix didn't alter the pre-existing,
+        already-correct '.env.example' template-drift path at all.
+        """
+        monkeypatch.chdir(tmp_path)
+        _write_root_service()
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[FOO]\ndescription="x"\nsecret=false\n')
+        with open(".env.example", "w") as f:
+            f.write("FOO=\n")
+
+        passed, message = doctor._check_example_file_sync(service_name="app")
+
+        assert passed is True
+        assert "is in sync with schema" in message
 
 
 def test_check_deployment_manifest_passes_when_none_registered(tmp_path, monkeypatch):
