@@ -12,7 +12,15 @@ findings, limitations, and their reproduction evidence — see
 not*; ROADMAP.md says what's *done*, *in progress*, and *next*; BACKLOG.md
 is the operational record behind both.
 
-Last revised: 2026-08-30 (second same-day revision). Same-day follow-up: fixed `BL-005` (a `.py`-local_file service's `schema
+Last revised: 2026-08-30 (third same-day revision). Same-day follow-up:
+added §3 principle 7 (a broad architectural expansion is a separate
+decision from the narrow fix that surfaces it, not an automatic extension
+of it) after a Zeus real-world dogfooding pass produced three validated,
+narrow EnvShield fixes (`BL-109`/`BL-110`/`BL-112`, all implemented and
+tested) plus one proposed, deliberately unimplemented architectural
+direction (framework-aware Python configuration discovery — see
+ROADMAP.md's Exploring section) — this principle names explicitly why the
+second didn't ride along with the first. Prior same-day revision: fixed `BL-005` (a `.py`-local_file service's `schema
 sync --check` no longer returns unconditional success without inspecting
 real coverage — it now delegates to `_check_local_env_sync`'s existing
 check) in the working tree, targeting `v4.6.2`; and corrected §23's release-
@@ -213,6 +221,21 @@ erode.
    explicitly whether its correctness depended on something only the
    original caller supplied. A function that was correct once is not
    thereby correct everywhere it's called from.
+7. **A broad architectural expansion is a separate decision from the narrow
+   fix that surfaced it.** Implementing a validated, narrow finding does
+   not by itself authorize building the larger capability that finding
+   happens to be an instance of. When fixing something reveals a case for
+   a more general mechanism — a new abstraction layer, a pluggable
+   provider model, support for another language or framework — implement
+   only the narrow, validated fix in that pass, record the broader
+   direction in ROADMAP.md (Next/Exploring, per its own evidence bar), and
+   treat designing and implementing it as an explicitly separate,
+   later-authorized phase. `BL-109` (a narrow, real bug: bare `getenv()`
+   after `from os import getenv` was invisible to discovery) and the
+   framework-aware configuration-discovery direction it surfaced (Flask/
+   Django support, proposed but unimplemented) are the concrete precedent
+   — the fix shipped in the same pass; the architecture did not, and must
+   not, ride along with it.
 
 ## Engineering Task Workflow
 

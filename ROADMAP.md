@@ -93,6 +93,26 @@ need. None of these exist in any form today, and none are committed:
   the same accuracy bar as the two we already support.
 - **Source-language discovery beyond Python and JavaScript/TypeScript** —
   more languages, only if they can be added without sacrificing accuracy.
+- **Framework-aware configuration discovery within Python** — recognizing
+  configuration *reads* through common web-framework access patterns (Flask's
+  `app.config`/`current_app.config`, Django's `settings.X`) alongside
+  `os.environ`/`os.getenv`, while keeping the schema and discovery output
+  framework-agnostic. Not the same direction as source-language discovery
+  above — this is about recognizing more *ways Python code reads
+  configuration*, not more languages. A real product direction, not a
+  workaround for one project's shape: a narrow, validated fix
+  (`BL-109`, recognizing `from os import getenv`) surfaced the case for it
+  during real-world use, and a design sketch exists — extending the same
+  pattern `os.environ`/`os.getenv` recognition already uses today, not a
+  new plugin or registry mechanism, with framework recognition activating
+  only on corroborating import evidence, never a bare
+  `anything.config[...]` match. Deliberately excludes framework
+  configuration *population* (Flask's `app.config.from_pyfile`/
+  `from_object`/`from_envvar`, Django's settings-module loading) from this
+  same direction — a separate, harder, cross-file problem, not bundled in.
+  Nothing here is implemented, and it won't be built until the design is
+  reviewed on its own, independent of any single fix that happened to
+  surface it.
 - **Team and organizational features** (shared visibility, drift
   monitoring, policy, audit history) and a **hosted offering** — only if
   real teams demonstrate they need them. The CLI itself stays open source

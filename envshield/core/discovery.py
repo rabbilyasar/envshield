@@ -57,7 +57,51 @@ def _literal_str(node: Optional[ast.expr]) -> Optional[str]:
     return None
 
 
-def _is_os_environ(node: ast.expr) -> bool:
+@dataclass
+class _OsBindings:
+    """
+    Whether this module has an unaliased 'from os import getenv'/'from os
+    import environ' -- the one bare-import form worth recognizing as
+    equivalent to os.getenv/os.environ. An aliased import ('from os import
+    getenv as ge') is deliberately out of scope, matching this module's
+    existing precedent for BaseSettings (_is_base_settings_subclass):
+    resolved by the bound local name only, not by tracing the true origin
+    of an alias further. Computed once per file by _collect_os_bindings and
+    threaded through every predicate below so discover_python_usages and
+    discover_python_env_vars can never disagree on what counts as a read.
+    """
+
+    bare_getenv: bool = False
+    bare_environ: bool = False
+
+
+def _collect_os_bindings(tree: ast.Module) -> _OsBindings:
+    """
+    Only `tree.body` (top-level statements), not a full ast.walk -- a
+    conditional/deferred 'from os import getenv' inside a function is rare
+    enough that scanning for it isn't worth doubling this pass's cost on
+    every file (measured: ast.walk over a ~2,200-line file costs roughly as
+    much as parsing it in the first place). Matches this module's own
+    _python.py sibling, which is top-level-assignment-only for the same
+    reason -- a deliberate scope boundary, not an oversight.
+    """
+    bindings = _OsBindings()
+    for node in tree.body:
+        if not (isinstance(node, ast.ImportFrom) and node.module == "os" and node.level == 0):
+            continue
+        for alias in node.names:
+            if alias.asname is not None:
+                continue  # aliased: out of scope, see _OsBindings
+            if alias.name == "getenv":
+                bindings.bare_getenv = True
+            elif alias.name == "environ":
+                bindings.bare_environ = True
+    return bindings
+
+
+def _is_os_environ(node: ast.expr, bindings: _OsBindings) -> bool:
+    if bindings.bare_environ and isinstance(node, ast.Name) and node.id == "environ":
+        return True
     return (
         isinstance(node, ast.Attribute)
         and node.attr == "environ"
@@ -66,7 +110,9 @@ def _is_os_environ(node: ast.expr) -> bool:
     )
 
 
-def _is_os_getenv(node: ast.expr) -> bool:
+def _is_os_getenv(node: ast.expr, bindings: _OsBindings) -> bool:
+    if bindings.bare_getenv and isinstance(node, ast.Name) and node.id == "getenv":
+        return True
     return (
         isinstance(node, ast.Attribute)
         and node.attr == "getenv"
@@ -75,17 +121,18 @@ def _is_os_getenv(node: ast.expr) -> bool:
     )
 
 
-def _is_os_environ_get(node: ast.expr) -> bool:
+def _is_os_environ_get(node: ast.expr, bindings: _OsBindings) -> bool:
     return (
         isinstance(node, ast.Attribute)
         and node.attr == "get"
-        and _is_os_environ(node.value)
+        and _is_os_environ(node.value, bindings)
     )
 
 
 class _UsageVisitor(ast.NodeVisitor):
-    def __init__(self, file_path: str):
+    def __init__(self, file_path: str, bindings: _OsBindings):
         self.file_path = file_path
+        self.bindings = bindings
         self.usages: List[DiscoveredVariableUsage] = []
 
     def _record(self, variable: str, line: int, access_type: str) -> None:
@@ -107,15 +154,15 @@ class _UsageVisitor(ast.NodeVisitor):
 
         key = _literal_str(node.args[0])
         if key is not None:
-            if _is_os_environ_get(node.func):
+            if _is_os_environ_get(node.func, self.bindings):
                 self._record(key, node.lineno, "os.environ.get")
-            elif _is_os_getenv(node.func):
+            elif _is_os_getenv(node.func, self.bindings):
                 self._record(key, node.lineno, "os.getenv")
 
         self.generic_visit(node)
 
     def visit_Subscript(self, node: ast.Subscript) -> None:
-        if _is_os_environ(node.value) and isinstance(node.ctx, ast.Load):
+        if _is_os_environ(node.value, self.bindings) and isinstance(node.ctx, ast.Load):
             key = _literal_str(node.slice)
             if key is not None:
                 self._record(key, node.lineno, "os.environ[]")
@@ -131,7 +178,9 @@ def discover_python_usages(
     source -- this function never touches the filesystem itself, so it
     works identically for staged-index content and on-disk content) and
     returns every recognized os.environ.get/os.getenv/os.environ[] usage
-    with a literal string key.
+    with a literal string key -- including the same read spelled as a bare
+    getenv(...)/environ[...] after an unaliased 'from os import getenv'/
+    'from os import environ' (see _OsBindings/_collect_os_bindings).
 
     Returns an empty list -- never raises -- if `content` isn't valid
     Python (SyntaxError) or is pathologically deep (RecursionError): a file
@@ -143,7 +192,8 @@ def discover_python_usages(
     except (SyntaxError, RecursionError, ValueError):
         return []
 
-    visitor = _UsageVisitor(file_path)
+    bindings = _collect_os_bindings(tree)
+    visitor = _UsageVisitor(file_path, bindings)
     try:
         visitor.visit(tree)
     except RecursionError:
@@ -184,26 +234,26 @@ def _literal_default(node: Optional[ast.expr]) -> Optional[str]:
     return None
 
 
-def _is_recognized_env_call(node: ast.expr) -> bool:
+def _is_recognized_env_call(node: ast.expr, bindings: _OsBindings) -> bool:
     """Whether `node` is itself a recognized os.environ.get/os.getenv call with a literal key -- reuses the exact predicates _UsageVisitor does, so the two engines can never disagree on what counts as a read."""
     return (
         isinstance(node, ast.Call)
         and bool(node.args)
         and _literal_str(node.args[0]) is not None
-        and (_is_os_environ_get(node.func) or _is_os_getenv(node.func))
+        and (_is_os_environ_get(node.func, bindings) or _is_os_getenv(node.func, bindings))
     )
 
 
-def _is_recognized_env_subscript(node: ast.expr) -> bool:
+def _is_recognized_env_subscript(node: ast.expr, bindings: _OsBindings) -> bool:
     return (
         isinstance(node, ast.Subscript)
-        and _is_os_environ(node.value)
+        and _is_os_environ(node.value, bindings)
         and isinstance(node.ctx, ast.Load)
         and _literal_str(node.slice) is not None
     )
 
 
-def _contains_recognized_env_read(node: ast.expr) -> bool:
+def _contains_recognized_env_read(node: ast.expr, bindings: _OsBindings) -> bool:
     """
     Whether an os.environ.get/os.getenv/os.environ[] read (with a literal
     key) appears anywhere inside `node`'s subtree -- used to decide
@@ -212,7 +262,7 @@ def _contains_recognized_env_read(node: ast.expr) -> bool:
     alias/attribute-name convention below.
     """
     return any(
-        _is_recognized_env_call(sub) or _is_recognized_env_subscript(sub)
+        _is_recognized_env_call(sub, bindings) or _is_recognized_env_subscript(sub, bindings)
         for sub in ast.walk(node)
     )
 
@@ -277,8 +327,9 @@ class _EnvVarWithDefaultsVisitor(ast.NodeVisitor):
     ('explain'/'undeclared') ever needed.
     """
 
-    def __init__(self, file_path: str):
+    def __init__(self, file_path: str, bindings: _OsBindings):
         self.file_path = file_path
+        self.bindings = bindings
         self.usages: List[DiscoveredPythonEnvVar] = []
 
     def _record(
@@ -305,15 +356,15 @@ class _EnvVarWithDefaultsVisitor(ast.NodeVisitor):
         key = _literal_str(node.args[0])
         if key is not None:
             default = _literal_default(node.args[1]) if len(node.args) > 1 else None
-            if _is_os_environ_get(node.func):
+            if _is_os_environ_get(node.func, self.bindings):
                 self._record(key, node.lineno, "os.environ.get", default)
-            elif _is_os_getenv(node.func):
+            elif _is_os_getenv(node.func, self.bindings):
                 self._record(key, node.lineno, "os.getenv", default)
 
         self.generic_visit(node)
 
     def visit_Subscript(self, node: ast.Subscript) -> None:
-        if _is_os_environ(node.value) and isinstance(node.ctx, ast.Load):
+        if _is_os_environ(node.value, self.bindings) and isinstance(node.ctx, ast.Load):
             key = _literal_str(node.slice)
             if key is not None:
                 self._record(key, node.lineno, "os.environ[]", None)
@@ -334,16 +385,16 @@ class _EnvVarWithDefaultsVisitor(ast.NodeVisitor):
             left, right = node.values
             default = _literal_default(right)
             if default is not None:
-                if _is_recognized_env_call(left):
+                if _is_recognized_env_call(left, self.bindings):
                     key = _literal_str(left.args[0])
                     access_type = (
                         "os.environ.get"
-                        if _is_os_environ_get(left.func)
+                        if _is_os_environ_get(left.func, self.bindings)
                         else "os.getenv"
                     )
                     self._record(key, left.lineno, access_type, default)
                     return
-                if _is_recognized_env_subscript(left):
+                if _is_recognized_env_subscript(left, self.bindings):
                     key = _literal_str(left.slice)
                     self._record(key, left.lineno, "os.environ[]", default)
                     return
@@ -366,7 +417,9 @@ class _EnvVarWithDefaultsVisitor(ast.NodeVisitor):
         # visit_Call/visit_Subscript traversal (via generic_visit, still
         # run for this class after this method returns) already records
         # it correctly on its own.
-        if stmt.value is not None and _contains_recognized_env_read(stmt.value):
+        if stmt.value is not None and _contains_recognized_env_read(
+            stmt.value, self.bindings
+        ):
             return
 
         attr_name = stmt.target.id
@@ -401,7 +454,8 @@ def discover_python_env_vars(
     except (SyntaxError, RecursionError, ValueError):
         return []
 
-    visitor = _EnvVarWithDefaultsVisitor(file_path)
+    bindings = _collect_os_bindings(tree)
+    visitor = _EnvVarWithDefaultsVisitor(file_path, bindings)
     try:
         visitor.visit(tree)
     except RecursionError:

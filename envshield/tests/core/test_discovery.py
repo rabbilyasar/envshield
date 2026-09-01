@@ -114,11 +114,88 @@ class TestOutOfScopeByDesign:
     def test_aliased_import_is_not_reported(self):
         assert _usages("import os as o\nx = o.environ.get('X')\n") == []
 
-    def test_from_import_indirection_is_not_reported(self):
-        assert _usages("from os import environ\nx = environ.get('X')\n") == []
-
     def test_getenv_aliased_import_is_not_reported(self):
         assert _usages("import os as o\nx = o.getenv('X')\n") == []
+
+    def test_bare_import_inside_a_function_is_not_reported(self):
+        """
+        _collect_os_bindings only scans top-level statements (performance:
+        see its own docstring) -- a 'from os import getenv' nested inside
+        a function body is a real but rare enough case that this is a
+        deliberate scope boundary, not an oversight.
+        """
+        content = "def f():\n    from os import getenv\n    return getenv('X')\n"
+        assert _usages(content) == []
+
+
+class TestBareOsImportRecognition:
+    """
+    'from os import getenv'/'from os import environ' followed by a bare
+    getenv(...)/environ.get(...)/environ[...] call is now treated as
+    equivalent to the qualified os.getenv/os.environ form -- this used to
+    be silently invisible (test_from_import_indirection_is_not_reported,
+    removed from TestOutOfScopeByDesign above, asserted the old, incorrect
+    "not reported" behavior as correct). Found via a real Zeus codebase
+    where a central config-switching module uses exactly this import style
+    throughout, making every variable read only through it permanently
+    undiscoverable. Unaliased only -- 'from os import getenv as ge' stays
+    out of scope, matching the aliased-import precedent above.
+    """
+
+    def test_bare_getenv_after_unaliased_import(self):
+        usage = _one("from os import getenv\nx = getenv('X')\n")
+        assert usage.variable == "X"
+        assert usage.access_type == "os.getenv"
+
+    def test_bare_environ_get_after_unaliased_import(self):
+        usage = _one("from os import environ\nx = environ.get('X')\n")
+        assert usage.variable == "X"
+        assert usage.access_type == "os.environ.get"
+
+    def test_bare_environ_subscript_after_unaliased_import(self):
+        usage = _one("from os import environ\nx = environ['X']\n")
+        assert usage.variable == "X"
+        assert usage.access_type == "os.environ[]"
+
+    def test_bare_getenv_with_default(self):
+        usage = _one("from os import getenv\nx = getenv('X', 'fallback')\n")
+        assert usage.variable == "X"
+
+    def test_aliased_bare_import_is_not_reported(self):
+        """'from os import getenv as ge' is still out of scope -- an
+        aliased bare import is a different, deliberately unsupported case
+        from the unaliased one this fix adds."""
+        assert _usages("from os import getenv as ge\nx = ge('X')\n") == []
+
+    def test_unrelated_bare_getenv_with_no_os_import_is_not_reported(self):
+        """A locally-defined getenv() with no 'from os import getenv'
+        anywhere in the file must never be mistaken for an environment
+        read -- the exact false-positive risk this feature must avoid."""
+        content = "def getenv(key):\n    return 'local'\nx = getenv('X')\n"
+        assert _usages(content) == []
+
+    def test_unrelated_bare_getenv_from_a_different_module_is_not_reported(self):
+        content = "from myapp.config import getenv\nx = getenv('X')\n"
+        assert _usages(content) == []
+
+    def test_qualified_form_still_works_alongside_a_bare_import(self):
+        """A file that imports both ways ('import os' AND 'from os import
+        getenv') must still recognize the qualified os.getenv(...) form
+        too -- the two recognition paths are additive, not exclusive."""
+        content = "import os\nfrom os import getenv\na = os.getenv('A')\nb = getenv('B')\n"
+        result = _usages(content)
+        assert {u.variable for u in result} == {"A", "B"}
+
+    def test_discover_python_env_vars_also_recognizes_the_bare_form(self):
+        """The richer schema-generation engine (discover_python_env_vars)
+        must never disagree with discover_python_usages on what counts as
+        a read -- both share the same _OsBindings computation."""
+        result = discovery.discover_python_env_vars(
+            "from os import getenv\nx = getenv('X', 'fallback')\n", "config.py"
+        )
+        assert len(result) == 1
+        assert result[0].variable == "X"
+        assert result[0].default_value == "fallback"
 
 
 class TestMultipleUsages:
