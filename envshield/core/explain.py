@@ -237,6 +237,54 @@ class ExplainReport:
         }
 
 
+@dataclass
+class UndeclaredVariableReport:
+    """
+    Built by build_undeclared_report when `variable` isn't in the service's
+    schema -- lets 'explain' degrade gracefully instead of only erroring,
+    for exactly the workflow moment it's most needed: a developer just
+    found this variable via 'undeclared'/'scan' and wants to understand it
+    before deciding whether/how to add it to the schema. Reuses the exact
+    same _discover_current_usages/_manifest_references machinery
+    build_report uses for a declared variable -- no second discovery
+    implementation.
+    """
+
+    variable: str
+    service: str
+    source_usages: List[discovery.DiscoveredVariableUsage]
+    manifest_references: List[ManifestReference]
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "variable": self.variable,
+            "service": self.service,
+            "found": False,
+            "declared": False,
+            "source_usages": [u.to_dict() for u in self.source_usages],
+            "manifest_references": [m.to_dict() for m in self.manifest_references],
+        }
+
+
+def build_undeclared_report(variable: str, service_name: str) -> UndeclaredVariableReport:
+    """
+    The undeclared-variable counterpart to build_report -- called by the
+    CLI specifically when build_report has already raised
+    VariableNotFoundError, not a general-purpose alternative entry point.
+    Never raises VariableNotFoundError itself; any other EnvShieldException
+    (e.g. a missing/unreadable envshield.yml) still propagates unchanged,
+    matching build_report's own contract.
+    """
+    service_dir = config_manager.get_service_dir(service_name)
+    manifests = config_manager.get_deployment_manifests(service_name)
+    return UndeclaredVariableReport(
+        variable=variable,
+        service=service_name,
+        source_usages=_discover_current_usages(service_dir, variable),
+        manifest_references=_manifest_references(manifests, variable),
+    )
+
+
 def error_dict(variable: str, service: Optional[str], message: str) -> Dict[str, Any]:
     """
     The canonical 'explain --json' error shape -- matches
@@ -253,17 +301,21 @@ def error_dict(variable: str, service: Optional[str], message: str) -> Dict[str,
 
 def build_report(variable: str, service_name: str) -> ExplainReport:
     """
-    The one public entry point: aggregates every relationship EnvShield can
-    currently prove about `variable` within `service_name`, the same way
-    'doctor' orchestrates config_manager/parsers.factory directly rather
-    than through an injected/pre-loaded layer.
+    The one public entry point for a *declared* variable: aggregates every
+    relationship EnvShield can currently prove about `variable` within
+    `service_name`, the same way 'doctor' orchestrates config_manager/
+    parsers.factory directly rather than through an injected/pre-loaded
+    layer.
 
     Raises VariableNotFoundError if `variable` isn't declared in the
-    service's resolved schema -- never returns an empty/placeholder report
-    for a variable that doesn't exist. Any other EnvShieldException
-    (missing schema, unreadable schema file, etc.) propagates unchanged --
-    the same "found or a clear error, never a silent empty result" contract
-    every other command already follows.
+    service's resolved schema -- this function itself never returns an
+    empty/placeholder report for a variable that doesn't exist; see
+    build_undeclared_report for the CLI's graceful-degradation path in
+    that case, a distinct report type, not a relaxation of this one's own
+    contract. Any other EnvShieldException (missing schema, unreadable
+    schema file, etc.) propagates unchanged -- the same "found or a clear
+    error, never a silent empty result" contract every other command
+    already follows.
     """
     schema = config_manager.load_schema(service_name=service_name)
     if variable not in schema:

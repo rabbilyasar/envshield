@@ -30,7 +30,11 @@ from .core import (
     service_manager,
     setup_manager,
 )
-from .core.exceptions import EnvShieldException, SchemaNotFoundError
+from .core.exceptions import (
+    EnvShieldException,
+    SchemaNotFoundError,
+    VariableNotFoundError,
+)
 from .utils import git_utils
 
 
@@ -572,6 +576,92 @@ _EXPLAIN_REQUIREDNESS_LABEL = {
 }
 
 
+def _render_source_usages(
+    source_usages: List["explain.discovery.DiscoveredVariableUsage"],
+) -> None:
+    """Shared between the declared-variable report and the undeclared one -- the exact same section, so the two commands' output stays visually consistent."""
+    console.print("\n[bold]Used in source[/bold]")
+    if source_usages:
+        for usage in source_usages:
+            console.print(f"  {usage.file_path}:{usage.line}")
+    else:
+        console.print("  None discovered")
+        console.print(
+            "  [dim]EnvShield only recognizes os.environ/os.getenv/process.env-style "
+            "reads in Python and JS/TS -- this doesn't prove the variable is unused.[/dim]"
+        )
+
+
+def _render_manifest_references(
+    manifest_references: List["explain.ManifestReference"], variable: str
+) -> None:
+    """Shared between the declared-variable report and the undeclared one."""
+    console.print("\n[bold]Deployment[/bold]")
+    if not manifest_references:
+        console.print("  No deployment manifest registered for this service.")
+        return
+
+    declared = [r for r in manifest_references if r.status == "declared"]
+    not_declared = [r for r in manifest_references if r.status == "not_declared"]
+    unresolved = [r for r in manifest_references if r.status == "unresolved"]
+    errored = [r for r in manifest_references if r.status == "error"]
+    if declared:
+        for ref in declared:
+            console.print(f"  {ref.path}")
+            if ref.container:
+                console.print(f"    container: {ref.container}")
+    elif not_declared:
+        # Only claim "not found" when at least one manifest positively
+        # doesn't declare it -- printing this alongside "Cannot confirm"
+        # below (when every non-declared reference is actually unresolved)
+        # would read as EnvShield confidently asserting absence in the
+        # same breath it admits it can't tell.
+        checked = ", ".join(r.path for r in manifest_references)
+        console.print(
+            "  Not found in any registered deployment manifest "
+            f"(checked: {checked}) -- this doesn't prove it isn't deployed elsewhere."
+        )
+    if unresolved:
+        console.print(
+            f"  [yellow]Cannot confirm for {len(unresolved)} manifest(s): "
+            f"{', '.join(r.path for r in unresolved)} -- references an external "
+            f"ConfigMap/Secret not included in the manifest; '{variable}' "
+            "may be supplied from there.[/yellow]"
+        )
+    if errored:
+        console.print(
+            f"  [dim]Could not check {len(errored)} manifest(s): "
+            f"{', '.join(r.path for r in errored)}[/dim]"
+        )
+
+
+def _render_undeclared_explain_report(
+    report: "explain.UndeclaredVariableReport",
+) -> None:
+    """
+    'explain' on a variable that isn't in the schema yet -- degrades
+    gracefully instead of only erroring, reusing the exact same
+    source-usage/manifest-reference rendering a declared variable's report
+    uses, so a developer investigating something 'undeclared'/'scan' just
+    found gets the same evidence, framed as "not declared yet" rather than
+    a bare error.
+    """
+    console.print(f"\n[bold cyan]{report.variable}[/bold cyan]")
+    console.print("─" * max(len(report.variable), 8))
+    console.print(
+        f"\n[yellow]Not declared in the schema for service '{report.service}'.[/yellow]"
+    )
+
+    _render_source_usages(report.source_usages)
+    _render_manifest_references(report.manifest_references, report.variable)
+
+    if report.source_usages:
+        console.print(
+            "\n[dim]Add it to the schema once you know what it should require -- "
+            "see the file/line above for where it's read.[/dim]"
+        )
+
+
 def _render_explain_report(report: "explain.ExplainReport") -> None:
     console.print(f"\n[bold cyan]{report.variable}[/bold cyan]")
     console.print("─" * max(len(report.variable), 8))
@@ -607,16 +697,7 @@ def _render_explain_report(report: "explain.ExplainReport") -> None:
             "  [dim](could not determine whether this is inherited via extends)[/dim]"
         )
 
-    console.print("\n[bold]Used in source[/bold]")
-    if report.source_usages:
-        for usage in report.source_usages:
-            console.print(f"  {usage.file_path}:{usage.line}")
-    else:
-        console.print("  None discovered")
-        console.print(
-            "  [dim]EnvShield only recognizes os.environ/os.getenv/process.env-style "
-            "reads in Python and JS/TS -- this doesn't prove the variable is unused.[/dim]"
-        )
+    _render_source_usages(report.source_usages)
 
     if report.required_by:
         console.print("\n[bold]Required by[/bold]")
@@ -627,45 +708,7 @@ def _render_explain_report(report: "explain.ExplainReport") -> None:
                 f'    when {report.variable} == "{condition.get("equals", "true")}"'
             )
 
-    console.print("\n[bold]Deployment[/bold]")
-    if not report.manifest_references:
-        console.print("  No deployment manifest registered for this service.")
-    else:
-        declared = [r for r in report.manifest_references if r.status == "declared"]
-        not_declared = [
-            r for r in report.manifest_references if r.status == "not_declared"
-        ]
-        unresolved = [r for r in report.manifest_references if r.status == "unresolved"]
-        errored = [r for r in report.manifest_references if r.status == "error"]
-        if declared:
-            for ref in declared:
-                console.print(f"  {ref.path}")
-                if ref.container:
-                    console.print(f"    container: {ref.container}")
-        elif not_declared:
-            # Only claim "not found" when at least one manifest positively
-            # doesn't declare it -- printing this alongside "Cannot
-            # confirm" below (when every non-declared reference is
-            # actually unresolved) would read as EnvShield confidently
-            # asserting absence in the same breath it admits it can't
-            # tell.
-            checked = ", ".join(r.path for r in report.manifest_references)
-            console.print(
-                "  Not found in any registered deployment manifest "
-                f"(checked: {checked}) -- this doesn't prove it isn't deployed elsewhere."
-            )
-        if unresolved:
-            console.print(
-                f"  [yellow]Cannot confirm for {len(unresolved)} manifest(s): "
-                f"{', '.join(r.path for r in unresolved)} -- references an external "
-                f"ConfigMap/Secret not included in the manifest; '{report.variable}' "
-                "may be supplied from there.[/yellow]"
-            )
-        if errored:
-            console.print(
-                f"  [dim]Could not check {len(errored)} manifest(s): "
-                f"{', '.join(r.path for r in errored)}[/dim]"
-            )
+    _render_manifest_references(report.manifest_references, report.variable)
 
 
 @app.command(name="explain")
@@ -703,6 +746,16 @@ def explain_command(
 
     try:
         report = explain.build_report(variable, resolved_service)
+    except VariableNotFoundError:
+        # Degrade gracefully instead of only erroring -- exactly the
+        # workflow moment a developer reaches for 'explain' most: a
+        # variable 'undeclared'/'scan' just found, not yet in the schema.
+        undeclared_report = explain.build_undeclared_report(variable, resolved_service)
+        if json_output:
+            print(json.dumps(undeclared_report.to_dict(), indent=2))
+        else:
+            _render_undeclared_explain_report(undeclared_report)
+        raise typer.Exit(code=1)
     except EnvShieldException as e:
         if json_output:
             print(

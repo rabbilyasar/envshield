@@ -14,7 +14,16 @@ def _write(relative, content):
 
 
 class TestExplainNotFound:
-    def test_unknown_variable_is_a_clear_non_zero_error(self, tmp_path):
+    """
+    An undeclared variable now degrades gracefully instead of only
+    erroring (these three tests used to assert a bare "not found" error
+    payload as correct -- rewritten, not deleted, to assert the new
+    graceful-degradation report instead; still exit 1, since the variable
+    genuinely isn't declared, but the CLI now reports what it *can* find
+    rather than nothing at all).
+    """
+
+    def test_unknown_variable_reports_not_declared_and_stays_non_zero(self, tmp_path):
         with runner.isolated_filesystem(temp_dir=tmp_path):
             _write("envshield.yml", "services:\n  api:\n    schema: env.schema.toml\n")
             _write("env.schema.toml", '[X]\ndescription = "x"\n')
@@ -25,9 +34,26 @@ class TestExplainNotFound:
 
             assert result.exit_code == 1
             assert "DOES_NOT_EXIST" in result.stdout
-            assert "not found" in result.stdout.lower()
+            assert "not declared" in result.stdout.lower()
 
-    def test_unknown_variable_json_error_is_not_a_silent_empty_success(self, tmp_path):
+    def test_unknown_variable_with_a_source_read_names_the_file_and_line(
+        self, tmp_path
+    ):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            _write("envshield.yml", "services:\n  api:\n    schema: env.schema.toml\n")
+            _write("env.schema.toml", '[X]\ndescription = "x"\n')
+            _write("config.py", "import os\nos.getenv('DOES_NOT_EXIST')\n")
+
+            result = runner.invoke(
+                app, ["explain", "DOES_NOT_EXIST", "--service", "api"]
+            )
+
+            assert result.exit_code == 1
+            assert "config.py:2" in result.stdout
+
+    def test_unknown_variable_json_reports_found_false_not_a_silent_success(
+        self, tmp_path
+    ):
         with runner.isolated_filesystem(temp_dir=tmp_path):
             _write("envshield.yml", "services:\n  api:\n    schema: env.schema.toml\n")
             _write("env.schema.toml", '[X]\ndescription = "x"\n')
@@ -38,34 +64,37 @@ class TestExplainNotFound:
 
             assert result.exit_code == 1
             payload = json.loads(result.stdout)
-            assert "error" in payload
+            assert payload["found"] is False
+            assert payload["declared"] is False
             assert "schema" not in payload
 
-    def test_unknown_variable_json_error_matches_check_results_convention(
-        self, tmp_path
-    ):
+    def test_unknown_variable_json_matches_undeclared_report_shape(self, tmp_path):
         """
-        Same shape schema_manager.check_result uses for its own error
-        return: identity keys (variable, service), a boolean status key
-        (found=False), and 'error' -- no null-padded data keys, no
-        bespoke partial shape.
+        The shape UndeclaredVariableReport.to_dict() defines: identity keys
+        (variable, service), two boolean status keys (found=False,
+        declared=False), and the same source_usages/manifest_references
+        keys a declared variable's report carries -- no bespoke partial
+        shape, and no more 'error' key for this specific case (still used
+        for every other explain failure, e.g. a missing envshield.yml).
         """
         with runner.isolated_filesystem(temp_dir=tmp_path):
             _write("envshield.yml", "services:\n  api:\n    schema: env.schema.toml\n")
             _write("env.schema.toml", '[X]\ndescription = "x"\n')
+            _write("config.py", "import os\nos.getenv('DOES_NOT_EXIST')\n")
 
             result = runner.invoke(
                 app, ["explain", "DOES_NOT_EXIST", "--service", "api", "--json"]
             )
 
             payload = json.loads(result.stdout)
-            assert payload == {
-                "variable": "DOES_NOT_EXIST",
-                "service": "api",
-                "found": False,
-                "error": payload["error"],
-            }
-            assert "DOES_NOT_EXIST" in payload["error"]
+            assert payload["variable"] == "DOES_NOT_EXIST"
+            assert payload["service"] == "api"
+            assert payload["found"] is False
+            assert payload["declared"] is False
+            assert "error" not in payload
+            assert len(payload["source_usages"]) == 1
+            assert payload["source_usages"][0]["file_path"] == "config.py"
+            assert payload["manifest_references"] == []
 
     def test_service_resolution_failure_reports_a_null_service(self, tmp_path):
         """

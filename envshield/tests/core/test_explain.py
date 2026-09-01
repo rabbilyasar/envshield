@@ -91,6 +91,71 @@ class TestVariableNotFound:
         assert "app" in str(exc_info.value)
 
 
+class TestBuildUndeclaredReport:
+    """
+    build_undeclared_report is the CLI's graceful-degradation path, called
+    only after build_report has already raised VariableNotFoundError above
+    -- it doesn't replace that contract, it's a sibling for exactly the
+    case that exception signals.
+    """
+
+    def test_declared_variable_with_a_source_read_is_named(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        _write_root_service()
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[X]\ndescription = "x"\n')
+        with open("config.py", "w") as f:
+            f.write("import os\nos.getenv('DOES_NOT_EXIST')\n")
+
+        report = explain.build_undeclared_report("DOES_NOT_EXIST", "app")
+
+        assert report.variable == "DOES_NOT_EXIST"
+        assert report.service == "app"
+        assert len(report.source_usages) == 1
+        assert report.source_usages[0].file_path == "config.py"
+        assert report.source_usages[0].line == 2
+
+    def test_undeclared_variable_with_no_source_reference_reports_an_empty_list(
+        self, tmp_path, monkeypatch
+    ):
+        """
+        A meaningful, real case: e.g. a name a developer is only
+        considering adding, or one read via a pattern EnvShield doesn't
+        recognize (app.config[...], a bare getenv() not imported from os,
+        etc.) -- reported as an empty list, the same "absence of evidence,
+        never proof of absence" contract build_report's own source_usages
+        already follows, not a special case invented for this function.
+        """
+        monkeypatch.chdir(tmp_path)
+        _write_root_service()
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[X]\ndescription = "x"\n')
+        with open("config.py", "w") as f:
+            f.write("x = 1\n")
+
+        report = explain.build_undeclared_report("DOES_NOT_EXIST", "app")
+
+        assert report.source_usages == []
+
+    def test_to_dict_shape(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        _write_root_service()
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[X]\ndescription = "x"\n')
+
+        report = explain.build_undeclared_report("DOES_NOT_EXIST", "app")
+        payload = report.to_dict()
+
+        assert payload["variable"] == "DOES_NOT_EXIST"
+        assert payload["service"] == "app"
+        assert payload["found"] is False
+        assert payload["declared"] is False
+        assert payload["source_usages"] == []
+        assert payload["manifest_references"] == []
+
+
 class TestSourceUsages:
     def test_a_single_usage_is_reported_with_file_and_line(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
