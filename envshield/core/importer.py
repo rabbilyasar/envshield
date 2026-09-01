@@ -24,7 +24,22 @@ SCHEMA_HEADER = (
 )
 
 # Heuristics for smarter import
-SECRET_KEY_KEYWORDS = ["secret", "token", "password", "key", "auth", "credential"]
+# "pass" alongside "password": a real Zeus codebase declared DB_PASS (and
+# REDIS_PASS/MYSQL_PASS-shaped names are just as common) with no full
+# "password" token anywhere -- token-based matching (see
+# key_contains_secret_keyword) means adding it can't reintroduce the
+# MONKEY_PATCH/AUTHOR_NAME substring false positives this list already
+# guards against; a token exactly equal to "pass" is a materially
+# different, rarer collision than a *substring* match would be.
+SECRET_KEY_KEYWORDS = [
+    "secret",
+    "token",
+    "password",
+    "pass",
+    "key",
+    "auth",
+    "credential",
+]
 
 # Naming conventions several frontend frameworks use to mark an env var as
 # intentionally public: these get inlined straight into the client-side

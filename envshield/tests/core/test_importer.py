@@ -263,6 +263,36 @@ def test_classify_variable_still_flags_real_secret_keywords():
     assert is_secret is True
 
 
+def test_classify_variable_flags_the_pass_abbreviation():
+    """
+    Regression, found on a real Zeus codebase: 'password' alone missed the
+    equally common 'pass' abbreviation (DB_PASS, REDIS_PASS, MYSQL_PASS),
+    classifying a real database password as non-secret. Token-based
+    matching means adding "pass" can't reintroduce the substring false
+    positives (MONKEY_PATCH, AUTHOR_NAME) that "key"/"auth" already avoid --
+    reconfirmed below, not just assumed unaffected.
+    """
+    is_secret, _ = importer._classify_variable("DB_PASS", "abcdef")
+    assert is_secret is True
+
+    is_secret, _ = importer._classify_variable("REDIS_PASS", "abcdef")
+    assert is_secret is True
+
+    is_secret, _ = importer._classify_variable("MYSQL_PASS", "abcdef")
+    assert is_secret is True
+
+    # "password" spelled out must still work -- this fix is additive.
+    is_secret, _ = importer._classify_variable("DB_PASSWORD", "abcdef")
+    assert is_secret is True
+
+    # Adding "pass" must not reintroduce a substring false positive.
+    is_secret, _ = importer._classify_variable("MONKEY_PATCH_ENABLED", "true")
+    assert is_secret is False
+
+    is_secret, _ = importer._classify_variable("AUTHOR_NAME", "Jane Doe")
+    assert is_secret is False
+
+
 def test_importer_classifies_correctly(mocker):
     """Tests the importer's smart classification logic."""
     variables = {

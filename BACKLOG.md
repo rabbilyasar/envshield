@@ -509,6 +509,26 @@ Component: `core/discovery.py` (`_is_os_environ`/`_is_os_getenv`/`_is_os_environ
 - **Tests:** `test_discovery.py::TestBareOsImportRecognition` (8 cases — bare `getenv`, bare `environ.get`/`environ[]`, with-default, aliased-import-out-of-scope, unrelated-bare-getenv-with-no-os-import, unrelated-bare-getenv-from-a-different-module, qualified-and-bare-forms-coexisting, `discover_python_env_vars` parity) plus one `TestOutOfScopeByDesign` addition (nested-in-a-function, out of scope). The one pre-existing test that had locked in the old, incorrect "not reported" behavior as correct (`test_from_import_indirection_is_not_reported`) was removed from `TestOutOfScopeByDesign`, not merely deleted silently — its case now lives, inverted, in the new class. Full suite green.
 - **Decision:** **Fixed 2026-08-30, in the working tree — not yet released, not yet committed.**
 
+### BL-110 — Secret-keyword classification missed the `_PASS` abbreviation
+Type: `DISCOVERY` (bug) · Evidence: `CONFIRMED` (live-reproduced on a real Zeus codebase, symmetric across two services) · Priority: P2
+Source(s): Zeus real-world dogfooding evaluation (2026-08-30) — `DB_PASS` (both `athena` and `hermes`) and `TRAVELPAY_APIKEY` (`athena`) classified `secret = false` by `service discover`'s auto-classification.
+Component: `core/importer.py` (`SECRET_KEY_KEYWORDS`, `key_contains_secret_keyword`)
+
+- **Problem:** `SECRET_KEY_KEYWORDS` had `"password"` but not `"pass"` — `key_contains_secret_keyword`'s existing token-based matching (splitting on `_`, checking whole-token equality — deliberately not substring matching, to avoid `MONKEY_PATCH`/`AUTHOR_NAME`-style false positives) meant `DB_PASS` (tokens `["db", "pass"]`) never matched anything in the list.
+- **Fix:** added `"pass"` to `SECRET_KEY_KEYWORDS`. A one-line, purely additive data change — the token-based matching mechanism itself is untouched, so it cannot reintroduce the substring false positives it already guards against (re-verified directly: `MONKEY_PATCH_ENABLED`/`AUTHOR_NAME` still classify non-secret).
+- **`TRAVELPAY_APIKEY` (no underscore before "KEY") is a distinct, harder problem, deliberately NOT fixed here** — see `BL-111`.
+- **Tests:** `test_importer.py::test_classify_variable_flags_the_pass_abbreviation` — `DB_PASS`/`REDIS_PASS`/`MYSQL_PASS` now secret; `DB_PASSWORD` still secret (unaffected); `MONKEY_PATCH_ENABLED`/`AUTHOR_NAME` re-confirmed still non-secret in the same test, not merely assumed unaffected.
+- **Decision:** **Fixed 2026-08-30, in the working tree — not yet released, not yet committed.**
+
+### BL-111 — Secret-keyword classification misses compound suffixes without a delimiter (e.g. `APIKEY`)
+Type: `DISCOVERY` (design limitation) · Evidence: `CONFIRMED` · Priority: P3
+Source(s): Zeus real-world dogfooding evaluation (2026-08-30) — `TRAVELPAY_APIKEY` classified `secret = false`.
+
+- **Problem:** `key_contains_secret_keyword`'s token-based matching splits on `_` only. `TRAVELPAY_APIKEY` tokenizes to `["travelpay", "apikey"]` — `"apikey"` is a single token, never equal to `"key"`, so it's invisible to the current keyword list regardless of what's in it.
+- **Why this isn't a simple keyword-list addition (unlike `BL-110`):** a naive fix (match a keyword as a token *suffix* instead of requiring exact equality) reintroduces exactly the false positive this design already deliberately avoids — `"monkey".endswith("key")` is `True`, so a blanket suffix check would wrongly re-flag `MONKEY_PATCH` as secret. A real fix needs a curated compound-suffix list (`apikey`, `secretkey`, `authtoken`, etc.) or an equivalent smarter heuristic, not a one-line change.
+- **Decision:** Open, backlog, explicitly **not implemented this pass** per instruction — a genuine design question, not a same-day fix. **Zeus-specific workaround in the interim:** manual review of compound `KEY`/`SECRET`/`TOKEN`-suffixed names without an underscore during schema authoring.
+- **Target:** A future pass, once a concrete curated-suffix (or equivalent) design is chosen and its false-positive risk re-verified against the existing `MONKEY_PATCH`/`AUTHOR_NAME`/`KEYBOARD_LAYOUT` regression cases.
+
 ### BL-113 — Framework-aware Python configuration discovery: architecture proposal (design record, not implemented)
 Type: `ARCHITECTURE` (design record) · Evidence: — (a proposal, not a bug) · Priority: — (not a bug; a tracking record, matching `BL-103`'s shape)
 Source(s): Surfaced by `BL-109`'s real-world fix (a Zeus codebase's central config module used `from os import getenv` exclusively, invisible to discovery) and the Zeus dogfooding evaluation's finding that `app.config[...]`/Django `settings.X` are entirely outside discovery's scope. Design work performed this session; see ROADMAP.md's Exploring section for the product-facing summary this entry backs.
