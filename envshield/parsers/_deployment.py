@@ -44,6 +44,28 @@ def detect_deployment_format(file_path: str) -> str | None:
 _HELM_TEMPLATE_EXPRESSION_RE = re.compile(r"\{\{.*?\}\}", re.DOTALL)
 
 
+def safe_yaml_error_message(e: yaml.YAMLError) -> str:
+    """
+    yaml.YAMLError's own __str__ (and its Mark objects' own __str__, via
+    problem_mark/context_mark) renders a code-context snippet that embeds
+    the actual offending line's content -- verified directly: a secret-
+    shaped string placed on a malformed line partially leaks into str(e).
+    Only the error's structural attributes (problem/context descriptions,
+    1-indexed line/column numbers) are safe to surface in a message a CLI
+    might print or a JSON error field might carry -- this never touches a
+    Mark's own __str__/get_snippet(), which is exactly what leaks content.
+    """
+    parts = []
+    if getattr(e, "problem", None):
+        parts.append(e.problem)
+    mark = getattr(e, "problem_mark", None)
+    if mark is not None:
+        parts.append(f"at line {mark.line + 1}, column {mark.column + 1}")
+    if getattr(e, "context", None):
+        parts.append(f"({e.context})")
+    return " ".join(parts) if parts else type(e).__name__
+
+
 def looks_like_unrendered_helm_template(file_path: str) -> bool:
     """
     True when `file_path` contains at least one '{{ ... }}' Go-template

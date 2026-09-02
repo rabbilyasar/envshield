@@ -179,6 +179,31 @@ def test_parser_raises_clean_error_for_multi_document_yaml(tmp_path):
         DockerComposeParser().get_vars(str(f))
 
 
+def test_yaml_parse_error_never_echoes_the_offending_lines_content(tmp_path):
+    """
+    Regression for BL-031/BL-115: yaml.YAMLError's own __str__ renders a
+    code-context snippet containing the actual offending line's text --
+    verified directly (a secret-shaped string on a malformed line partially
+    leaked into str(e)) -- so building the EnvShieldException message from
+    str(e) directly would leak file content through a parse-error message,
+    the same class of leak BL-001's security invariant exists to prevent.
+    Only structural info (problem description, line/column numbers) may
+    appear in the message.
+    """
+    f = tmp_path / "docker-compose.yml"
+    f.write_text(
+        'services:\n  api:\n    environment:\n      API_KEY: "AKIA-NOT-A-REAL-AWS-KEY_SECRET-PLACEHOLDER-VALUE\n      DB_HOST: localhost\n'
+    )
+
+    with pytest.raises(EnvShieldException) as exc_info:
+        DockerComposeParser().get_vars(str(f))
+
+    message = str(exc_info.value)
+    assert "AKIA" not in message
+    assert "SECRET" not in message
+    assert "line" in message and "column" in message
+
+
 class TestEnvFileLongForm:
     """
     Regression coverage for the Compose Spec long-form 'env_file:' entry

@@ -6,6 +6,7 @@ import yaml
 
 from ..core.exceptions import EnvShieldException
 from ._base import BaseParser
+from ._deployment import safe_yaml_error_message
 from ._dotenv import DotenvParser
 
 # Matches a value that is ENTIRELY one Compose variable-substitution
@@ -63,9 +64,9 @@ class DockerComposeParser(BaseParser):
                 doc = yaml.safe_load(f) or {}
             except yaml.YAMLError as e:
                 raise EnvShieldException(
-                    f"Could not parse '{file_path}': {e}. If this file contains "
-                    "multiple YAML documents ('---'-separated), only a single "
-                    "document is supported."
+                    f"Could not parse '{file_path}': {safe_yaml_error_message(e)}. "
+                    "If this file contains multiple YAML documents "
+                    "('---'-separated), only a single document is supported."
                 )
 
         services = doc.get("services") if isinstance(doc, dict) else None
