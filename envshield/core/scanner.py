@@ -139,6 +139,18 @@ SECRET_PATTERNS: List[Dict[str, str]] = [
         "pattern": r"\bpypi-AgEIcHlwaS5vcmc[A-Za-z0-9-_]{50,1000}\b",
     },
 ]
+# _scan_single_file's hot loop calls re.search() once per (line, pattern) --
+# millions of times on a large repo (25M+ calls measured on a ~2,900-file
+# real-world monorepo). re.search(pattern_string, line) re-hashes the
+# pattern string and looks it up in re's internal compile cache on every
+# single call; pre-compiling once here and calling Pattern.search(line)
+# instead skips that per-call lookup entirely. SECRET_PATTERNS itself keeps
+# its existing List[Dict[str, str]] shape unchanged -- importer.py and
+# several tests call re.search(p["pattern"], ...) directly against it -- this
+# is purely an internal fast path for this module's own hot loop.
+_COMPILED_SECRET_PATTERNS = [
+    (secret["name"], re.compile(secret["pattern"])) for secret in SECRET_PATTERNS
+]
 # Directories that are never useful to scan and are expensive/noisy to walk:
 # dependency trees, VCS internals, virtualenvs, and build artifacts. These are
 # always pruned in addition to whatever the user configures in envshield.yml.
@@ -341,14 +353,14 @@ def _scan_single_file(
                 continue
 
             # Check for secrets
-            for secret in SECRET_PATTERNS:
-                match = re.search(secret["pattern"], line)
+            for secret_name, compiled_pattern in _COMPILED_SECRET_PATTERNS:
+                match = compiled_pattern.search(line)
                 if match:
                     secret_findings.append(
                         {
                             "file_path": _display_path(file_path),
                             "line_num": line_num,
-                            "secret_type": secret["name"],
+                            "secret_type": secret_name,
                             # Only the matched span's length, never the raw
                             # line or any part of the matched value itself --
                             # see _redact_match.
