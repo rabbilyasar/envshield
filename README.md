@@ -296,6 +296,43 @@ Every command is service-aware. `--service` is optional with exactly one service
 
 ---
 
+## Multiple sources per service (`completeness: union`)
+
+By default, every registered source for a service — its `local_file`, each registered deployment manifest — is validated independently against the *whole* schema: `check`/`doctor` expect any one of them to be self-sufficient on its own. Some services genuinely don't work that way: part of the configuration lives in a local config file, the rest is supplied by a deployment manifest. Under the default model, a variable that only ever lives in one of them shows up as "missing" everywhere else, even though nothing is actually wrong.
+
+Set `completeness: union` on a service to validate against the *combined* presence of all its registered sources instead — a variable satisfied by any one of them satisfies the service as a whole:
+
+```yaml
+services:
+  api:
+    schema: services/api/env.schema.toml
+    local_file: services/api/config/settings.py
+    completeness: union
+manifests:
+  - file: docker-compose.yml
+    containers:
+      api: api
+```
+
+```toml
+[DB_HOST]
+description = "set in config/settings.py"
+
+[FEATURE_MODE]
+description = "set via docker-compose.yml"
+```
+
+With `completeness: union`, `check`/`doctor` stop expecting `config/settings.py` to declare `FEATURE_MODE`, or `docker-compose.yml` to set `DB_HOST` — the schema is satisfied as long as every variable is present *somewhere* among the registered sources. `envshield schema sync` respects this too: it only ever appends a variable to a Python `local_file` that's genuinely missing from every registered source, never one that another source already covers.
+
+A few things worth knowing:
+
+- **Opt-in, per service.** Unset (the default) means every source must be independently self-sufficient, exactly as before this existed — nothing changes unless you set the key.
+- **Union means presence, not values.** Whether an ordinary variable is satisfied depends only on whether it's present (and valid) somewhere — never on merging, comparing, or picking between its values across sources. A blank or invalid value is still reported, wherever it occurs. **The one deliberate exception** is a `requiredIf` trigger's own value (see next) — deciding whether a condition currently holds has always meant reading one specific value, even before `completeness: union` existed; union only extends *where* that one value may come from, it doesn't turn this into general value merging.
+- **A `requiredIf` condition (see [Conditional requirements](#conditional-requirements-requiredif) above) is resolved against the union too** — if the variable a condition depends on lives in a different source than the one being checked, `completeness: union` still finds it. Sources that agree on the trigger's value resolve normally; if two sources genuinely disagree, EnvShield reports it as an explicit conflict rather than guessing which one wins — registration order is never used as a tiebreaker.
+- **A source that fails to load is always a failure**, even if the sources that did load happen to satisfy the schema between them. `doctor` reports this as two separate signals for a union-mode service — source health (does this file exist and parse) and registered-source completeness (does the union satisfy the schema) — so one can never quietly hide behind the other. `check --json` reflects the same split: each source's own result is still reported individually, plus one `combined` entry per union-mode service carrying the aggregate verdict.
+
+---
+
 ## Supported languages / discovery
 
 Source-code discovery (what powers `undeclared` and `explain`'s "used in source" section) is AST-based for **Python** (`os.environ.get`, `os.getenv`, `os.environ[...]`) and pattern-based for **JavaScript/TypeScript** (`process.env.X`, `process.env["X"]`, `import.meta.env.X`, including single-level destructuring). No other language is discovered yet — the schema and validation commands work with any stack, but `undeclared`/`explain` can only see what's read from these two.

@@ -153,6 +153,97 @@ def _check_deployment_manifest(service_name: str):
     return all_clean, "; ".join(messages)
 
 
+def _check_local_source_health(service_name: str):
+    """
+    completeness: union's (BL-030) variant of `_check_local_env_sync` --
+    reports only whether the local file exists and parses, never whether
+    it alone satisfies the schema, since under union mode it's explicitly
+    allowed not to (another registered source may cover the rest). Schema
+    completeness itself is owned entirely by `_check_union_completeness`,
+    kept as a separate check so a source parse error can never hide behind
+    a passing completeness line, and vice versa.
+    """
+    try:
+        local_file = config_manager.get_env_paths(service_name=service_name)[
+            "local_file"
+        ]
+        if not os.path.exists(local_file):
+            return (
+                False,
+                f"Local env file '{local_file}' not found. Run 'envshield setup' to create it.",
+            )
+        parser = get_parser(local_file)
+        if not parser:
+            return False, f"Cannot parse local env file '{local_file}'."
+        parser.get_vars(local_file, get_values=True)
+        return (
+            True,
+            f"'{local_file}' exists and parses. (completeness: union -- schema "
+            "coverage is checked separately, see Registered-Source Completeness.)",
+        )
+    except EnvShieldException as e:
+        return False, str(e)
+
+
+def _check_manifest_source_health(service_name: str):
+    """completeness: union's (BL-030) variant of `_check_deployment_manifest` -- parse health per manifest, never schema completeness."""
+    manifests = config_manager.get_deployment_manifests(service_name)
+    if not manifests:
+        return True, "No deployment manifest registered -- nothing to check."
+
+    all_ok = True
+    messages = []
+    for manifest in manifests:
+        try:
+            parser = get_parser(
+                manifest["path"],
+                container=manifest.get("container"),
+                prefer=service_name,
+            )
+            if not parser:
+                all_ok = False
+                messages.append(
+                    f"Cannot parse deployment manifest '{manifest['path']}'."
+                )
+                continue
+            parser.get_vars(manifest["path"], get_values=True)
+            messages.append(f"'{manifest['path']}' exists and parses.")
+        except (EnvShieldException, FileNotFoundError, ValueError) as e:
+            all_ok = False
+            messages.append(f"Could not check '{manifest['path']}': {e}")
+
+    return all_ok, "; ".join(messages)
+
+
+def _check_union_completeness(service_name: str):
+    """
+    completeness: union's (BL-030) aggregate verdict -- does the union of
+    every registered, HEALTHY source satisfy the schema? A source that
+    failed to load is never silently treated as satisfying anything; its
+    own failure is reported by `_check_local_source_health`/
+    `_check_manifest_source_health` above, and it also makes this check
+    itself fail (belt-and-suspenders -- this check's own pass/fail must be
+    correct read in isolation, not only via doctor's overall AND of every
+    registered check).
+    """
+    try:
+        schema = config_manager.load_schema(service_name=service_name)
+        sources, errors = schema_manager.load_union_sources(service_name)
+    except EnvShieldException as e:
+        return False, str(e)
+
+    result = schema_manager.evaluate_union_completeness(schema, sources)
+    if errors:
+        detail = result.summary() if not result.is_clean else "the sources that did load are otherwise complete"
+        return (
+            False,
+            f"Could not fully evaluate -- {'; '.join(errors)} ({detail})",
+        )
+    if result.is_clean:
+        return True, "Schema is satisfied by the combined union of registered sources."
+    return False, result.summary()
+
+
 def _check_example_file_sync(service_name: str):
     try:
         schema = config_manager.load_schema(service_name=service_name)
@@ -172,10 +263,22 @@ def _check_example_file_sync(service_name: str):
     # (cli.py's only caller for '--check'), which never runs a companion
     # check -- and the installed pre-commit hook calls nothing but that
     # (see BL-005: a live-proven hook bypass, not a hypothetical). Reusing
-    # _check_local_env_sync's own coverage check makes the comment's
-    # original reasoning actually true for every caller, rather than
-    # re-implementing the same parse-and-diff here.
+    # the same coverage check "Local Environment Sync"/"Registered-Source
+    # Completeness" already runs makes the comment's original reasoning
+    # actually true for every caller, rather than re-implementing the same
+    # parse-and-diff here.
+    #
+    # BL-030: for a completeness: union service this must delegate to the
+    # UNION verdict, not the single-file one -- otherwise 'schema sync
+    # --check' (and the pre-commit hook that calls only it) would report
+    # "not in sync" for a variable completeness: union already considers
+    # satisfied elsewhere, which running 'sync' would then correctly leave
+    # alone -- the exact BL-005 class of bug (a check disagreeing with what
+    # the write path it's supposed to predict would actually do), just
+    # reachable through a different, newer door.
     if local_file.endswith(".py"):
+        if config_manager.get_service_completeness_mode(service_name) == "union":
+            return _check_union_completeness(service_name)
         return _check_local_env_sync(service_name)
 
     if not os.path.exists(example_file):
@@ -383,6 +486,14 @@ def _build_checks(service_name: str) -> List[HealthCheck]:
     rendering + --fix) and run_health_check_json (--json) so they can never
     quietly diverge on which checks exist.
     """
+    # completeness: union (BL-030) changes what "Local Environment Sync"/
+    # "Deployment Manifest" mean for THIS service only: under union, no
+    # single registered source is required to be self-sufficient, so
+    # asserting "this one file satisfies the whole schema" would be wrong
+    # by design. Every other service (the default -- this key unset) keeps
+    # today's checks completely unchanged, in both content and position.
+    is_union = config_manager.get_service_completeness_mode(service_name) == "union"
+
     checks: List[HealthCheck] = [
         HealthCheck(
             "Configuration Files",
@@ -390,22 +501,40 @@ def _build_checks(service_name: str) -> List[HealthCheck]:
             fix_func=_run_init_fix,
             fix_description="No config found. Run 'envshield init' to create them?",
         ),
-        HealthCheck(
-            "Local Environment Sync",
-            lambda: _check_local_env_sync(service_name),
-            # Delegates to the same wizard 'setup' already runs, rather than
-            # re-implementing "prompt for whatever's missing/blank/invalid"
-            # here -- it already re-validates existing values (not just
-            # presence) and leaves everything already-correct untouched.
-            fix_func=lambda: setup_manager.run_setup(service_name=service_name),
-            fix_description="Run the setup wizard to fill in missing/invalid values?",
-        ),
+    ]
+
+    if is_union:
+        checks.append(
+            HealthCheck(
+                "Local Source Health",
+                lambda: _check_local_source_health(service_name),
+                fix_func=None,
+            )
+        )
+    else:
+        checks.append(
+            HealthCheck(
+                "Local Environment Sync",
+                lambda: _check_local_env_sync(service_name),
+                # Delegates to the same wizard 'setup' already runs, rather
+                # than re-implementing "prompt for whatever's missing/
+                # blank/invalid" here -- it already re-validates existing
+                # values (not just presence) and leaves everything
+                # already-correct untouched.
+                fix_func=lambda: setup_manager.run_setup(service_name=service_name),
+                fix_description="Run the setup wizard to fill in missing/invalid values?",
+            )
+        )
+
+    checks.append(
         HealthCheck(
             "Template Sync",
             lambda: _check_example_file_sync(service_name),
             fix_func=lambda: schema_manager.sync_schema(service_name=service_name),
             fix_description="Template is missing or out of sync. Generate/update it from the schema?",
-        ),
+        )
+    )
+    checks.append(
         HealthCheck(
             "Git Hooks",
             _check_git_hooks,
@@ -414,8 +543,8 @@ def _build_checks(service_name: str) -> List[HealthCheck]:
                 scanner.install_post_merge_hook(force=True),
             ),
             fix_description="One or both git hooks are missing or not EnvShield's. Install them now?",
-        ),
-    ]
+        )
+    )
 
     # Only shown at all when the service's envshield.yml entry actually
     # carries one of the legacy keys -- otherwise this would print a
@@ -463,10 +592,28 @@ def _build_checks(service_name: str) -> List[HealthCheck]:
     # service -- a project that doesn't use one shouldn't see a check for
     # it every single run.
     if config_manager.get_deployment_manifests(service_name):
+        if is_union:
+            checks.append(
+                HealthCheck(
+                    "Deployment Manifest Source Health",
+                    lambda: _check_manifest_source_health(service_name),
+                    fix_func=None,
+                )
+            )
+        else:
+            checks.append(
+                HealthCheck(
+                    "Deployment Manifest",
+                    lambda: _check_deployment_manifest(service_name),
+                    fix_func=None,
+                )
+            )
+
+    if is_union:
         checks.append(
             HealthCheck(
-                "Deployment Manifest",
-                lambda: _check_deployment_manifest(service_name),
+                "Registered-Source Completeness",
+                lambda: _check_union_completeness(service_name),
                 fix_func=None,
             )
         )

@@ -353,6 +353,183 @@ def test_sync_schema_reports_when_python_file_already_declares_everything(
     assert before == after
 
 
+def _write_generic_union_project(
+    tmp_path, monkeypatch, schema_toml: str, python_local_content: str, compose_content: str
+):
+    """
+    Shared setup for BL-030 union tests: one generic service ('app') with a
+    Python local_file and one registered Compose manifest, completeness:
+    union set. No Zeus paths/names anywhere -- deliberately generic.
+    """
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config").mkdir(parents=True)
+    with open("envshield.yml", "w") as f:
+        f.write(
+            "services:\n"
+            "  app:\n"
+            "    schema: env.schema.toml\n"
+            "    local_file: config/settings.py\n"
+            "    completeness: union\n"
+            "manifests:\n"
+            "  - file: docker-compose.yml\n"
+            "    containers:\n"
+            "      app: app\n"
+        )
+    with open("env.schema.toml", "w") as f:
+        f.write(schema_toml)
+    with open("config/settings.py", "w") as f:
+        f.write(python_local_content)
+    with open("docker-compose.yml", "w") as f:
+        f.write(compose_content)
+
+
+class TestUnionSync:
+    """BL-030: sync_schema must not append a variable another registered source already covers."""
+
+    def test_union_sync_does_not_duplicate_a_manifest_owned_variable(
+        self, tmp_path, monkeypatch
+    ):
+        _write_generic_union_project(
+            tmp_path,
+            monkeypatch,
+            schema_toml=(
+                '[DB_HOST]\ndescription="x"\n\n'
+                '[FEATURE_MODE]\ndescription="Compose-owned"\n'
+            ),
+            python_local_content='DB_HOST = "localhost"\n',
+            compose_content=(
+                "services:\n  app:\n    image: x\n    environment:\n      FEATURE_MODE: \"on\"\n"
+            ),
+        )
+
+        changed = schema_manager.sync_schema(service_name="app")
+
+        with open("config/settings.py") as f:
+            content = f.read()
+        assert "FEATURE_MODE" not in content
+        assert changed is False
+
+    def test_union_sync_still_appends_a_genuinely_unsatisfied_variable(
+        self, tmp_path, monkeypatch
+    ):
+        _write_generic_union_project(
+            tmp_path,
+            monkeypatch,
+            schema_toml=(
+                '[DB_HOST]\ndescription="x"\n\n'
+                '[GHOST]\ndescription="satisfied nowhere"\ndefaultValue="x"\n'
+            ),
+            python_local_content='DB_HOST = "localhost"\n',
+            compose_content="services:\n  app:\n    image: x\n",
+        )
+
+        schema_manager.sync_schema(service_name="app")
+
+        with open("config/settings.py") as f:
+            content = f.read()
+        assert "GHOST" in content
+
+    def test_non_union_sync_still_appends_everything_unchanged(
+        self, tmp_path, monkeypatch
+    ):
+        """Regression anchor: a service WITHOUT completeness: union keeps today's exact append-everything-missing behavior."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "config").mkdir(parents=True)
+        with open("envshield.yml", "w") as f:
+            f.write(
+                "services:\n  app:\n    schema: env.schema.toml\n    local_file: config/settings.py\n"
+                "manifests:\n  - file: docker-compose.yml\n    containers:\n      app: app\n"
+            )
+        with open("env.schema.toml", "w") as f:
+            f.write('[DB_HOST]\ndescription="x"\n\n[FEATURE_MODE]\ndescription="x"\n')
+        with open("config/settings.py", "w") as f:
+            f.write('DB_HOST = "localhost"\n')
+        with open("docker-compose.yml", "w") as f:
+            f.write(
+                "services:\n  app:\n    image: x\n    environment:\n      FEATURE_MODE: \"on\"\n"
+            )
+
+        schema_manager.sync_schema(service_name="app")
+
+        with open("config/settings.py") as f:
+            content = f.read()
+        assert "FEATURE_MODE" in content
+
+
+class TestLoadUnionSources:
+    """BL-030: load_union_sources reuses the existing parser mechanism and separates load failures from the sources that succeeded."""
+
+    def test_loads_local_file_and_manifest_as_separate_sources(
+        self, tmp_path, monkeypatch
+    ):
+        _write_generic_union_project(
+            tmp_path,
+            monkeypatch,
+            schema_toml='[DB_HOST]\ndescription="x"\n\n[FEATURE_MODE]\ndescription="x"\n',
+            python_local_content='DB_HOST = "localhost"\n',
+            compose_content=(
+                "services:\n  app:\n    image: x\n    environment:\n      FEATURE_MODE: \"on\"\n"
+            ),
+        )
+
+        sources, errors = schema_manager.load_union_sources("app")
+
+        assert errors == []
+        labels = {s.label for s in sources}
+        assert "config/settings.py" in labels
+        assert "docker-compose.yml" in labels
+
+    def test_malformed_source_is_reported_as_an_error_not_silently_dropped(
+        self, tmp_path, monkeypatch
+    ):
+        _write_generic_union_project(
+            tmp_path,
+            monkeypatch,
+            schema_toml='[DB_HOST]\ndescription="x"\n',
+            python_local_content="this is not valid python (((\n",
+            compose_content="services:\n  app:\n    image: x\n",
+        )
+
+        sources, errors = schema_manager.load_union_sources("app")
+
+        assert len(errors) == 1
+        assert "config/settings.py" in errors[0]
+        # The manifest still loaded successfully -- one bad source doesn't
+        # take down the ones that are fine.
+        assert any(s.label == "docker-compose.yml" for s in sources)
+
+
+class TestUnionSourceHealthNeverHiddenByCompleteness:
+    """
+    BL-030's explicit requirement: a source that fails to load must never
+    be hidden by an otherwise-successful union -- verified through the
+    full check_result/JSON path, not just the pure evaluate function.
+    """
+
+    def test_malformed_python_source_fails_even_though_compose_alone_is_complete(
+        self, tmp_path, monkeypatch
+    ):
+        _write_generic_union_project(
+            tmp_path,
+            monkeypatch,
+            schema_toml='[FEATURE_MODE]\ndescription="Compose-owned, fully covered"\n',
+            python_local_content="this is not valid python (((\n",
+            compose_content=(
+                "services:\n  app:\n    image: x\n    environment:\n      FEATURE_MODE: \"on\"\n"
+            ),
+        )
+        schema = config_manager.load_schema(service_name="app")
+
+        sources, errors = schema_manager.load_union_sources("app")
+        result = schema_manager.evaluate_union_completeness(schema, sources)
+
+        assert errors != []
+        as_dict = schema_manager.union_completeness_result_to_dict(
+            result, source_errors=errors
+        )
+        assert as_dict["clean"] is False
+
+
 def test_diff_against_schema_reports_clean_result():
     diff = schema_manager.diff_against_schema(
         {"FOO": {"description": "x"}}, {"FOO": "bar"}
@@ -421,6 +598,229 @@ def test_diff_against_schema_defaulted_vars_required_regardless_of_requiredif():
 
     assert diff.missing == {"FLAG"}
     assert "DEPENDENT" not in diff.missing
+
+
+class TestEvaluateUnionCompleteness:
+    """
+    BL-030 -- completeness: union's core algorithm. Every fixture here is
+    generic (no Zeus paths, service names, or Flask assumptions); source
+    labels are plain strings ('source-a'/'source-b') to keep that explicit.
+    """
+
+    def test_neither_source_alone_satisfies_but_the_union_does(self):
+        """The core case: a Python-shaped source and a Compose-shaped source, each individually incomplete, together cover the schema."""
+        schema = {
+            "DB_HOST": {"description": "x"},
+            "DB_PASS": {"description": "x", "secret": True},
+            "FEATURE_MODE": {"description": "x"},
+        }
+        sources = [
+            schema_manager.UnionSource(
+                "source-a", {"DB_HOST": "localhost", "DB_PASS": "hunter2"}
+            ),
+            schema_manager.UnionSource("source-b", {"FEATURE_MODE": "on"}),
+        ]
+
+        result = schema_manager.evaluate_union_completeness(schema, sources)
+
+        assert result.is_clean is True
+        assert result.missing == set()
+
+    def test_one_source_containing_every_variable_is_sufficient(self):
+        schema = {"A": {"description": "x"}, "B": {"description": "x"}}
+        sources = [
+            schema_manager.UnionSource("source-a", {"A": "1", "B": "2"}),
+            schema_manager.UnionSource("source-b", {}),
+        ]
+
+        result = schema_manager.evaluate_union_completeness(schema, sources)
+
+        assert result.is_clean is True
+
+    def test_a_variable_genuinely_missing_from_every_source_is_flagged(self):
+        schema = {"A": {"description": "x"}, "GHOST": {"description": "x"}}
+        sources = [
+            schema_manager.UnionSource("source-a", {"A": "1"}),
+            schema_manager.UnionSource("source-b", {}),
+        ]
+
+        result = schema_manager.evaluate_union_completeness(schema, sources)
+
+        assert result.is_clean is False
+        assert result.missing == {"GHOST"}
+
+    def test_blank_in_every_source_that_declares_it_is_flagged_blank_not_missing(self):
+        schema = {"A": {"description": "x"}}
+        sources = [
+            schema_manager.UnionSource("source-a", {"A": ""}),
+            schema_manager.UnionSource("source-b", {}),
+        ]
+
+        result = schema_manager.evaluate_union_completeness(schema, sources)
+
+        assert result.is_clean is False
+        assert result.blank == {"A"}
+        assert result.missing == set()
+
+    def test_blank_in_one_source_but_real_in_another_is_satisfied(self):
+        schema = {"A": {"description": "x"}}
+        sources = [
+            schema_manager.UnionSource("source-a", {"A": ""}),
+            schema_manager.UnionSource("source-b", {"A": "real-value"}),
+        ]
+
+        result = schema_manager.evaluate_union_completeness(schema, sources)
+
+        assert result.is_clean is True
+
+    def test_invalid_value_is_flagged_even_when_the_field_is_optional(self):
+        """Mirrors diff_against_schema's own unconditional validity check -- required-ness doesn't gate invalid-value detection."""
+        schema = {"PORT": {"description": "x", "type": "port", "defaultValue": "8080"}}
+        sources = [schema_manager.UnionSource("source-a", {"PORT": "not-a-port"})]
+
+        result = schema_manager.evaluate_union_completeness(schema, sources)
+
+        assert result.is_clean is False
+        assert "PORT" in result.invalid
+
+    def test_invalid_everywhere_it_is_declared_is_flagged_invalid_not_missing(self):
+        schema = {"PORT": {"description": "x", "type": "port"}}
+        sources = [
+            schema_manager.UnionSource("source-a", {"PORT": "nope"}),
+            schema_manager.UnionSource("source-b", {}),
+        ]
+
+        result = schema_manager.evaluate_union_completeness(schema, sources)
+
+        assert "PORT" in result.invalid
+        assert result.missing == set()
+
+    def test_unresolved_source_reference_reports_unresolved_not_missing(self):
+        schema = {"SECRET_X": {"description": "x", "secret": True}}
+        sources = [
+            schema_manager.UnionSource(
+                "source-a", {}, has_unresolved_source=True
+            )
+        ]
+
+        result = schema_manager.evaluate_union_completeness(schema, sources)
+
+        assert result.missing == set()
+        assert result.unresolved == {"SECRET_X"}
+        assert result.is_clean is False
+
+    def test_unresolved_value_placeholder_counts_as_satisfied(self):
+        from envshield.parsers._base import BaseParser
+
+        schema = {"A": {"description": "x"}}
+        sources = [
+            schema_manager.UnionSource("source-a", {"A": BaseParser.UNRESOLVED_VALUE})
+        ]
+
+        result = schema_manager.evaluate_union_completeness(schema, sources)
+
+        assert result.is_clean is True
+
+
+class TestUnionRequiredIf:
+    """BL-030's cross-source requiredIf evaluation and its explicit ambiguity rule."""
+
+    def _schema(self):
+        return {
+            "PAYMENTS_ENABLED": {"description": "x"},
+            "STRIPE_KEY": {
+                "description": "x",
+                "secret": True,
+                "requiredIf": {"var": "PAYMENTS_ENABLED", "equals": "true"},
+            },
+        }
+
+    def test_trigger_and_dependent_in_the_same_source(self):
+        sources = [
+            schema_manager.UnionSource(
+                "source-a", {"PAYMENTS_ENABLED": "true", "STRIPE_KEY": "sk_test"}
+            )
+        ]
+
+        result = schema_manager.evaluate_union_completeness(self._schema(), sources)
+
+        assert result.is_clean is True
+
+    def test_trigger_in_one_source_dependent_var_absent_everywhere_is_flagged(self):
+        """
+        The BL-030 'hidden-precedence' regression: requiredIf must be
+        evaluated against the UNION, not each source's own local values --
+        otherwise a source that can't see the trigger would silently treat
+        the dependent field as not-required, and neither source's own diff
+        would ever catch it missing.
+        """
+        sources = [
+            schema_manager.UnionSource("compose", {"PAYMENTS_ENABLED": "true"}),
+            schema_manager.UnionSource("python", {}),
+        ]
+
+        result = schema_manager.evaluate_union_completeness(self._schema(), sources)
+
+        assert result.is_clean is False
+        assert result.missing == {"STRIPE_KEY"}
+
+    def test_trigger_absent_everywhere_dependent_var_not_required(self):
+        """
+        PAYMENTS_ENABLED itself has no requiredIf/default, so it's still
+        unconditionally required and correctly flagged missing on its own
+        -- the assertion here is narrower: STRIPE_KEY's own conditional
+        requirement must not fire when its trigger can't be found anywhere,
+        exactly matching schema_types.is_required_now's existing
+        single-source behavior (a trigger that resolves to None never
+        satisfies an 'equals' comparison).
+        """
+        sources = [schema_manager.UnionSource("source-a", {})]
+
+        result = schema_manager.evaluate_union_completeness(self._schema(), sources)
+
+        assert "STRIPE_KEY" not in result.missing
+        assert "STRIPE_KEY" not in result.ambiguous_requiredif
+        assert result.missing == {"PAYMENTS_ENABLED"}
+
+    def test_trigger_in_multiple_sources_with_identical_values_evaluates_normally(self):
+        sources = [
+            schema_manager.UnionSource("compose", {"PAYMENTS_ENABLED": "true"}),
+            schema_manager.UnionSource(
+                "python", {"PAYMENTS_ENABLED": "true", "STRIPE_KEY": "sk_test"}
+            ),
+        ]
+
+        result = schema_manager.evaluate_union_completeness(self._schema(), sources)
+
+        assert result.is_clean is True
+        assert result.ambiguous_requiredif == {}
+
+    def test_trigger_with_conflicting_values_across_sources_is_ambiguous_not_guessed(self):
+        """
+        Explicit product decision: never pick a winner by registration
+        order or any other implicit rule -- an unresolvable conflict must
+        fail loudly, with both conflicting values and their sources named.
+        """
+        sources = [
+            schema_manager.UnionSource(
+                "compose", {"PAYMENTS_ENABLED": "true"}
+            ),
+            schema_manager.UnionSource(
+                "python", {"PAYMENTS_ENABLED": "false", "STRIPE_KEY": "sk_test"}
+            ),
+        ]
+
+        result = schema_manager.evaluate_union_completeness(self._schema(), sources)
+
+        assert result.is_clean is False
+        assert "STRIPE_KEY" in result.ambiguous_requiredif
+        reason = result.ambiguous_requiredif["STRIPE_KEY"]
+        assert "PAYMENTS_ENABLED" in reason
+        assert "'true'" in reason and "'false'" in reason
+        assert "compose" in reason and "python" in reason
+        # An ambiguous field's own value must never independently land in
+        # missing/blank/invalid too -- it gets exactly one diagnostic.
+        assert "STRIPE_KEY" not in result.missing
 
 
 def test_check_schema_flags_defaulted_vars_missing_from_local(mocker, tmp_path):

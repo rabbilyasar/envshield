@@ -1,7 +1,7 @@
 # envshield/core/schema_manager.py
 import datetime
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from rich.console import Console
 from rich.table import Table
@@ -188,6 +188,314 @@ def diff_against_schema(
         extra=extra,
         unresolved=unresolved,
     )
+
+
+class UnionSource(NamedTuple):
+    """
+    One registered source's already-loaded local values, ready for
+    `completeness: union` evaluation (BL-030). `label` is the source's own
+    path, used only for reporting -- never persisted, never used to decide
+    a value conflict (see `evaluate_union_completeness`'s explicit
+    ambiguity rule for why "which source" is deliberately not a
+    tie-breaker).
+    """
+
+    label: str
+    local_values: Dict[str, str]
+    has_unresolved_source: bool = False
+
+
+class UnionCompletenessResult:
+    """
+    The pure result of evaluating a schema against the UNION of several
+    registered sources' presence -- `completeness: union`'s counterpart to
+    `SchemaDiff`, deliberately kept close to its vocabulary (missing/blank/
+    invalid/unresolved) since it answers the same underlying question
+    ("is this schema satisfied") for many sources at once, plus one new
+    category (`ambiguous_requiredif`) that has no single-source equivalent:
+    a `requiredIf` trigger asserted with conflicting values by more than
+    one registered source, which makes that field's own required-ness
+    undecidable rather than merely unmet.
+    """
+
+    def __init__(
+        self,
+        missing: set,
+        blank: set,
+        invalid: Dict[str, str],
+        unresolved: set,
+        ambiguous_requiredif: Dict[str, str],
+    ):
+        self.missing = missing
+        self.blank = blank
+        self.invalid = invalid
+        self.unresolved = unresolved
+        self.ambiguous_requiredif = ambiguous_requiredif
+
+    @property
+    def is_clean(self) -> bool:
+        return not (
+            self.missing
+            or self.blank
+            or self.invalid
+            or self.unresolved
+            or self.ambiguous_requiredif
+        )
+
+    def summary(self) -> str:
+        messages = []
+        if self.missing:
+            messages.append(
+                f"Missing from every registered source: {', '.join(sorted(self.missing))}"
+            )
+        if self.blank:
+            messages.append(
+                f"Blank everywhere it's declared: {', '.join(sorted(self.blank))}"
+            )
+        if self.invalid:
+            details_str = "; ".join(
+                f"{k} ({v})" for k, v in sorted(self.invalid.items())
+            )
+            messages.append(f"Invalid values: {details_str}")
+        if self.unresolved:
+            messages.append(
+                f"Cannot confirm (a registered source has an unresolved external "
+                f"reference): {', '.join(sorted(self.unresolved))}"
+            )
+        if self.ambiguous_requiredif:
+            for key, reason in sorted(self.ambiguous_requiredif.items()):
+                messages.append(f"{key}: {reason}")
+        return "; ".join(messages)
+
+
+def _union_key_status(
+    key: str, field_schema: Dict[str, Any], sources: List[UnionSource]
+) -> str:
+    """
+    Classifies one schema key's presence across all `sources`, mirroring
+    `diff_against_schema`'s own single-source presence/validity logic
+    (including its `BaseParser.UNRESOLVED_VALUE` carve-out) generalized to
+    N sources. Deliberately never retains *which* value or source
+    satisfied the key -- completeness: union unions presence, not values
+    (see this module's own docstring-level framing of that boundary).
+
+    Returns "ok" (satisfied somewhere), "blank" (present, but only ever
+    blank), an `"invalid:<reason>"` string (present and non-blank
+    somewhere, but never valid), or "absent" (not found in any source).
+    """
+    saw_blank = False
+    invalid_reason: Optional[str] = None
+    for source in sources:
+        if key not in source.local_values:
+            continue
+        value = source.local_values[key]
+        if value == BaseParser.UNRESOLVED_VALUE:
+            return "ok"
+        if not value:
+            saw_blank = True
+            continue
+        error = schema_types.validate_value(value, field_schema)
+        if error:
+            if invalid_reason is None:
+                invalid_reason = error
+            continue
+        return "ok"
+    if invalid_reason is not None:
+        return f"invalid:{invalid_reason}"
+    if saw_blank:
+        return "blank"
+    return "absent"
+
+
+def _resolve_union_requiredif_triggers(
+    schema: Dict[str, Any], sources: List[UnionSource]
+) -> Tuple[Dict[str, str], Dict[str, str]]:
+    """
+    Resolves every `requiredIf` trigger variable referenced anywhere in
+    `schema` against the union of `sources`.
+
+    A trigger absent from every source resolves to nothing (the dependent
+    field's condition then evaluates as not-met, via schema_types.
+    is_required_now's own existing `None == expected` behavior -- exactly
+    today's single-source semantics, just extended to the union). A
+    trigger asserted with the same value by every source that has it
+    resolves normally. A trigger asserted with genuinely *different*
+    values by different sources is never resolved by picking one --
+    registration order must never decide completeness (explicit product
+    decision) -- it's recorded as ambiguous instead, with every
+    conflicting value and its source(s) named.
+
+    Returns (resolved trigger values -- safe to feed straight into
+    schema_types.is_required_now/should_be_present unchanged, ambiguous
+    trigger name -> human-readable diagnostic).
+    """
+    trigger_vars = {
+        details["requiredIf"]["var"]
+        for details in schema.values()
+        if isinstance(details.get("requiredIf"), dict) and details["requiredIf"].get("var")
+    }
+
+    resolved: Dict[str, str] = {}
+    ambiguous: Dict[str, str] = {}
+    for trigger in trigger_vars:
+        seen: Dict[str, List[str]] = {}
+        for source in sources:
+            if trigger in source.local_values:
+                seen.setdefault(source.local_values[trigger], []).append(source.label)
+        if not seen:
+            continue
+        if len(seen) == 1:
+            (value,) = seen.keys()
+            resolved[trigger] = value
+        else:
+            parts = "; ".join(
+                f"{value!r} in {', '.join(labels)}" for value, labels in sorted(seen.items())
+            )
+            ambiguous[trigger] = (
+                f"requiredIf trigger '{trigger}' has conflicting values across "
+                f"registered sources: {parts}"
+            )
+    return resolved, ambiguous
+
+
+def evaluate_union_completeness(
+    schema: Dict[str, Any], sources: List[UnionSource]
+) -> UnionCompletenessResult:
+    """
+    The core `completeness: union` evaluation (BL-030): is `schema`
+    satisfied by the UNION of `sources`' presence, rather than requiring
+    any single source to be self-sufficient?
+
+    Only ever combines *presence* across sources, never values -- the one
+    deliberate exception is a `requiredIf` trigger's own value, which is
+    needed to decide whether a field is required at all (the same thing
+    `schema_types.is_required_now` already reads from a single source
+    today; this only extends *where* that one value may come from). A
+    genuine cross-source conflict on a trigger's value is never resolved
+    silently -- see `_resolve_union_requiredif_triggers`.
+
+    `sources` must already be loaded and healthy -- a source that failed
+    to load is this function's caller's concern (see `load_union_sources`
+    and BL-030's explicit "a source failure must never be hidden by a
+    successful union" requirement): this function has no way to know a
+    source failed to load and must not be asked to guess.
+    """
+    union_trigger_values, ambiguous_triggers = _resolve_union_requiredif_triggers(
+        schema, sources
+    )
+    any_unresolved_source = any(s.has_unresolved_source for s in sources)
+
+    missing: set = set()
+    blank: set = set()
+    unresolved: set = set()
+    invalid: Dict[str, str] = {}
+    ambiguous_requiredif: Dict[str, str] = {}
+
+    for key, details in schema.items():
+        condition = details.get("requiredIf")
+        trigger = condition.get("var") if isinstance(condition, dict) else None
+        if trigger and trigger in ambiguous_triggers:
+            ambiguous_requiredif[key] = ambiguous_triggers[trigger]
+            continue
+
+        status = _union_key_status(key, details, sources)
+        if status.startswith("invalid:"):
+            # Reported regardless of required-ness, matching
+            # diff_against_schema's own unconditional single-source
+            # validity check.
+            invalid[key] = status[len("invalid:") :]
+            continue
+
+        if not schema_types.should_be_present(details, union_trigger_values):
+            continue
+        if status == "ok":
+            continue
+        if status == "blank":
+            blank.add(key)
+        elif any_unresolved_source:
+            unresolved.add(key)
+        else:
+            missing.add(key)
+
+    return UnionCompletenessResult(missing, blank, invalid, unresolved, ambiguous_requiredif)
+
+
+def load_union_sources(
+    service_name: str, container: Optional[str] = None
+) -> Tuple[List[UnionSource], List[str]]:
+    """
+    Loads every one of a union-mode service's registered sources -- its
+    local_file, plus every registered deployment manifest -- for
+    `evaluate_union_completeness`. Reuses the exact same loading mechanism
+    (`parsers.factory.get_parser` + `BaseParser.get_vars`) `check_schema`/
+    `check_result` already use; not a second discovery/parsing path.
+
+    Returns (successfully loaded sources, human-readable error messages for
+    any source that failed to load). A source that fails to load
+    contributes nothing to the union and is never silently treated as
+    satisfying anything -- its failure is returned separately so a caller
+    can surface it as an independent, un-hideable failure (BL-030's
+    explicit source-health requirement), not folded into the completeness
+    result itself.
+    """
+    sources: List[UnionSource] = []
+    errors: List[str] = []
+
+    paths = config_manager.get_env_paths(service_name=service_name)
+    local_file = paths["local_file"]
+    parser = get_parser(local_file, prefer=service_name)
+    if not parser:
+        errors.append(f"{local_file}: {_no_parser_found_message(local_file)}")
+    else:
+        try:
+            local_values = parser.get_vars(local_file, get_values=True)
+            sources.append(
+                UnionSource(local_file, local_values, parser.has_unresolved_source)
+            )
+        except FileNotFoundError:
+            errors.append(f"{local_file}: file not found.")
+        except (ValueError, EnvShieldException) as e:
+            errors.append(f"{local_file}: {e}")
+
+    for manifest in config_manager.get_deployment_manifests(service_name):
+        manifest_container = manifest.get("container") or container
+        m_parser = get_parser(
+            manifest["path"], container=manifest_container, prefer=service_name
+        )
+        if not m_parser:
+            errors.append(f"{manifest['path']}: {_no_parser_found_message(manifest['path'])}")
+            continue
+        try:
+            local_values = m_parser.get_vars(manifest["path"], get_values=True)
+            sources.append(
+                UnionSource(manifest["path"], local_values, m_parser.has_unresolved_source)
+            )
+        except (EnvShieldException, FileNotFoundError, ValueError) as e:
+            errors.append(f"{manifest['path']}: {e}")
+
+    return sources, errors
+
+
+def union_completeness_result_to_dict(
+    result: UnionCompletenessResult, source_errors: Optional[List[str]] = None
+) -> Dict[str, Any]:
+    """
+    Same result, as a plain JSON-serializable dict -- `check --json`'s
+    `combined[<service>]` shape. `source_errors` (if any) always makes
+    `clean` False, even when the sources that DID load happen to satisfy
+    the schema on their own -- a source failure must never be hidden by an
+    otherwise-successful union (BL-030's explicit requirement).
+    """
+    source_errors = source_errors or []
+    return {
+        "clean": result.is_clean and not source_errors,
+        "missing": sorted(result.missing),
+        "blank": sorted(result.blank),
+        "invalid": dict(result.invalid),
+        "unresolved": sorted(result.unresolved),
+        "ambiguous_requiredif": dict(result.ambiguous_requiredif),
+        "source_errors": list(source_errors),
+    }
 
 
 def _source_label(var: str, schema: Dict[str, Any]) -> str:
@@ -390,12 +698,41 @@ def sync_schema(service_name: str) -> bool:
     "did the write succeed": it always rewrites the file, and the header's
     own timestamp would make every write look "changed" by a naive
     before/after content comparison.
+
+    For a `completeness: union` service whose local_file is a Python
+    module, this only appends a variable that's genuinely unsatisfied
+    across *every* registered source -- not just this one -- so it can
+    never re-introduce BL-030's original bug (appending a Compose-owned
+    mode-switch variable into a Python secrets file). `.env.example`
+    regeneration (the branch below) is unaffected by union mode: it's a
+    generated documentation artifact that lists the whole contract
+    regardless of which source actually satisfies each variable, which
+    stays correct either way.
     """
     schema = config_manager.load_schema(service_name=service_name)
     paths = config_manager.get_env_paths(service_name=service_name)
 
     if paths["local_file"].endswith(".py"):
-        return _sync_python_local_file(schema, paths["local_file"])
+        already_satisfied = None
+        if config_manager.get_service_completeness_mode(service_name) == "union":
+            # Reuses load_union_sources -- the exact same loading path
+            # check/doctor already use -- rather than a second, near-
+            # duplicate "load every registered source" loop. A source that
+            # fails to load here contributes nothing (fail-open, matching
+            # this function's own existing additive/never-destructive
+            # behavior): sync still appends whatever it covers, exactly as
+            # it always has.
+            other_sources, _ = load_union_sources(service_name)
+            already_satisfied = {
+                key
+                for source in other_sources
+                if source.label != paths["local_file"]
+                for key, value in source.local_values.items()
+                if value
+            }
+        return _sync_python_local_file(
+            schema, paths["local_file"], already_satisfied=already_satisfied
+        )
 
     output_file = paths["example_file"]
     console.print(
@@ -513,8 +850,25 @@ def sync_schema(service_name: str) -> bool:
         return False
 
 
-def _sync_python_local_file(schema: Dict[str, Any], local_file: str) -> bool:
-    """Ensures a Python-module local config file declares every schema variable. Returns whether it actually changed."""
+def _sync_python_local_file(
+    schema: Dict[str, Any],
+    local_file: str,
+    already_satisfied: Optional[set] = None,
+) -> bool:
+    """
+    Ensures a Python-module local config file declares every schema
+    variable *this file is actually responsible for*. Returns whether it
+    actually changed.
+
+    `already_satisfied` (BL-030): schema keys to skip entirely, because a
+    union-mode service's other registered sources already provide them --
+    without this, a variable satisfied only by a Compose manifest would be
+    force-appended into a Python secrets file that was never meant to
+    declare it (the original BL-030 bug). None/empty for a non-union
+    service -- every schema variable is appended exactly as before.
+    """
+    excluded = already_satisfied or set()
+
     if not os.path.exists(local_file):
         console.print(
             f"\n[bold]Creating [cyan]{local_file}[/cyan] from schema...[/bold]"
@@ -524,6 +878,8 @@ def _sync_python_local_file(schema: Dict[str, Any], local_file: str) -> bool:
             "# Fill in real values below -- this file is your project's local config module.\n\n",
         ]
         for key, details in schema.items():
+            if key in excluded:
+                continue
             # See sync_schema's dotenv branch above for why the key is
             # rejected rather than escaped -- here it's about to become a
             # literal Python assignment target, so an unsafe key would be
@@ -557,7 +913,9 @@ def _sync_python_local_file(schema: Dict[str, Any], local_file: str) -> bool:
     parser = get_parser(local_file)
     existing_vars = parser.get_vars(local_file) if parser else set()
     missing = {
-        key: details for key, details in schema.items() if key not in existing_vars
+        key: details
+        for key, details in schema.items()
+        if key not in existing_vars and key not in excluded
     }
 
     if not missing:

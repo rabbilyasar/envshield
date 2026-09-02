@@ -436,6 +436,22 @@ def get_service_config_source(name: str) -> Optional[str]:
     return entry.get("config_source")
 
 
+def get_service_completeness_mode(name: str) -> Optional[str]:
+    """
+    Returns the service's `completeness` mode from envshield.yml (currently
+    only `"union"` is meaningful), or None if unset -- the default, under
+    which every registered source (local_file, each deployment manifest)
+    must independently satisfy the whole schema, exactly as before this
+    existed. Opt-in only (BL-030): never inferred just because a service
+    happens to have more than one registered source.
+    """
+    services = get_services()
+    entry = services.get(name)
+    if not isinstance(entry, dict):
+        return None
+    return entry.get("completeness")
+
+
 def remove_service(name: str) -> None:
     """
     De-registers one service from envshield.yml. Never deletes the

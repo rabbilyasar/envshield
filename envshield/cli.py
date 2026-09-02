@@ -138,6 +138,50 @@ def _print_service_header(targets: List[str], target: str) -> None:
         console.print(f"\n[bold underline]── {target} ──[/bold underline]")
 
 
+def _print_union_completeness_summary(
+    service_name: str,
+    union_result: "schema_manager.UnionCompletenessResult",
+    source_errors: List[str],
+) -> None:
+    """
+    `check`'s Rich-output counterpart to each source's own individual diff
+    table above it -- explains *why* a target with one or more
+    individually-incomplete-looking source tables can still exit 0 (or
+    still fail, for a reason none of those tables show on their own, like
+    a cross-source requiredIf ambiguity or a source that failed to load).
+    """
+    console.print(
+        f"\n[bold]Registered-source completeness ({service_name}, completeness: union)[/bold]"
+    )
+    for error in source_errors:
+        console.print(f"  [bold red]✗[/bold red] Source error: {error}")
+    if union_result.is_clean and not source_errors:
+        console.print(
+            "  [bold green]✓ Satisfied by the union of registered sources.[/bold green]"
+        )
+        return
+    if union_result.missing:
+        console.print(
+            "  [red]Missing from every registered source:[/red] "
+            f"{', '.join(sorted(union_result.missing))}"
+        )
+    if union_result.blank:
+        console.print(
+            "  [red]Blank everywhere it's declared:[/red] "
+            f"{', '.join(sorted(union_result.blank))}"
+        )
+    if union_result.invalid:
+        details = "; ".join(f"{k} ({v})" for k, v in sorted(union_result.invalid.items()))
+        console.print(f"  [red]Invalid:[/red] {details}")
+    if union_result.unresolved:
+        console.print(
+            "  [yellow]Cannot confirm (a registered source has an unresolved "
+            f"external reference):[/yellow] {', '.join(sorted(union_result.unresolved))}"
+        )
+    for key, reason in sorted(union_result.ambiguous_requiredif.items()):
+        console.print(f"  [red]Ambiguous ({key}):[/red] {reason}")
+
+
 # --- Commands ---
 @app.command()
 def init(
@@ -442,9 +486,19 @@ def check(
 
     had_error = False
     results = []
+    combined: Dict[str, Any] = {}
     for target in targets:
         if not json_output:
             _print_service_header(targets, target)
+        # completeness: union (BL-030) is opt-in per service and only
+        # applies to the service's own default source set -- an explicit
+        # `file` argument means the user asked for exactly that one file,
+        # which is unaffected by (and skips) union evaluation entirely,
+        # same as it already skips registered manifests below.
+        is_union = (
+            not file
+            and config_manager.get_service_completeness_mode(target) == "union"
+        )
         try:
             resolved_file = (
                 file or config_manager.get_env_paths(service_name=target)["local_file"]
@@ -454,12 +508,13 @@ def check(
                     resolved_file, service_name=target, container=container
                 )
                 results.append(result)
-                if not result["clean"]:
+                if not is_union and not result["clean"]:
                     had_error = True
             elif not schema_manager.check_schema(
                 resolved_file, service_name=target, container=container
             ):
-                had_error = True
+                if not is_union:
+                    had_error = True
 
             # An explicit file argument means the user asked for exactly
             # that file, and nothing else -- only pile on registered
@@ -477,14 +532,42 @@ def check(
                             container=manifest_container,
                         )
                         results.append(result)
-                        if not result["clean"]:
+                        if not is_union and not result["clean"]:
                             had_error = True
                     elif not schema_manager.check_schema(
                         manifest["path"],
                         service_name=target,
                         container=manifest_container,
                     ):
-                        had_error = True
+                        if not is_union:
+                            had_error = True
+
+            # completeness: union's own aggregate verdict, computed
+            # separately from (and never replacing) the per-source diffs
+            # above -- those keep reporting each source's own individual
+            # gaps for visibility; this decides whether the TARGET as a
+            # whole passes. A source that failed to load here is always a
+            # failure, independent of whether the sources that DID load
+            # happen to satisfy the schema between them (BL-030's explicit
+            # source-health requirement).
+            if is_union:
+                schema = config_manager.load_schema(service_name=target)
+                sources, source_errors = schema_manager.load_union_sources(
+                    target, container=container
+                )
+                union_result = schema_manager.evaluate_union_completeness(
+                    schema, sources
+                )
+                if source_errors or not union_result.is_clean:
+                    had_error = True
+                if json_output:
+                    combined[target] = schema_manager.union_completeness_result_to_dict(
+                        union_result, source_errors=source_errors
+                    )
+                else:
+                    _print_union_completeness_summary(
+                        target, union_result, source_errors
+                    )
         except EnvShieldException as e:
             if json_output:
                 results.append({"service": target, "clean": False, "error": str(e)})
@@ -493,7 +576,10 @@ def check(
             had_error = True
 
     if json_output:
-        print(json.dumps({"success": not had_error, "results": results}, indent=2))
+        payload: Dict[str, Any] = {"success": not had_error, "results": results}
+        if combined:
+            payload["combined"] = combined
+        print(json.dumps(payload, indent=2))
 
     if had_error:
         raise typer.Exit(code=1)

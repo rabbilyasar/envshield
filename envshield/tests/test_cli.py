@@ -344,6 +344,59 @@ def test_schema_sync_check_fails_for_a_stale_python_local_file(tmp_path):
         assert "FIELD_MISSING" in result.stdout
 
 
+def test_schema_sync_check_passes_for_a_union_satisfied_python_local_file(tmp_path):
+    """
+    BL-030's interaction with BL-005, at the real CLI layer the installed
+    pre-commit hook actually invokes (not doctor._check_example_file_sync
+    in isolation): for a completeness: union service, this delegated
+    unconditionally to the old single-file check, which would keep failing
+    here for a variable a registered Compose manifest already covers --
+    the exact BL-005 class of bug (a check disagreeing with what running
+    'sync' would actually do), reachable through completeness: union
+    rather than the original bare-Python-file bypass. Deliberately the
+    mirror image of test_schema_sync_check_fails_for_a_stale_python_local_file
+    directly above: same missing-from-the-Python-file shape, but this time
+    a registered manifest genuinely covers it, so --check must pass.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.makedirs("svc")
+        with open(CONFIG_FILE_NAME, "w") as f:
+            f.write(
+                "services:\n"
+                "  svc:\n"
+                "    schema: svc/env.schema.toml\n"
+                "    local_file: svc/config.py\n"
+                "    completeness: union\n"
+                "manifests:\n"
+                "  - file: docker-compose.yml\n"
+                "    containers:\n"
+                "      svc: svc\n"
+            )
+        with open("svc/env.schema.toml", "w") as f:
+            f.write(
+                '[FIELD_PRESENT]\ndescription="p"\ndefaultValue="x"\n\n'
+                '[FIELD_FROM_COMPOSE]\ndescription="Compose-owned"\n'
+            )
+        with open("svc/config.py", "w") as f:
+            f.write('FIELD_PRESENT = "hello"\n')  # FIELD_FROM_COMPOSE never declared here
+        with open("docker-compose.yml", "w") as f:
+            f.write(
+                "services:\n  svc:\n    image: x\n    environment:\n      FIELD_FROM_COMPOSE: \"on\"\n"
+            )
+
+        result = runner.invoke(app, ["schema", "sync", "--check", "--service", "svc"])
+
+        assert result.exit_code == 0, result.stdout
+        # And running the real (non---check) sync must agree with --check's
+        # verdict: nothing to add, since the union already covers it.
+        with open("svc/config.py") as f:
+            before = f.read()
+        runner.invoke(app, ["schema", "sync", "--service", "svc"])
+        with open("svc/config.py") as f:
+            after = f.read()
+        assert before == after
+
+
 def test_import_command_on_python_settings_file(tmp_path):
     """
     Regression test: `envshield import settings.py` used to raise a TypeError
@@ -1234,6 +1287,146 @@ def test_check_json_reports_drift_and_exits_nonzero(tmp_path):
         assert "[bold" not in result.stdout
 
 
+def _write_generic_union_service(schema_toml, python_local_content, compose_content):
+    """
+    Shared CLI-level fixture for BL-030: one generic union-mode service
+    ('app'), a Python local_file, one registered Compose manifest. No Zeus
+    paths/names -- deliberately generic, per BL-030's testing requirements.
+    """
+    os.makedirs("config", exist_ok=True)
+    with open("envshield.yml", "w") as f:
+        f.write(
+            "services:\n"
+            "  app:\n"
+            "    schema: env.schema.toml\n"
+            "    local_file: config/settings.py\n"
+            "    completeness: union\n"
+            "manifests:\n"
+            "  - file: docker-compose.yml\n"
+            "    containers:\n"
+            "      app: app\n"
+        )
+    with open(SCHEMA_FILE_NAME, "w") as f:
+        f.write(schema_toml)
+    with open("config/settings.py", "w") as f:
+        f.write(python_local_content)
+    with open("docker-compose.yml", "w") as f:
+        f.write(compose_content)
+
+
+def test_check_json_combined_key_is_absent_for_non_union_services(tmp_path):
+    """
+    Hard compatibility requirement (BL-030): a non-union invocation's JSON
+    shape must be pixel-identical to before this feature existed --
+    'combined' must not exist at all, not merely be empty. This is the same
+    fixture as test_check_json_reports_clean_state, re-asserted here as an
+    explicit BL-030 regression anchor in its own right.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_root_service()
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[API_KEY]\ndescription = "Test"\nsecret = true\n')
+        with open(".env", "w") as f:
+            f.write("API_KEY=abc123\n")
+
+        result = runner.invoke(app, ["check", "--json"])
+
+        payload = json.loads(result.stdout)
+        assert "combined" not in payload
+
+
+def test_check_json_combined_key_present_and_clean_for_a_satisfied_union(tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_generic_union_service(
+            schema_toml=(
+                '[DB_HOST]\ndescription = "x"\n\n'
+                '[FEATURE_MODE]\ndescription = "Compose-owned"\n'
+            ),
+            python_local_content='DB_HOST = "localhost"\n',
+            compose_content=(
+                "services:\n  app:\n    image: x\n    environment:\n      FEATURE_MODE: \"on\"\n"
+            ),
+        )
+
+        result = runner.invoke(app, ["check", "--json"])
+
+        assert result.exit_code == 0, result.stdout
+        payload = json.loads(result.stdout)
+        assert payload["success"] is True
+        # Each source's own individual diff is still reported, unchanged --
+        # completeness: union adds a verdict, it doesn't hide per-source
+        # detail.
+        assert len(payload["results"]) == 2
+        assert payload["combined"]["app"] == {
+            "clean": True,
+            "missing": [],
+            "blank": [],
+            "invalid": {},
+            "unresolved": [],
+            "ambiguous_requiredif": {},
+            "source_errors": [],
+        }
+
+
+def test_check_json_combined_key_reports_a_genuinely_missing_variable(tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_generic_union_service(
+            schema_toml='[GHOST]\ndescription = "satisfied nowhere"\n',
+            python_local_content="",
+            compose_content="services:\n  app:\n    image: x\n",
+        )
+
+        result = runner.invoke(app, ["check", "--json"])
+
+        assert result.exit_code == 1
+        payload = json.loads(result.stdout)
+        assert payload["success"] is False
+        assert payload["combined"]["app"]["missing"] == ["GHOST"]
+
+
+def test_check_json_combined_key_reports_ambiguous_requiredif(tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_generic_union_service(
+            schema_toml=(
+                '[TOGGLE]\ndescription = "x"\n\n'
+                '[DEPENDENT]\ndescription = "x"\nsecret = true\n'
+                'requiredIf = { var = "TOGGLE", equals = "true" }\n'
+            ),
+            python_local_content='TOGGLE = "false"\nDEPENDENT = "x"\n',
+            compose_content=(
+                "services:\n  app:\n    image: x\n    environment:\n      TOGGLE: \"true\"\n"
+            ),
+        )
+
+        result = runner.invoke(app, ["check", "--json"])
+
+        assert result.exit_code == 1
+        payload = json.loads(result.stdout)
+        assert payload["success"] is False
+        assert "DEPENDENT" in payload["combined"]["app"]["ambiguous_requiredif"]
+
+
+def test_check_json_combined_reports_false_clean_when_a_source_fails_to_load(tmp_path):
+    """A malformed source must never be hidden by an otherwise-complete union (BL-030's explicit source-health requirement)."""
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_generic_union_service(
+            schema_toml='[FEATURE_MODE]\ndescription = "fully covered by Compose alone"\n',
+            python_local_content="this is not valid python (((\n",
+            compose_content=(
+                "services:\n  app:\n    image: x\n    environment:\n      FEATURE_MODE: \"on\"\n"
+            ),
+        )
+
+        result = runner.invoke(app, ["check", "--json"])
+
+        assert result.exit_code == 1
+        payload = json.loads(result.stdout)
+        assert payload["success"] is False
+        combined = payload["combined"]["app"]
+        assert combined["clean"] is False
+        assert combined["source_errors"] != []
+
+
 def test_check_rich_output_never_echoes_an_invalid_value(tmp_path):
     """
     Regression coverage for P0-3: 'Invalid Value' rows must describe the
@@ -1389,6 +1582,135 @@ def test_doctor_json_reports_structured_checks(tmp_path):
         assert "Configuration Files" in names
         assert "Local Environment Sync" in names
         assert "[bold" not in result.stdout
+
+
+def test_doctor_json_union_service_gets_source_health_and_aggregate_checks(tmp_path):
+    """
+    BL-030: a completeness: union service swaps "Local Environment Sync"/
+    "Deployment Manifest" for narrower source-health checks plus one new
+    aggregate "Registered-Source Completeness" check -- and, when the union
+    is genuinely satisfied, every one of those checks (and the whole
+    service) actually goes green, unlike today's per-source-only model.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.system("git init -q")
+        os.makedirs("config", exist_ok=True)
+        with open("envshield.yml", "w") as f:
+            f.write(
+                "services:\n"
+                "  app:\n"
+                "    schema: env.schema.toml\n"
+                "    local_file: config/settings.py\n"
+                "    completeness: union\n"
+                "manifests:\n"
+                "  - file: docker-compose.yml\n"
+                "    containers:\n"
+                "      app: app\n"
+            )
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write(
+                '[DB_HOST]\ndescription = "x"\n\n[FEATURE_MODE]\ndescription = "Compose-owned"\n'
+            )
+        with open("config/settings.py", "w") as f:
+            f.write('DB_HOST = "localhost"\n')
+        with open("docker-compose.yml", "w") as f:
+            f.write(
+                "services:\n  app:\n    image: x\n    environment:\n      FEATURE_MODE: \"on\"\n"
+            )
+
+        result = runner.invoke(app, ["doctor", "--json"])
+
+        payload = json.loads(result.stdout)
+        checks = {c["name"]: c for c in payload["results"][0]["checks"]}
+        assert "Local Source Health" in checks
+        assert "Local Environment Sync" not in checks
+        assert "Deployment Manifest Source Health" in checks
+        assert "Deployment Manifest" not in checks
+        assert "Registered-Source Completeness" in checks
+        assert checks["Local Source Health"]["passed"] is True
+        assert checks["Deployment Manifest Source Health"]["passed"] is True
+        assert checks["Registered-Source Completeness"]["passed"] is True
+
+
+def test_doctor_json_non_union_service_keeps_todays_checks_unchanged(tmp_path):
+    """
+    Regression anchor (BL-030 compatibility requirement): a service without
+    completeness: union must keep exactly today's checks -- same names,
+    same per-source-must-be-self-sufficient semantics.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.system("git init -q")
+        os.makedirs("config", exist_ok=True)
+        with open("envshield.yml", "w") as f:
+            f.write(
+                "services:\n"
+                "  app:\n"
+                "    schema: env.schema.toml\n"
+                "    local_file: config/settings.py\n"
+                "manifests:\n"
+                "  - file: docker-compose.yml\n"
+                "    containers:\n"
+                "      app: app\n"
+            )
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write(
+                '[DB_HOST]\ndescription = "x"\n\n[FEATURE_MODE]\ndescription = "Compose-owned"\n'
+            )
+        with open("config/settings.py", "w") as f:
+            f.write('DB_HOST = "localhost"\n')
+        with open("docker-compose.yml", "w") as f:
+            f.write(
+                "services:\n  app:\n    image: x\n    environment:\n      FEATURE_MODE: \"on\"\n"
+            )
+
+        result = runner.invoke(app, ["doctor", "--json"])
+
+        payload = json.loads(result.stdout)
+        checks = {c["name"]: c for c in payload["results"][0]["checks"]}
+        assert "Local Environment Sync" in checks
+        assert "Deployment Manifest" in checks
+        assert "Registered-Source Completeness" not in checks
+        # Neither source alone satisfies the whole schema -- today's model
+        # correctly still reports both as failing, unaffected by BL-030.
+        assert checks["Local Environment Sync"]["passed"] is False
+        assert checks["Deployment Manifest"]["passed"] is False
+
+
+def test_doctor_json_union_source_error_remains_visible_and_fails_completeness(
+    tmp_path,
+):
+    """A malformed source must remain an independently visible failure in union mode, and must also fail the aggregate completeness check (BL-030's explicit source-health requirement)."""
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.system("git init -q")
+        os.makedirs("config", exist_ok=True)
+        with open("envshield.yml", "w") as f:
+            f.write(
+                "services:\n"
+                "  app:\n"
+                "    schema: env.schema.toml\n"
+                "    local_file: config/settings.py\n"
+                "    completeness: union\n"
+                "manifests:\n"
+                "  - file: docker-compose.yml\n"
+                "    containers:\n"
+                "      app: app\n"
+            )
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[FEATURE_MODE]\ndescription = "fully covered by Compose alone"\n')
+        with open("config/settings.py", "w") as f:
+            f.write("this is not valid python (((\n")
+        with open("docker-compose.yml", "w") as f:
+            f.write(
+                "services:\n  app:\n    image: x\n    environment:\n      FEATURE_MODE: \"on\"\n"
+            )
+
+        result = runner.invoke(app, ["doctor", "--json"])
+
+        payload = json.loads(result.stdout)
+        checks = {c["name"]: c for c in payload["results"][0]["checks"]}
+        assert checks["Local Source Health"]["passed"] is False
+        assert checks["Registered-Source Completeness"]["passed"] is False
+        assert payload["results"][0]["passed"] is False
 
 
 def test_doctor_reports_legacy_path_key(tmp_path):

@@ -741,6 +741,34 @@ def test_add_service_merges_into_an_existing_entry_for_the_same_name(
     }
 
 
+def test_get_service_completeness_mode_is_none_by_default(tmp_path, monkeypatch):
+    """BL-030: completeness: union is opt-in -- unset means None, never inferred."""
+    monkeypatch.chdir(tmp_path)
+    config_manager.add_service("alpha", "alpha/env.schema.toml")
+
+    assert config_manager.get_service_completeness_mode("alpha") is None
+
+
+def test_get_service_completeness_mode_reads_the_envshield_yml_key(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    with open("envshield.yml", "w") as f:
+        f.write(
+            "services:\n  alpha:\n    schema: alpha/env.schema.toml\n    completeness: union\n"
+        )
+
+    assert config_manager.get_service_completeness_mode("alpha") == "union"
+
+
+def test_get_service_completeness_mode_is_none_for_an_unknown_service(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+
+    assert config_manager.get_service_completeness_mode("does-not-exist") is None
+
+
 class TestSymlinkEscapeIsPrevented:
     """
     Regression coverage for P0-6: _ensure_within_project used a purely
