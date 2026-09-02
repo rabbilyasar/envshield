@@ -512,6 +512,68 @@ def test_scan_reports_skipped_large_files(tmp_path):
         assert "secure and compliant" not in result.stdout
 
 
+class TestFlaskConfidenceIsExcludedFromUndeclaredDetection:
+    """
+    Consumer-boundary regression for BL-113: 'scan's undeclared-variable
+    detection is a binary completeness signal, and a medium-confidence
+    usage (currently, a Flask current_app.config[...] read) must never
+    contribute to it -- found and fixed during BL-113's own implementation
+    (a live Zeus reproduction showed the undeclared-variable count change
+    from 206 to 348 before this filter existed). These tests exercise the
+    real CLI path, not just discovery.py's own unit tests, so a future
+    change that reintroduces the leak fails here first.
+    """
+
+    def test_flask_only_read_is_not_reported_as_undeclared(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            with open(SCHEMA_FILE_NAME, "w") as f:
+                f.write("")
+            python_code = (
+                "from flask import current_app as app\n"
+                "x = app.config['FLASK_ONLY_VAR']\n"
+            )
+            with open("app.py", "w") as f:
+                f.write(python_code)
+
+            result = runner.invoke(app, ["scan"])
+
+            assert result.exit_code == 0
+            assert "FLASK_ONLY_VAR" not in result.stdout
+
+    def test_mixed_os_and_flask_reads_only_reports_the_os_one(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            with open(SCHEMA_FILE_NAME, "w") as f:
+                f.write("")
+            python_code = (
+                "import os\n"
+                "from flask import current_app as app\n"
+                "a = os.getenv('OS_VAR')\n"
+                "b = app.config['FLASK_VAR']\n"
+            )
+            with open("app.py", "w") as f:
+                f.write(python_code)
+
+            result = runner.invoke(app, ["scan"])
+
+            assert result.exit_code == 1
+            assert "OS_VAR" in result.stdout
+            assert "FLASK_VAR" not in result.stdout
+
+    def test_os_read_is_still_reported_as_undeclared(self, tmp_path):
+        """Preservation of existing high-confidence behavior -- BL-113
+        must not change what was already correctly detected."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            with open(SCHEMA_FILE_NAME, "w") as f:
+                f.write("")
+            with open("app.py", "w") as f:
+                f.write("import os\nx = os.getenv('OS_ONLY_VAR')\n")
+
+            result = runner.invoke(app, ["scan"])
+
+            assert result.exit_code == 1
+            assert "OS_ONLY_VAR" in result.stdout
+
+
 class TestScanCompletenessContract:
     """
     Regression coverage for BL-004: a skipped file (over MAX_SCANNABLE_SIZE_BYTES)

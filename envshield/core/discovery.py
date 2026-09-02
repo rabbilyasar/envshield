@@ -14,20 +14,54 @@ justified yet.
 This module knows nothing about schemas, diffing, staged-vs-disk Git
 content, or the CLI -- it takes source text already read by its caller and
 returns normalized usage records. Deliberately narrow for both milestones:
-literal keys/property names only, no alias or import-indirection tracking,
-no dynamic-key resolution, no nested destructuring. Each of those is a
-deliberate scope boundary, not an oversight -- see the Phase 2B plans for why.
+literal keys/property names only, no dynamic-key resolution, no nested
+destructuring. Each of those is a deliberate scope boundary, not an
+oversight -- see the Phase 2B plans for why.
+
+One narrow, evidence-based exception to "no alias tracking" (BL-113): an
+import-time rename of Flask's `current_app` (`from flask import
+current_app as app`) is tracked, because cross-codebase evidence found it
+to be the *dominant* real-world spelling of a Flask config read, not a
+rare exception -- see _FlaskBindings. This does not extend to any other
+alias or import-indirection form (an assigned alias like `config =
+current_app.config` remains untracked, matching this module's existing
+philosophy everywhere else).
 """
 
 import ast
 import re
 from bisect import bisect_right
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, FrozenSet, List, Optional
 
 
 @dataclass
 class DiscoveredVariableUsage:
+    """
+    `confidence` ("high" or "medium") is **not** a fuzzy certainty score
+    about whether this line ultimately reads an environment variable -- it
+    names which of two structurally different claims this usage makes:
+
+    - `"high"`: this line unambiguously reads `variable` directly from the
+      process environment (`os.environ`/`os.getenv`/`process.env`). This
+      claim is exact; nothing about it varies in strength.
+    - `"medium"`: this line reads `variable` from a *config object*
+      (currently, Flask's `current_app.config`) whose contents came from
+      somewhere unspecified -- a literal, a file, an object, possibly (but
+      not provably, from this line alone) an environment variable. This is
+      not "a slightly less certain environment read" -- it is a different
+      claim about a different kind of evidence, and callers must not blend
+      the two into a single "how sure are we" scale.
+
+    This distinction is exactly why `"medium"` usages are excluded from
+    every binary completeness/validation path (`undeclared`'s missing-
+    declaration detection in dependency_snapshot.py, `scan`'s undeclared-
+    variable listing in scanner.py -- both filter to `confidence == "high"`
+    before their own logic runs) and surfaced only through `explain`,
+    where a human reads the caveat directly rather than a pass/fail gate
+    silently deciding what it means.
+    """
+
     variable: str
     file_path: str
     line: int
@@ -129,13 +163,99 @@ def _is_os_environ_get(node: ast.expr, bindings: _OsBindings) -> bool:
     )
 
 
+@dataclass
+class _FlaskBindings:
+    """
+    Local names bound to Flask's `current_app` via `from flask import
+    current_app` or `from flask import current_app as <alias>`.
+
+    Unlike _OsBindings, an aliased import is deliberately tracked here, not
+    excluded -- BL-113's cross-codebase evidence (two independent real
+    Flask applications) found `from flask import current_app as app` is
+    the *dominant* real-world form (84-89% of measured Flask-config reads
+    in each), not the rare exception os's own aliasing is. Also unlike
+    _OsBindings/_collect_os_bindings, this is collected from the entire
+    file (see _collect_flask_bindings), not just top-level statements --
+    the same evidence found most `from flask import current_app` imports
+    are function-local, deferred specifically to avoid Flask's
+    app-context/circular-import issues at module load time, not a rare
+    edge case the way a deferred `from os import ...` is.
+
+    Deliberately does NOT track: a locally constructed `Flask(...)`/
+    Flask-subclass instance (evidence found this catches almost no real
+    reads -- most real code either aliases `current_app` at import time or
+    receives an app object as a function parameter, neither of which a
+    local-construction check can see), `self.config` inside a Flask
+    subclass's own methods, module-qualified `flask.current_app` (measured
+    zero occurrences in both evidence codebases), and assignment-style
+    aliasing such as `config = current_app.config` (measured zero
+    occurrences in both evidence codebases, and out of scope for the same
+    reason this module tracks no other alias/import-indirection).
+    """
+
+    current_app_names: FrozenSet[str] = frozenset()
+
+
+def _collect_flask_bindings(tree: ast.Module) -> _FlaskBindings:
+    """
+    A full ast.walk, not tree.body -- see _FlaskBindings for why a
+    top-level-only scan (matching _collect_os_bindings' own choice for
+    `os`) would miss the majority of real Flask evidence. Callers gate
+    this behind a cheap `"current_app" in content` text check first (see
+    discover_python_usages) so a file with no Flask involvement at all
+    never pays this extra traversal.
+    """
+    names = set()
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.ImportFrom) and node.module == "flask" and node.level == 0
+        ):
+            continue
+        for alias in node.names:
+            if alias.name == "current_app":
+                names.add(alias.asname or alias.name)
+    return _FlaskBindings(current_app_names=frozenset(names))
+
+
+def _is_flask_config_attr(node: ast.expr, flask_bindings: _FlaskBindings) -> bool:
+    """
+    `<name>.config` where `<name>` is a bare local name bound to
+    `current_app` (see _FlaskBindings) -- deliberately restricted to a
+    bare ast.Name base, the same shape _is_os_environ already requires for
+    `os`, which is exactly what already excludes a real false-positive
+    found in evidence (`self.gateway.config`, an unrelated object's own
+    settings dict): its base is an ast.Attribute chain (`self.gateway`),
+    never a bare Name, so it can never match here regardless of what
+    `flask_bindings` contains.
+    """
+    return (
+        isinstance(node, ast.Attribute)
+        and node.attr == "config"
+        and isinstance(node.value, ast.Name)
+        and node.value.id in flask_bindings.current_app_names
+    )
+
+
+def _is_flask_config_get(node: ast.expr, flask_bindings: _FlaskBindings) -> bool:
+    return (
+        isinstance(node, ast.Attribute)
+        and node.attr == "get"
+        and _is_flask_config_attr(node.value, flask_bindings)
+    )
+
+
 class _UsageVisitor(ast.NodeVisitor):
-    def __init__(self, file_path: str, bindings: _OsBindings):
+    def __init__(
+        self, file_path: str, bindings: _OsBindings, flask_bindings: _FlaskBindings
+    ):
         self.file_path = file_path
         self.bindings = bindings
+        self.flask_bindings = flask_bindings
         self.usages: List[DiscoveredVariableUsage] = []
 
-    def _record(self, variable: str, line: int, access_type: str) -> None:
+    def _record(
+        self, variable: str, line: int, access_type: str, confidence: str = "high"
+    ) -> None:
         self.usages.append(
             DiscoveredVariableUsage(
                 variable=variable,
@@ -143,7 +263,7 @@ class _UsageVisitor(ast.NodeVisitor):
                 line=line,
                 language="python",
                 access_type=access_type,
-                confidence="high",
+                confidence=confidence,
             )
         )
 
@@ -158,6 +278,15 @@ class _UsageVisitor(ast.NodeVisitor):
                 self._record(key, node.lineno, "os.environ.get")
             elif _is_os_getenv(node.func, self.bindings):
                 self._record(key, node.lineno, "os.getenv")
+            elif _is_flask_config_get(node.func, self.flask_bindings):
+                # BL-113: one level of indirection through a config object
+                # whose contents came from somewhere unspecified (a
+                # literal, a file, an environment variable) -- never as
+                # certain as a direct os.environ/os.getenv read, hence
+                # "medium" rather than "high" (see DiscoveredVariableUsage).
+                self._record(
+                    key, node.lineno, "flask.current_app.config.get", confidence="medium"
+                )
 
         self.generic_visit(node)
 
@@ -166,6 +295,14 @@ class _UsageVisitor(ast.NodeVisitor):
             key = _literal_str(node.slice)
             if key is not None:
                 self._record(key, node.lineno, "os.environ[]")
+        elif _is_flask_config_attr(node.value, self.flask_bindings) and isinstance(
+            node.ctx, ast.Load
+        ):
+            key = _literal_str(node.slice)
+            if key is not None:
+                self._record(
+                    key, node.lineno, "flask.current_app.config[]", confidence="medium"
+                )
 
         self.generic_visit(node)
 
@@ -180,7 +317,16 @@ def discover_python_usages(
     returns every recognized os.environ.get/os.getenv/os.environ[] usage
     with a literal string key -- including the same read spelled as a bare
     getenv(...)/environ[...] after an unaliased 'from os import getenv'/
-    'from os import environ' (see _OsBindings/_collect_os_bindings).
+    'from os import environ' (see _OsBindings/_collect_os_bindings) -- plus
+    (BL-113) every recognized Flask `current_app.config[...]`/`.get(...)`
+    read (see _FlaskBindings), reported at "medium" rather than "high"
+    confidence.
+
+    The Flask-specific binding scan (_collect_flask_bindings, a full
+    ast.walk) only runs when the substring "current_app" appears in
+    `content` at all -- a cheap prefilter so a file with no Flask
+    involvement pays no extra traversal cost beyond the parse already
+    required for the os-based checks.
 
     Returns an empty list -- never raises -- if `content` isn't valid
     Python (SyntaxError) or is pathologically deep (RecursionError): a file
@@ -193,7 +339,8 @@ def discover_python_usages(
         return []
 
     bindings = _collect_os_bindings(tree)
-    visitor = _UsageVisitor(file_path, bindings)
+    flask_bindings = _collect_flask_bindings(tree) if "current_app" in content else _FlaskBindings()
+    visitor = _UsageVisitor(file_path, bindings, flask_bindings)
     try:
         visitor.visit(tree)
     except RecursionError:

@@ -115,13 +115,26 @@ def _read_source(path: str, revision: Optional[str]) -> Optional[str]:
 def _discover(
     content: Optional[str], file_path: str
 ) -> List[discovery.DiscoveredVariableUsage]:
+    """
+    BL-113: only "high"-confidence usages are returned here -- 'undeclared'
+    is a binary, pre-commit/CI-safe completeness signal (the same "catch
+    it before you commit" contract dependency_snapshot's own module
+    docstring describes), and a medium-confidence usage (currently, a
+    Flask current_app.config[...] read, one level of indirection through
+    an object whose contents came from somewhere unspecified) must never
+    flip that signal. Medium-confidence usages remain visible only through
+    'explain', where a human reads the caveat directly rather than a
+    pre-commit hook silently gating on it.
+    """
     if content is None:
         return []
     if file_path.endswith(_PYTHON_SUFFIXES):
-        return discovery.discover_python_usages(content, file_path)
-    if file_path.endswith(_JS_SUFFIXES):
-        return discovery.discover_js_usages(content, file_path)
-    return []
+        usages = discovery.discover_python_usages(content, file_path)
+    elif file_path.endswith(_JS_SUFFIXES):
+        usages = discovery.discover_js_usages(content, file_path)
+    else:
+        return []
+    return [u for u in usages if u.confidence == "high"]
 
 
 def _changed_source_files(

@@ -353,6 +353,8 @@ A few things worth knowing:
 
 Source-code discovery (what powers `undeclared` and `explain`'s "used in source" section) is AST-based for **Python** (`os.environ.get`, `os.getenv`, `os.environ[...]`) and pattern-based for **JavaScript/TypeScript** (`process.env.X`, `process.env["X"]`, `import.meta.env.X`, including single-level destructuring). No other language is discovered yet — the schema and validation commands work with any stack, but `undeclared`/`explain` can only see what's read from these two.
 
+`explain` additionally recognizes Flask's `current_app.config[...]`/`.get(...)` in Python — including the common `from flask import current_app as <alias>` import form — and reports it at **medium confidence**, shown inline as `(medium confidence)`: it's one level of indirection through a config object whose contents could come from anywhere, not a direct environment read. This recognition is deliberately `explain`-only — it never affects `undeclared`'s or `scan`'s pass/fail signal, so a Flask-config read can never quietly satisfy (or break) a completeness check the way a direct `os.environ`/`os.getenv` read does.
+
 ---
 
 ## Secret safety

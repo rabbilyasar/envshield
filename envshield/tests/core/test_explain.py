@@ -369,6 +369,56 @@ class TestAdditionalSourceRoots:
         assert report.source_usages == []
 
 
+class TestFlaskConfidenceIsPreservedByExplain:
+    """
+    Consumer-boundary regression for BL-113: 'explain' is the one
+    permitted consumer of a medium-confidence usage (unlike 'undeclared'/
+    'scan', see test_dependency_snapshot.py/test_scanner_compliance.py's
+    own boundary tests) -- it must report both a high-confidence os.*
+    read and a medium-confidence Flask read for the same or different
+    variables in one report, never silently dropping either.
+    """
+
+    def test_a_flask_read_is_reported_at_medium_confidence(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        _write_root_service()
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[DATABASE_URL]\ndescription = "x"\n')
+        with open("config.py", "w") as f:
+            f.write(
+                "from flask import current_app as app\n"
+                "x = app.config['DATABASE_URL']\n"
+            )
+
+        report = explain.build_report("DATABASE_URL", "app")
+
+        assert len(report.source_usages) == 1
+        assert report.source_usages[0].confidence == "medium"
+
+    def test_high_and_medium_confidence_reads_of_different_variables_both_appear(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        _write_root_service()
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write(
+                '[DATABASE_URL]\ndescription = "x"\n\n[FEATURE_FLAG]\ndescription = "x"\n'
+            )
+        with open("config.py", "w") as f:
+            f.write(
+                "import os\n"
+                "from flask import current_app as app\n"
+                "a = os.getenv('DATABASE_URL')\n"
+                "b = app.config['FEATURE_FLAG']\n"
+            )
+
+        db_report = explain.build_report("DATABASE_URL", "app")
+        flag_report = explain.build_report("FEATURE_FLAG", "app")
+
+        assert db_report.source_usages[0].confidence == "high"
+        assert flag_report.source_usages[0].confidence == "medium"
+
+
 class TestRequiredIfDependencies:
     def test_forward_requiredif_condition_is_preserved(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)

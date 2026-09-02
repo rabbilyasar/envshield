@@ -93,26 +93,24 @@ need. None of these exist in any form today, and none are committed:
   the same accuracy bar as the two we already support.
 - **Source-language discovery beyond Python and JavaScript/TypeScript** —
   more languages, only if they can be added without sacrificing accuracy.
-- **Framework-aware configuration discovery within Python** — recognizing
-  configuration *reads* through common web-framework access patterns (Flask's
-  `app.config`/`current_app.config`, Django's `settings.X`) alongside
-  `os.environ`/`os.getenv`, while keeping the schema and discovery output
-  framework-agnostic. Not the same direction as source-language discovery
-  above — this is about recognizing more *ways Python code reads
-  configuration*, not more languages. A real product direction, not a
-  workaround for one project's shape: a narrow, validated fix
-  (`BL-109`, recognizing `from os import getenv`) surfaced the case for it
-  during real-world use, and a design sketch exists — extending the same
-  pattern `os.environ`/`os.getenv` recognition already uses today, not a
-  new plugin or registry mechanism, with framework recognition activating
-  only on corroborating import evidence, never a bare
-  `anything.config[...]` match. Deliberately excludes framework
-  configuration *population* (Flask's `app.config.from_pyfile`/
-  `from_object`/`from_envvar`, Django's settings-module loading) from this
-  same direction — a separate, harder, cross-file problem, not bundled in.
-  Nothing here is implemented, and it won't be built until the design is
-  reviewed on its own, independent of any single fix that happened to
-  surface it.
+- **Framework-aware configuration discovery within Python, beyond Flask's
+  `current_app` (`BL-113`)** — Flask's `current_app.config[...]`/`.get(...)`
+  reads (including the common `from flask import current_app as <alias>`
+  import form) are now recognized by `discover_python_usages`, surfaced only
+  through `explain` at "medium" confidence, and validated against two
+  independent real Flask codebases before shipping (see `BACKLOG.md`'s
+  `BL-113` entry for the full evidence and false-positive analysis). Still
+  open, deliberately unimplemented, and not the same claim as the shipped
+  Flask work: a locally constructed `Flask()`/subclass instance's own
+  `app.config`/`self.config` reads (evidence found this catches almost no
+  real reads on its own, once `current_app`-alias tracking exists), Django's
+  `settings.X` (attribute access, not a call/subscript — structurally
+  different, and still zero real-world evidence behind it, ever), and
+  framework configuration *population* (Flask's `app.config.from_pyfile`/
+  `from_object`/`from_envvar`, Django's settings-module loading) — a
+  separate, harder, cross-file problem, not bundled into this direction.
+  Any of these would need its own evidence-gathering pass before
+  authorization, the same way the shipped Flask work did.
 - **Team and organizational features** (shared visibility, drift
   monitoring, policy, audit history) and a **hosted offering** — only if
   real teams demonstrate they need them. The CLI itself stays open source

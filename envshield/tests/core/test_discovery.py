@@ -198,6 +198,184 @@ class TestBareOsImportRecognition:
         assert result[0].default_value == "fallback"
 
 
+class TestFlaskCurrentAppConfigRead:
+    """
+    BL-113: current_app.config[...]/.get(...) is recognized, at "medium"
+    confidence (never "high" -- see DiscoveredVariableUsage), gated on a
+    real 'from flask import current_app' import anywhere in the file.
+    """
+
+    def test_subscript_form(self):
+        content = "from flask import current_app\nx = current_app.config['X']\n"
+        usage = _one(content)
+        assert usage.variable == "X"
+        assert usage.access_type == "flask.current_app.config[]"
+        assert usage.confidence == "medium"
+
+    def test_get_form(self):
+        content = "from flask import current_app\nx = current_app.config.get('X')\n"
+        usage = _one(content)
+        assert usage.variable == "X"
+        assert usage.access_type == "flask.current_app.config.get"
+        assert usage.confidence == "medium"
+
+    def test_get_form_with_a_default_argument(self):
+        content = "from flask import current_app\nx = current_app.config.get('X', 'fallback')\n"
+        usage = _one(content)
+        assert usage.variable == "X"
+
+
+class TestFlaskConfigAliasedImport:
+    """
+    BL-113: 'from flask import current_app as <alias>' is tracked -- unlike
+    _OsBindings' aliased-os-import case, cross-codebase evidence (two
+    independent real Flask applications) found this to be the *dominant*
+    real-world spelling (84-89% of measured reads), not a rare exception.
+    """
+
+    def test_aliased_subscript_form(self):
+        content = "from flask import current_app as app\nx = app.config['X']\n"
+        usage = _one(content)
+        assert usage.variable == "X"
+        assert usage.access_type == "flask.current_app.config[]"
+        assert usage.confidence == "medium"
+
+    def test_aliased_get_form(self):
+        content = "from flask import current_app as app\nx = app.config.get('X')\n"
+        usage = _one(content)
+        assert usage.variable == "X"
+        assert usage.access_type == "flask.current_app.config.get"
+
+    def test_a_different_alias_name_is_still_recognized(self):
+        content = "from flask import current_app as flask_app\nx = flask_app.config['X']\n"
+        usage = _one(content)
+        assert usage.variable == "X"
+
+
+class TestFlaskConfigDeferredImport:
+    """
+    BL-113: unlike _collect_os_bindings (top-level statements only),
+    _collect_flask_bindings scans the whole file -- evidence found the
+    majority of real 'from flask import current_app' imports are
+    function-local, deferred specifically to avoid Flask's app-context/
+    circular-import issues at module load time. A top-level-only scan
+    would silently miss most real-world Flask evidence.
+    """
+
+    def test_function_local_unaliased_import_is_still_recognized(self):
+        content = (
+            "def f():\n"
+            "    from flask import current_app\n"
+            "    return current_app.config['X']\n"
+        )
+        usage = _one(content)
+        assert usage.variable == "X"
+
+    def test_function_local_aliased_import_is_still_recognized(self):
+        content = (
+            "def f():\n"
+            "    from flask import current_app as app\n"
+            "    return app.config.get('X')\n"
+        )
+        usage = _one(content)
+        assert usage.variable == "X"
+
+
+class TestFlaskConfigFalsePositives:
+    """
+    Realistic false-positive cases found during BL-113's evidence study,
+    each locked in as a negative test rather than left to chance.
+    """
+
+    def test_unrelated_dot_config_with_no_flask_import_is_not_reported(self):
+        """A bare-Name '<name>.config[...]' with no 'from flask import
+        current_app' anywhere in the file must never be mistaken for a
+        Flask read -- the exact false-positive risk this feature must
+        avoid, mirroring TestBareOsImportRecognition's own
+        unrelated-bare-getenv case."""
+        assert _usages("x = app.config['X']\n") == []
+
+    def test_attribute_chain_base_is_not_reported(self):
+        """
+        Real false positive found in evidence: 'self.gateway.config.get(...)'
+        (an unrelated object's own settings dict, nothing to do with
+        Flask). Its base is an ast.Attribute chain ('self.gateway'), never
+        a bare ast.Name, so _is_flask_config_attr's existing bare-Name
+        requirement (the same shape _is_os_environ already requires for
+        os.environ) excludes it with no extra logic needed.
+        """
+        content = "from flask import current_app\nx = self.gateway.config.get('X')\n"
+        assert _usages(content) == []
+
+    def test_self_config_inside_a_flask_subclass_is_not_reported(self):
+        """
+        Explicitly out of scope (see _FlaskBindings) -- 'self.config[...]'
+        inside a method of a class that happens to subclass Flask would
+        require class-hierarchy tracking to resolve; evidence found this
+        pattern real but low-volume, not worth the added complexity.
+        """
+        content = (
+            "from flask import current_app, Flask\n"
+            "class MyFlask(Flask):\n"
+            "    def f(self):\n"
+            "        return self.config['X']\n"
+        )
+        assert _usages(content) == []
+
+
+class TestFlaskConfigAliasingOutOfScope:
+    """Explicitly excluded per BL-113's own scope decision -- confirmed
+    absent (zero occurrences) in both of this feature's evidence
+    codebases, and out of scope for the same reason this module tracks no
+    other alias/import-indirection (see the module docstring)."""
+
+    def test_assignment_style_aliasing_is_not_reported(self):
+        content = (
+            "from flask import current_app\n"
+            "config = current_app.config\n"
+            "x = config['X']\n"
+        )
+        assert _usages(content) == []
+
+    def test_module_qualified_access_is_not_reported(self):
+        content = "import flask\nx = flask.current_app.config['X']\n"
+        assert _usages(content) == []
+
+    def test_locally_constructed_flask_app_is_not_reported(self):
+        """
+        The originally-proposed 'app = Flask(...)' construction heuristic
+        was dropped entirely per BL-113's evidence study -- it caught
+        almost no real reads in either evidence codebase. A locally
+        constructed app with no current_app import is not recognized.
+        """
+        content = "from flask import Flask\napp = Flask(__name__)\nx = app.config['X']\n"
+        assert _usages(content) == []
+
+
+class TestFlaskConfigCoexistsWithOsRecognition:
+    def test_a_file_with_both_os_and_flask_reads_reports_both_at_their_own_confidence(
+        self,
+    ):
+        content = (
+            "import os\n"
+            "from flask import current_app as app\n"
+            "a = os.getenv('A')\n"
+            "b = app.config['B']\n"
+        )
+        result = _usages(content)
+        by_var = {u.variable: u for u in result}
+        assert by_var["A"].confidence == "high"
+        assert by_var["B"].confidence == "medium"
+
+    def test_flask_prefilter_does_not_suppress_existing_os_recognition(self):
+        """The cheap 'current_app' in content prefilter only gates the
+        extra Flask-binding scan -- it must never affect os.environ/
+        os.getenv recognition in a file that happens to have no Flask
+        involvement at all."""
+        usage = _one("x = os.environ.get('X')\n")
+        assert usage.confidence == "high"
+
+
 class TestMultipleUsages:
     def test_two_distinct_call_sites_produce_two_records(self):
         content = "a = os.environ.get('A')\nb = os.getenv('B')\n"

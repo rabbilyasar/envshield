@@ -335,6 +335,55 @@ class TestExplainInheritedField:
             assert payload["provenance"]["declared_in"] == "shared/base.schema.toml"
 
 
+class TestExplainFlaskConfidence:
+    """BL-113: a Flask current_app.config[...] read is shown at "medium"
+    confidence, visibly distinguished from a direct os.environ/os.getenv
+    read in both the human-readable and --json output."""
+
+    def test_medium_confidence_is_shown_inline_in_text_output(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            _write("envshield.yml", "services:\n  api:\n    schema: env.schema.toml\n")
+            _write("env.schema.toml", '[DATABASE_URL]\ndescription = "x"\n')
+            _write(
+                "config.py",
+                "from flask import current_app as app\n"
+                "x = app.config['DATABASE_URL']\n",
+            )
+
+            result = runner.invoke(app, ["explain", "DATABASE_URL"])
+
+            assert "config.py:2" in result.stdout
+            assert "medium confidence" in result.stdout
+
+    def test_high_confidence_direct_read_shows_no_confidence_caveat(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            _write("envshield.yml", "services:\n  api:\n    schema: env.schema.toml\n")
+            _write("env.schema.toml", '[DATABASE_URL]\ndescription = "x"\n')
+            _write("config.py", "import os\nx = os.getenv('DATABASE_URL')\n")
+
+            result = runner.invoke(app, ["explain", "DATABASE_URL"])
+
+            assert "config.py:2" in result.stdout
+            assert "confidence" not in result.stdout
+
+    def test_json_output_carries_the_confidence_field(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            _write("envshield.yml", "services:\n  api:\n    schema: env.schema.toml\n")
+            _write("env.schema.toml", '[DATABASE_URL]\ndescription = "x"\n')
+            _write(
+                "config.py",
+                "from flask import current_app\n"
+                "x = current_app.config.get('DATABASE_URL')\n",
+            )
+
+            result = runner.invoke(app, ["explain", "DATABASE_URL", "--json"])
+
+            payload = json.loads(result.stdout)
+            usage = payload["source_usages"][0]
+            assert usage["confidence"] == "medium"
+            assert usage["access_type"] == "flask.current_app.config.get"
+
+
 class TestAdditionalSourceRootsEndToEnd:
     """BL-106, exercised through the real CLI -- not just build_report directly."""
 

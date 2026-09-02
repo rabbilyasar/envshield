@@ -669,7 +669,15 @@ def _render_source_usages(
     console.print("\n[bold]Used in source[/bold]")
     if source_usages:
         for usage in source_usages:
-            console.print(f"  {usage.file_path}:{usage.line}")
+            line = f"  {usage.file_path}:{usage.line}"
+            if usage.confidence != "high":
+                # BL-113: a Flask current_app.config[...] read is one level
+                # of indirection through an object whose contents came from
+                # somewhere unspecified -- never as certain as a direct
+                # os.environ/os.getenv read, and this must stay visible at
+                # the point of reading, not just in --json's confidence field.
+                line += f" [dim]({usage.confidence} confidence)[/dim]"
+            console.print(line)
     else:
         console.print("  None discovered")
         console.print(

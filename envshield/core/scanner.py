@@ -304,8 +304,19 @@ def _record_discovered_usages(
     """Shared adapter for both discovery.py engines: filters by
     new_lines_only and schema_vars, then appends in the same finding shape
     the (now-removed) per-line regex loop always used -- callers of
-    _scan_single_file see no difference."""
+    _scan_single_file see no difference.
+
+    BL-113: a medium-confidence usage (currently, a Flask
+    current_app.config[...] read) never contributes to this list --
+    'scan's undeclared-variable detection, like 'undeclared' itself, is a
+    binary completeness/pre-commit-safe signal, and a finding built on
+    "this might be an environment-sourced read, unproven" doesn't belong
+    in that class of result. Medium-confidence usages remain visible only
+    through 'explain', where a human reads the caveat directly.
+    """
     for usage in usages:
+        if usage.confidence != "high":
+            continue
         if new_lines_only is not None and usage.line not in new_lines_only:
             continue
         if usage.variable not in schema_vars:

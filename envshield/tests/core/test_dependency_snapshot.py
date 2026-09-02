@@ -362,6 +362,60 @@ class TestAdditionalSourceRoots:
         assert usages_b == []
 
 
+class TestFlaskConfidenceIsExcludedFromDependencySnapshot:
+    """
+    Consumer-boundary regression for BL-113: 'undeclared' is a binary,
+    pre-commit/CI-safe completeness signal, and a medium-confidence usage
+    (currently, a Flask current_app.config[...] read) must never surface
+    as a new dependency here -- found and fixed during BL-113's own
+    implementation. Mirrors TestFlaskConfidenceIsExcludedFromUndeclaredDetection
+    in test_scanner_compliance.py, at the dependency_snapshot layer
+    'undeclared' itself is built on rather than the CLI's 'scan' layer.
+    """
+
+    def test_flask_only_read_produces_no_new_dependency(self, tmp_path, monkeypatch):
+        _single_service_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        _write(
+            tmp_path,
+            "app.py",
+            "from flask import current_app as app\nx = app.config['FLASK_ONLY']\n",
+        )
+
+        usages_a, usages_b = dependency_snapshot.discover_usages_for_service("api")
+
+        assert usages_a == []
+        assert usages_b == []
+
+    def test_mixed_os_and_flask_reads_only_surfaces_the_os_one(
+        self, tmp_path, monkeypatch
+    ):
+        _single_service_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        _write(
+            tmp_path,
+            "app.py",
+            "import os\n"
+            "from flask import current_app as app\n"
+            "a = os.getenv('OS_VAR')\n"
+            "b = app.config['FLASK_VAR']\n",
+        )
+
+        usages_a, usages_b = dependency_snapshot.discover_usages_for_service("api")
+
+        assert {u.variable for u in usages_b} == {"OS_VAR"}
+
+    def test_os_read_still_surfaces_as_a_new_dependency(self, tmp_path, monkeypatch):
+        """Preservation of existing high-confidence behavior."""
+        _single_service_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path, "app.py", "import os\nx = os.getenv('OS_ONLY')\n")
+
+        usages_a, usages_b = dependency_snapshot.discover_usages_for_service("api")
+
+        assert {u.variable for u in usages_b} == {"OS_ONLY"}
+
+
 class TestNonDiscoverableFilesAreIgnored:
     def test_a_changed_non_source_file_contributes_nothing(self, tmp_path, monkeypatch):
         _single_service_repo(tmp_path)
