@@ -706,6 +706,41 @@ def test_add_service_overwrites_a_service_registered_under_the_same_name(
     assert config_manager.get_services()["alpha"]["description"] == "new"
 
 
+def test_add_service_merges_into_an_existing_entry_for_the_same_name(
+    tmp_path, monkeypatch
+):
+    """
+    Regression for BL-023: a second add_service call for an already-
+    registered name used to build a fresh dict from only that call's own
+    arguments, silently dropping every field the first call had set that
+    wasn't repeated. It must now merge -- each field given here overwrites
+    that field, any field left unset keeps whatever the entry already had --
+    matching add_manifest's already-additive behavior.
+    """
+    monkeypatch.chdir(tmp_path)
+    config_manager.add_service(
+        "alpha",
+        "alpha/env.schema.toml",
+        description="Backend API",
+        example_file="alpha/.env.example",
+        config_source="alpha/config/settings.py",
+    )
+
+    config_manager.add_service(
+        "alpha",
+        "alpha/env.schema.toml",
+        local_file="alpha/config/env_config.local.py",
+    )
+
+    assert config_manager.get_services()["alpha"] == {
+        "schema": "alpha/env.schema.toml",
+        "description": "Backend API",
+        "example_file": "alpha/.env.example",
+        "config_source": "alpha/config/settings.py",
+        "local_file": "alpha/config/env_config.local.py",
+    }
+
+
 class TestSymlinkEscapeIsPrevented:
     """
     Regression coverage for P0-6: _ensure_within_project used a purely

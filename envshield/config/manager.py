@@ -365,8 +365,12 @@ def add_service(
     config_source: Optional[str] = None,
 ) -> None:
     """
-    Adds (or overwrites) one service entry in envshield.yml, creating the
-    file if it doesn't exist yet. Every other top-level key and every other
+    Adds (or updates) one service entry in envshield.yml, creating the file
+    if it doesn't exist yet. A second call for the same name merges into the
+    existing entry -- each field given here overwrites that field, and any
+    field left unset (None) keeps whatever the entry already had -- instead
+    of replacing the entry outright, matching add_manifest's already-
+    additive behavior. Every other top-level key and every other
     already-configured service is left untouched -- this is what makes
     `envshield service discover`/`add` safe to run repeatedly to extend an
     existing setup, not just bootstrap a fresh one.
@@ -401,7 +405,9 @@ def add_service(
         services = {}
     config["services"] = services
 
-    entry: Dict[str, Any] = {"schema": schema_path}
+    existing = services.get(name)
+    entry: Dict[str, Any] = dict(existing) if isinstance(existing, dict) else {}
+    entry["schema"] = schema_path
     if description:
         entry["description"] = description
     if local_file:
