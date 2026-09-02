@@ -203,14 +203,28 @@ def discover_usages_for_service(
     concrete, locked-in reproduction. Left as an accepted limitation for
     this hardening pass rather than fixed: closing it properly would mean
     schema_snapshot-style revision-aware envshield.yml loading, which is
-    out of scope here.
+    out of scope here. The same live-config caveat applies to
+    `additional_source_roots` below, for the same reason.
+
+    BL-106: a service's own directory isn't always the whole of its
+    discovery scope -- `additional_source_roots` (config_manager.
+    get_service_additional_source_roots) names extra directories (e.g. a
+    shared internal library outside every service's own directory) that
+    also count toward this service. A file is included if it falls under
+    *any* of these roots; since `_changed_source_files` already returns a
+    deduplicated flat file list and this is a single membership test per
+    file (not a per-root sub-scan), no additional deduplication is needed
+    here even when a root overlaps or nests inside another.
     """
     service_dir = config_manager.get_service_dir(service_name)
+    roots = [service_dir] + config_manager.get_service_additional_source_roots(
+        service_name
+    )
     files = [
         f
         for f in _changed_source_files(revision_a, revision_b, quiet=quiet)
         if f.endswith(_DISCOVERABLE_SUFFIXES)
-        and config_manager.service_dir_contains(f, service_dir)
+        and any(config_manager.service_dir_contains(f, root) for root in roots)
     ]
 
     usages_a: List[discovery.DiscoveredVariableUsage] = []

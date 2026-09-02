@@ -59,18 +59,22 @@ def _open_disk_source(path: str):
     return os.fdopen(fd, "r", encoding="utf-8", errors="ignore")
 
 
-def _discoverable_files(service_dir: str) -> List[str]:
+def _discoverable_files(root_dir: str) -> List[str]:
     """
-    Every .py/.js/.jsx/.ts/.tsx file under `service_dir` -- symlink-safe,
+    Every .py/.js/.jsx/.ts/.tsx file under `root_dir` -- symlink-safe,
     excluded-dir-pruned, mirroring scanner.py's own file-collection walk.
     Always the live working tree (like 'doctor'/'check'), never a Git
     revision -- a developer explaining one variable right now wants the
     current state, not history (that's 'undeclared'/'schema diff's job).
+
+    `root_dir` is any directory to walk -- a service's own directory, or
+    (BL-106) one of its `additional_source_roots`; this function has no
+    concept of "the" service directory, it just walks what it's given.
     """
-    if os.path.islink(service_dir):
+    if os.path.islink(root_dir):
         return []
     files: List[str] = []
-    for root, dirs, filenames in os.walk(service_dir):
+    for root, dirs, filenames in os.walk(root_dir):
         dirs[:] = [d for d in dirs if not _is_default_excluded_dir(d)]
         for filename in filenames:
             if not filename.endswith(_DISCOVERABLE_SUFFIXES):
@@ -88,20 +92,36 @@ def _discoverable_files(service_dir: str) -> List[str]:
 
 
 def _discover_current_usages(
-    service_dir: str, variable: str
+    roots: List[str], variable: str
 ) -> List[discovery.DiscoveredVariableUsage]:
+    """
+    Walks every directory in `roots` (a service's own directory plus any
+    BL-106 `additional_source_roots`) and returns usages of `variable`
+    found under any of them. A file reachable through more than one root
+    -- an additional root nested inside, or equal to, the service's own
+    directory -- is only read and reported once: `_discoverable_files`
+    already normalizes each file's path (os.path.normpath), so the same
+    file discovered via two roots produces an identical string, and
+    `seen_files` collapses it to a single entry rather than a duplicated
+    "used in source" row.
+    """
     usages: List[discovery.DiscoveredVariableUsage] = []
-    for file_path in _discoverable_files(service_dir):
-        try:
-            with _open_disk_source(file_path) as f:
-                content = f.read()
-        except (IOError, OSError):
-            continue
-        if file_path.endswith(_PYTHON_SUFFIXES):
-            found = discovery.discover_python_usages(content, file_path)
-        else:
-            found = discovery.discover_js_usages(content, file_path)
-        usages.extend(u for u in found if u.variable == variable)
+    seen_files: set = set()
+    for root_dir in roots:
+        for file_path in _discoverable_files(os.path.normpath(root_dir)):
+            if file_path in seen_files:
+                continue
+            seen_files.add(file_path)
+            try:
+                with _open_disk_source(file_path) as f:
+                    content = f.read()
+            except (IOError, OSError):
+                continue
+            if file_path.endswith(_PYTHON_SUFFIXES):
+                found = discovery.discover_python_usages(content, file_path)
+            else:
+                found = discovery.discover_js_usages(content, file_path)
+            usages.extend(u for u in found if u.variable == variable)
     return usages
 
 
@@ -276,11 +296,16 @@ def build_undeclared_report(variable: str, service_name: str) -> UndeclaredVaria
     matching build_report's own contract.
     """
     service_dir = config_manager.get_service_dir(service_name)
+    additional_roots = config_manager.get_service_additional_source_roots(
+        service_name
+    )
     manifests = config_manager.get_deployment_manifests(service_name)
     return UndeclaredVariableReport(
         variable=variable,
         service=service_name,
-        source_usages=_discover_current_usages(service_dir, variable),
+        source_usages=_discover_current_usages(
+            [service_dir] + additional_roots, variable
+        ),
         manifest_references=_manifest_references(manifests, variable),
     )
 
@@ -339,6 +364,9 @@ def build_report(variable: str, service_name: str) -> ExplainReport:
         provenance["inherited"] = contributing != schema_path
 
     service_dir = config_manager.get_service_dir(service_name)
+    additional_roots = config_manager.get_service_additional_source_roots(
+        service_name
+    )
     manifests = config_manager.get_deployment_manifests(service_name)
 
     return ExplainReport(
@@ -347,6 +375,8 @@ def build_report(variable: str, service_name: str) -> ExplainReport:
         schema=_describe_field(field_schema),
         provenance=provenance,
         required_by=_reverse_required_by(schema, variable),
-        source_usages=_discover_current_usages(service_dir, variable),
+        source_usages=_discover_current_usages(
+            [service_dir] + additional_roots, variable
+        ),
         manifest_references=_manifest_references(manifests, variable),
     )

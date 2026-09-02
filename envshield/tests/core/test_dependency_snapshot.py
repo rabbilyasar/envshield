@@ -227,6 +227,141 @@ class TestMultiServiceFileOwnershipIsRespected:
             dependency_snapshot.discover_usages_for_service("does-not-exist")
 
 
+class TestAdditionalSourceRoots:
+    """BL-106: additional_source_roots widens a service's discovery scope
+    to directories outside its own (e.g. a shared internal library)."""
+
+    def _repo_with_shared_lib(self, tmp_path, roots_yaml):
+        _init_repo(tmp_path)
+        _write(
+            tmp_path,
+            "envshield.yml",
+            "services:\n"
+            "  api:\n"
+            "    schema: services/api/env.schema.toml\n"
+            f"{roots_yaml}",
+        )
+        _write(tmp_path, "services/api/env.schema.toml", "")
+        _commit(tmp_path, "init")
+
+    def test_one_additional_root_is_discovered(self, tmp_path, monkeypatch):
+        self._repo_with_shared_lib(
+            tmp_path,
+            "    additional_source_roots:\n      - shared/lib\n",
+        )
+        monkeypatch.chdir(tmp_path)
+        _write(
+            tmp_path,
+            "shared/lib/util.py",
+            "import os\nx = os.environ.get('SHARED_FLAG')\n",
+        )
+
+        usages_a, usages_b = dependency_snapshot.discover_usages_for_service("api")
+
+        assert usages_a == []
+        assert {u.variable for u in usages_b} == {"SHARED_FLAG"}
+
+    def test_multiple_additional_roots_are_all_discovered(self, tmp_path, monkeypatch):
+        self._repo_with_shared_lib(
+            tmp_path,
+            "    additional_source_roots:\n      - shared/lib\n      - vendor/other\n",
+        )
+        monkeypatch.chdir(tmp_path)
+        _write(
+            tmp_path, "shared/lib/util.py", "import os\nx = os.environ.get('A')\n"
+        )
+        _write(
+            tmp_path, "vendor/other/mod.py", "import os\nx = os.environ.get('B')\n"
+        )
+
+        usages_a, usages_b = dependency_snapshot.discover_usages_for_service("api")
+
+        assert {u.variable for u in usages_b} == {"A", "B"}
+
+    def test_nonexistent_root_is_a_silent_no_op(self, tmp_path, monkeypatch):
+        self._repo_with_shared_lib(
+            tmp_path,
+            "    additional_source_roots:\n      - does/not/exist\n",
+        )
+        monkeypatch.chdir(tmp_path)
+        _write(
+            tmp_path,
+            "services/api/app.py",
+            "import os\nx = os.environ.get('API_ONLY')\n",
+        )
+
+        usages_a, usages_b = dependency_snapshot.discover_usages_for_service("api")
+
+        assert {u.variable for u in usages_b} == {"API_ONLY"}
+
+    def test_a_root_nested_inside_the_service_directory_produces_no_duplicate(
+        self, tmp_path, monkeypatch
+    ):
+        """An additional root that overlaps the service's own directory
+        must not cause the same changed file to be reported twice."""
+        self._repo_with_shared_lib(
+            tmp_path,
+            "    additional_source_roots:\n      - services/api/vendored\n",
+        )
+        monkeypatch.chdir(tmp_path)
+        _write(
+            tmp_path,
+            "services/api/vendored/util.py",
+            "import os\nx = os.environ.get('NESTED')\n",
+        )
+
+        usages_a, usages_b = dependency_snapshot.discover_usages_for_service("api")
+
+        matches = [u for u in usages_b if u.variable == "NESTED"]
+        assert len(matches) == 1
+
+    def test_the_same_root_may_be_shared_by_two_services(self, tmp_path, monkeypatch):
+        _init_repo(tmp_path)
+        _write(
+            tmp_path,
+            "envshield.yml",
+            "services:\n"
+            "  api:\n"
+            "    schema: services/api/env.schema.toml\n"
+            "    additional_source_roots:\n      - shared/lib\n"
+            "  web:\n"
+            "    schema: services/web/env.schema.toml\n"
+            "    additional_source_roots:\n      - shared/lib\n",
+        )
+        _write(tmp_path, "services/api/env.schema.toml", "")
+        _write(tmp_path, "services/web/env.schema.toml", "")
+        _commit(tmp_path, "init")
+        monkeypatch.chdir(tmp_path)
+        _write(
+            tmp_path,
+            "shared/lib/util.py",
+            "import os\nx = os.environ.get('SHARED_FLAG')\n",
+        )
+
+        _, api_usages_b = dependency_snapshot.discover_usages_for_service("api")
+        _, web_usages_b = dependency_snapshot.discover_usages_for_service("web")
+
+        assert {u.variable for u in api_usages_b} == {"SHARED_FLAG"}
+        assert {u.variable for u in web_usages_b} == {"SHARED_FLAG"}
+
+    def test_absent_key_preserves_existing_behavior(self, tmp_path, monkeypatch):
+        """Regression: a shared-looking directory outside the service's own
+        directory is NOT discovered when additional_source_roots isn't set --
+        the pre-BL-106 behavior is unchanged."""
+        self._repo_with_shared_lib(tmp_path, "")
+        monkeypatch.chdir(tmp_path)
+        _write(
+            tmp_path,
+            "shared/lib/util.py",
+            "import os\nx = os.environ.get('SHARED_FLAG')\n",
+        )
+
+        usages_a, usages_b = dependency_snapshot.discover_usages_for_service("api")
+
+        assert usages_a == []
+        assert usages_b == []
+
+
 class TestNonDiscoverableFilesAreIgnored:
     def test_a_changed_non_source_file_contributes_nothing(self, tmp_path, monkeypatch):
         _single_service_repo(tmp_path)

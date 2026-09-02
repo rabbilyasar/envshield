@@ -480,3 +480,34 @@ class TestSymlinkHardening:
             payload = json.loads(result.stdout)
             assert payload["has_missing_declarations"] is False
             assert self.OUTSIDE_VARIABLE not in result.stdout
+
+
+class TestAdditionalSourceRootsEndToEnd:
+    """BL-106, exercised through the real CLI -- not just build/unit helpers."""
+
+    def test_a_new_read_in_an_additional_root_is_caught_before_commit(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            _init_repo()
+            _write(
+                "envshield.yml",
+                "services:\n"
+                "  api:\n"
+                "    schema: services/api/env.schema.toml\n"
+                "    additional_source_roots:\n      - shared/lib\n",
+            )
+            _write("services/api/env.schema.toml", "")
+            _commit("init")
+            _write(
+                "shared/lib/util.py",
+                "import os\nx = os.environ.get('SHARED_FLAG')\n",
+            )
+
+            result = runner.invoke(
+                app, ["undeclared", "--service", "api", "--json"]
+            )
+
+            assert result.exit_code == 1
+            payload = json.loads(result.stdout)
+            assert payload["has_missing_declarations"] is True
+            variables = {c["variable"] for c in payload["changes"]}
+            assert "SHARED_FLAG" in variables

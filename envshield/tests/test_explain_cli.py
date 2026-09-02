@@ -333,3 +333,35 @@ class TestExplainInheritedField:
             payload = json.loads(result.stdout)
             assert payload["provenance"]["inherited"] is True
             assert payload["provenance"]["declared_in"] == "shared/base.schema.toml"
+
+
+class TestAdditionalSourceRootsEndToEnd:
+    """BL-106, exercised through the real CLI -- not just build_report directly."""
+
+    def test_explain_finds_a_read_in_an_additional_root(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            import os
+
+            os.makedirs("services/api")
+            os.makedirs("shared/lib")
+            _write(
+                "envshield.yml",
+                "services:\n"
+                "  api:\n"
+                "    schema: services/api/env.schema.toml\n"
+                "    additional_source_roots:\n      - shared/lib\n",
+            )
+            _write(
+                "services/api/env.schema.toml", '[SHARED_FLAG]\ndescription = "x"\n'
+            )
+            _write(
+                "shared/lib/util.py",
+                "import os\nx = os.environ.get('SHARED_FLAG')\n",
+            )
+
+            result = runner.invoke(
+                app, ["explain", "SHARED_FLAG", "--service", "api"]
+            )
+
+            assert result.exit_code == 0
+            assert "shared/lib/util.py" in result.stdout

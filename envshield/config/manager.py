@@ -436,6 +436,42 @@ def get_service_config_source(name: str) -> Optional[str]:
     return entry.get("config_source")
 
 
+def get_service_additional_source_roots(name: str) -> List[str]:
+    """
+    Returns the service's `additional_source_roots` from envshield.yml
+    (BL-106) -- extra directories, outside the service's own directory
+    (get_service_dir), that source discovery should also cover for
+    'undeclared'/'explain'. Empty list if unset -- the default, under
+    which only the service's own directory is walked, exactly as before
+    this existed.
+
+    The same directory may legitimately be listed by more than one
+    service (e.g. a shared internal library imported by several of
+    them) -- this returns whatever is configured with no cross-service
+    exclusivity check.
+
+    Each entry is validated the same way schema/local_file/example_file
+    paths already are (see _ensure_within_project) -- envshield.yml is
+    committed, PR-editable, untrusted input, and an unvalidated root here
+    would be the same supply-chain-style path-traversal risk. A
+    nonexistent root is not rejected here -- it simply contributes no
+    files once a caller tries to walk it (see explain.py/
+    dependency_snapshot.py), the same as an already-empty directory.
+    """
+    services = get_services()
+    entry = services.get(name)
+    if not isinstance(entry, dict):
+        return []
+    roots = entry.get("additional_source_roots")
+    if not isinstance(roots, list):
+        return []
+    return [
+        _ensure_within_project(root, f"service '{name}' additional_source_roots")
+        for root in roots
+        if isinstance(root, str)
+    ]
+
+
 def get_service_completeness_mode(name: str) -> Optional[str]:
     """
     Returns the service's `completeness` mode from envshield.yml (currently

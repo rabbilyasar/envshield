@@ -218,6 +218,157 @@ class TestSourceUsages:
         assert report.source_usages == []
 
 
+class TestAdditionalSourceRoots:
+    """BL-106: additional_source_roots widens a service's discovery scope
+    to directories outside its own (e.g. a shared internal library)."""
+
+    def _service_with_roots(self, roots_yaml=""):
+        with open("envshield.yml", "w") as f:
+            f.write(
+                "services:\n"
+                "  api:\n"
+                "    schema: services/api/env.schema.toml\n"
+                f"{roots_yaml}"
+            )
+        import os as _os
+
+        _os.makedirs("services/api", exist_ok=True)
+        with open("services/api/env.schema.toml", "w") as f:
+            f.write('[SHARED_FLAG]\ndescription = "x"\n')
+
+    def test_one_additional_root_is_discovered(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        self._service_with_roots(
+            "    additional_source_roots:\n      - shared/lib\n"
+        )
+        import os as _os
+
+        _os.makedirs("shared/lib", exist_ok=True)
+        with open("shared/lib/util.py", "w") as f:
+            f.write("import os\nx = os.environ.get('SHARED_FLAG')\n")
+
+        report = explain.build_report("SHARED_FLAG", "api")
+
+        assert report.source_usages[0].file_path == "shared/lib/util.py"
+
+    def test_multiple_additional_roots_are_all_discovered(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        self._service_with_roots(
+            "    additional_source_roots:\n      - shared/lib\n      - vendor/other\n"
+        )
+        import os as _os
+
+        _os.makedirs("shared/lib", exist_ok=True)
+        _os.makedirs("vendor/other", exist_ok=True)
+        with open("shared/lib/a.py", "w") as f:
+            f.write("import os\nos.environ.get('SHARED_FLAG')\n")
+        with open("vendor/other/b.py", "w") as f:
+            f.write("import os\nos.environ.get('SHARED_FLAG')\n")
+
+        report = explain.build_report("SHARED_FLAG", "api")
+
+        files = {u.file_path for u in report.source_usages}
+        assert files == {"shared/lib/a.py", "vendor/other/b.py"}
+
+    def test_nonexistent_root_is_a_silent_no_op(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        self._service_with_roots(
+            "    additional_source_roots:\n      - does/not/exist\n"
+        )
+
+        report = explain.build_report("SHARED_FLAG", "api")
+
+        assert report.source_usages == []
+
+    def test_a_root_nested_inside_the_service_directory_produces_no_duplicate(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        self._service_with_roots(
+            "    additional_source_roots:\n      - services/api/vendored\n"
+        )
+        import os as _os
+
+        _os.makedirs("services/api/vendored", exist_ok=True)
+        with open("services/api/vendored/util.py", "w") as f:
+            f.write("import os\nos.environ.get('SHARED_FLAG')\n")
+
+        report = explain.build_report("SHARED_FLAG", "api")
+
+        assert len(report.source_usages) == 1
+
+    def test_the_same_root_may_be_shared_by_two_services(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        with open("envshield.yml", "w") as f:
+            f.write(
+                "services:\n"
+                "  api:\n"
+                "    schema: services/api/env.schema.toml\n"
+                "    additional_source_roots:\n      - shared/lib\n"
+                "  web:\n"
+                "    schema: services/web/env.schema.toml\n"
+                "    additional_source_roots:\n      - shared/lib\n"
+            )
+        import os as _os
+
+        _os.makedirs("services/api", exist_ok=True)
+        _os.makedirs("services/web", exist_ok=True)
+        _os.makedirs("shared/lib", exist_ok=True)
+        with open("services/api/env.schema.toml", "w") as f:
+            f.write('[SHARED_FLAG]\ndescription = "x"\n')
+        with open("services/web/env.schema.toml", "w") as f:
+            f.write('[SHARED_FLAG]\ndescription = "x"\n')
+        with open("shared/lib/util.py", "w") as f:
+            f.write("import os\nos.environ.get('SHARED_FLAG')\n")
+
+        api_report = explain.build_report("SHARED_FLAG", "api")
+        web_report = explain.build_report("SHARED_FLAG", "web")
+
+        assert api_report.source_usages[0].file_path == "shared/lib/util.py"
+        assert web_report.source_usages[0].file_path == "shared/lib/util.py"
+
+    def test_absent_key_preserves_existing_behavior(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        self._service_with_roots("")
+        import os as _os
+
+        _os.makedirs("shared/lib", exist_ok=True)
+        with open("shared/lib/util.py", "w") as f:
+            f.write("import os\nos.environ.get('SHARED_FLAG')\n")
+
+        report = explain.build_report("SHARED_FLAG", "api")
+
+        assert report.source_usages == []
+
+    def test_symlinked_additional_root_is_refused(self, tmp_path, monkeypatch):
+        """
+        Mirrors the existing symlink refusal already applied to a service's
+        own directory (_discoverable_files' unconditional
+        os.path.islink(root_dir) check) -- the same guard, applied to an
+        additional root, with no new mechanism. The symlink target is
+        deliberately *inside* the project, so this exercises that
+        discovery-level guard specifically, distinct from
+        _ensure_within_project's separate (and separately tested, see
+        test_config_manager.py) boundary check for a root resolving
+        outside the project entirely.
+        """
+        monkeypatch.chdir(tmp_path)
+        self._service_with_roots(
+            "    additional_source_roots:\n      - shared/lib\n"
+        )
+        import os as _os
+
+        _os.makedirs("real_shared_lib", exist_ok=True)
+        with open("real_shared_lib/util.py", "w") as f:
+            f.write("import os\nos.environ.get('SHARED_FLAG')\n")
+        _os.makedirs("shared", exist_ok=True)
+        _os.symlink(_os.path.abspath("real_shared_lib"), "shared/lib")
+
+        report = explain.build_report("SHARED_FLAG", "api")
+
+        assert report.source_usages == []
+
+
 class TestRequiredIfDependencies:
     def test_forward_requiredif_condition_is_preserved(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)

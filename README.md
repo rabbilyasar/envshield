@@ -294,6 +294,22 @@ envshield check --service api
 
 Every command is service-aware. `--service` is optional with exactly one service configured, inferred automatically when you're standing inside a registered service's own directory, and only prompted for interactively when there's more than one and neither applies.
 
+### Discovering reads in a shared library (`additional_source_roots`)
+
+`undeclared` and `explain` only walk a service's own directory by default. If part of a service's real configuration is read from a shared internal library that lives outside that directory — a common-utilities package imported by several services, say — those reads are invisible to both commands, for every service that imports the library.
+
+`additional_source_roots` widens a service's discovery scope to cover extra directories:
+
+```yaml
+services:
+  api:
+    schema: services/api/env.schema.toml
+    additional_source_roots:
+      - libs/shared
+```
+
+`undeclared --service api` and `explain --service api` now also look inside `libs/shared` — a variable read there counts toward `api`'s own discovery results exactly as if it lived in `services/api/` itself. The same directory can be listed by more than one service; each one independently sees the reads it contains. A path that doesn't exist yet contributes nothing (no error); a path resolving outside the project is refused, the same protection every other path in `envshield.yml` already has. `scan` is unaffected — it's already repository-wide.
+
 ---
 
 ## Multiple sources per service (`completeness: union`)

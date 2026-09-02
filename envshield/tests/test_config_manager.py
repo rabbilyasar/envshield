@@ -769,6 +769,82 @@ def test_get_service_completeness_mode_is_none_for_an_unknown_service(
     assert config_manager.get_service_completeness_mode("does-not-exist") is None
 
 
+def test_get_service_additional_source_roots_is_empty_by_default(tmp_path, monkeypatch):
+    """BL-106: additional_source_roots is opt-in -- unset means [], never inferred."""
+    monkeypatch.chdir(tmp_path)
+    config_manager.add_service("alpha", "alpha/env.schema.toml")
+
+    assert config_manager.get_service_additional_source_roots("alpha") == []
+
+
+def test_get_service_additional_source_roots_reads_the_envshield_yml_key(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    with open("envshield.yml", "w") as f:
+        f.write(
+            "services:\n"
+            "  alpha:\n"
+            "    schema: alpha/env.schema.toml\n"
+            "    additional_source_roots:\n"
+            "      - shared/lib\n"
+            "      - vendor/other\n"
+        )
+
+    assert config_manager.get_service_additional_source_roots("alpha") == [
+        "shared/lib",
+        "vendor/other",
+    ]
+
+
+def test_get_service_additional_source_roots_is_empty_for_an_unknown_service(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+
+    assert config_manager.get_service_additional_source_roots("does-not-exist") == []
+
+
+def test_get_service_additional_source_roots_rejects_a_path_outside_the_project(
+    tmp_path, monkeypatch
+):
+    """
+    Same supply-chain-style protection as schema/local_file/example_file
+    (_ensure_within_project) -- envshield.yml is committed, PR-editable,
+    untrusted input.
+    """
+    monkeypatch.chdir(tmp_path)
+    with open("envshield.yml", "w") as f:
+        f.write(
+            "services:\n"
+            "  alpha:\n"
+            "    schema: alpha/env.schema.toml\n"
+            "    additional_source_roots:\n"
+            "      - ../outside\n"
+        )
+
+    with pytest.raises(UnsafePathError):
+        config_manager.get_service_additional_source_roots("alpha")
+
+
+def test_get_service_additional_source_roots_ignores_a_non_list_value(
+    tmp_path, monkeypatch
+):
+    """A malformed (non-list) value is treated as unset rather than raising --
+    matching get_service_completeness_mode's own lenient-parse precedent for
+    a similarly free-form envshield.yml value."""
+    monkeypatch.chdir(tmp_path)
+    with open("envshield.yml", "w") as f:
+        f.write(
+            "services:\n"
+            "  alpha:\n"
+            "    schema: alpha/env.schema.toml\n"
+            "    additional_source_roots: not-a-list\n"
+        )
+
+    assert config_manager.get_service_additional_source_roots("alpha") == []
+
+
 class TestSymlinkEscapeIsPrevented:
     """
     Regression coverage for P0-6: _ensure_within_project used a purely
