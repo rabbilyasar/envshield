@@ -36,7 +36,10 @@ class KubernetesParser(BaseParser):
 
     A value sourced from 'envFrom' (a ConfigMap/Secret reference) is
     resolved only if that ConfigMap/Secret is itself defined in the same
-    file. A 'valueFrom' entry is reported as present with a placeholder
+    file, keyed by the name the container actually receives -- its own
+    key, prepended with the reference's 'prefix' (if any; an absent or
+    empty prefix is a no-op) -- never the source object's own unprefixed
+    key name, which the container never sees (BL-011 #2). A 'valueFrom' entry is reported as present with a placeholder
     value (UNRESOLVED_VALUE), since its real value lives in the cluster,
     not in this file -- the variable NAME is still known there, only the
     value isn't. EXCEPTION: for 'valueFrom.secretKeyRef'/'configMapKeyRef'
@@ -167,18 +170,23 @@ class KubernetesParser(BaseParser):
             variables[name] = self.UNRESOLVED_VALUE
 
         for env_from in target.get("envFrom") or []:
+            # 'prefix' is prepended to every key pulled from this source --
+            # it's what the container actually receives (BL-011 #2). An
+            # absent or empty prefix is a no-op, matching real Kubernetes
+            # semantics exactly (a bare "" is not a distinct case).
+            prefix = env_from.get("prefix") or ""
             cm_ref = (env_from.get("configMapRef") or {}).get("name")
             if cm_ref:
                 if cm_ref in config_maps:
                     for key, value in config_maps[cm_ref].items():
-                        variables.setdefault(key, value)
+                        variables.setdefault(prefix + key, value)
                 else:
                     self.has_unresolved_source = True
             secret_ref = (env_from.get("secretRef") or {}).get("name")
             if secret_ref:
                 if secret_ref in secrets:
                     for key in secrets[secret_ref]:
-                        variables.setdefault(key, self.UNRESOLVED_VALUE)
+                        variables.setdefault(prefix + key, self.UNRESOLVED_VALUE)
                 else:
                     self.has_unresolved_source = True
 

@@ -526,6 +526,193 @@ class TestEnvFromUnresolvedReference:
         assert parser.has_unresolved_source is False
 
 
+class TestEnvFromPrefix:
+    """
+    Regression coverage for BL-011 #2: envFrom.prefix used to be ignored
+    entirely -- a key pulled from a same-file ConfigMap/Secret was reported
+    under its own unprefixed name, which the container never actually
+    receives, while the real, prefixed name the container does receive was
+    never reported at all. A compound, two-sided error: a false "present"
+    for a name that doesn't exist in the container's environment, and a
+    false "missing" for the one that does.
+    """
+
+    def _manifest(self, env_from_entries: str) -> str:
+        return (
+            "apiVersion: v1\n"
+            "kind: ConfigMap\n"
+            "metadata:\n  name: app-config\n"
+            "data:\n  CM_KEY_A: valueA\n  CM_KEY_B: valueB\n"
+            "---\n"
+            "apiVersion: v1\n"
+            "kind: Secret\n"
+            "metadata:\n  name: app-secret\n"
+            "data:\n  SECRET_KEY_A: c2VjcmV0YQ==\n  SECRET_KEY_B: c2VjcmV0Yg==\n"
+            "---\n"
+            "apiVersion: apps/v1\n"
+            "kind: Deployment\n"
+            "metadata:\n  name: api\n"
+            "spec:\n"
+            "  template:\n"
+            "    spec:\n"
+            "      containers:\n"
+            "        - name: api\n"
+            "          envFrom:\n" + env_from_entries
+        )
+
+    def test_config_map_with_prefix_is_reported_under_the_prefixed_name(
+        self, tmp_path
+    ):
+        f = tmp_path / "deployment.yaml"
+        f.write_text(
+            self._manifest(
+                "            - configMapRef:\n"
+                "                name: app-config\n"
+                "              prefix: CM_\n"
+            )
+        )
+
+        variables = KubernetesParser().get_vars(str(f), get_values=True)
+
+        assert variables["CM_CM_KEY_A"] == "valueA"
+        assert "CM_KEY_A" not in variables
+
+    def test_secret_with_prefix_is_reported_under_the_prefixed_name(self, tmp_path):
+        f = tmp_path / "deployment.yaml"
+        f.write_text(
+            self._manifest(
+                "            - secretRef:\n"
+                "                name: app-secret\n"
+                "              prefix: SEC_\n"
+            )
+        )
+
+        variables = KubernetesParser().get_vars(str(f), get_values=True)
+
+        assert variables["SEC_SECRET_KEY_A"] == KubernetesParser.UNRESOLVED_VALUE
+        assert "SECRET_KEY_A" not in variables
+
+    def test_prefix_applies_independently_to_every_key_under_the_same_source(
+        self, tmp_path
+    ):
+        f = tmp_path / "deployment.yaml"
+        f.write_text(
+            self._manifest(
+                "            - configMapRef:\n"
+                "                name: app-config\n"
+                "              prefix: CM_\n"
+            )
+        )
+
+        variables = KubernetesParser().get_vars(str(f), get_values=True)
+
+        assert variables["CM_CM_KEY_A"] == "valueA"
+        assert variables["CM_CM_KEY_B"] == "valueB"
+        assert "CM_KEY_A" not in variables
+        assert "CM_KEY_B" not in variables
+
+    def test_no_prefix_key_is_unchanged_from_existing_behavior(self, tmp_path):
+        f = tmp_path / "deployment.yaml"
+        f.write_text(
+            self._manifest("            - configMapRef:\n                name: app-config\n")
+        )
+
+        variables = KubernetesParser().get_vars(str(f), get_values=True)
+
+        assert variables["CM_KEY_A"] == "valueA"
+        assert variables["CM_KEY_B"] == "valueB"
+
+    def test_empty_string_prefix_is_a_no_op(self, tmp_path):
+        """An empty prefix means no prefix at all -- not a distinct, literal empty-string key."""
+        f = tmp_path / "deployment.yaml"
+        f.write_text(
+            self._manifest(
+                "            - configMapRef:\n"
+                "                name: app-config\n"
+                "              prefix: \"\"\n"
+            )
+        )
+
+        variables = KubernetesParser().get_vars(str(f), get_values=True)
+
+        assert variables["CM_KEY_A"] == "valueA"
+
+    def test_null_prefix_is_a_no_op(self, tmp_path):
+        """An explicit YAML null ('prefix:' with no value) behaves the same as an absent key."""
+        f = tmp_path / "deployment.yaml"
+        f.write_text(
+            self._manifest(
+                "            - configMapRef:\n"
+                "                name: app-config\n"
+                "              prefix:\n"
+            )
+        )
+
+        variables = KubernetesParser().get_vars(str(f), get_values=True)
+
+        assert variables["CM_KEY_A"] == "valueA"
+
+    def test_external_config_map_reference_with_prefix_stays_unresolved_not_ignored(
+        self, tmp_path
+    ):
+        """
+        A ConfigMap not defined in this file has unknowable keys, so there's
+        nothing to prefix -- existing has_unresolved_source behavior is
+        preserved exactly, not silently dropped because a prefix was given.
+        """
+        f = tmp_path / "deployment.yaml"
+        f.write_text(
+            self._manifest(
+                "            - configMapRef:\n"
+                "                name: not-in-this-file\n"
+                "              prefix: EXT_\n"
+            )
+        )
+        parser = KubernetesParser()
+
+        variables = parser.get_vars(str(f), get_values=True)
+
+        assert variables == {}
+        assert parser.has_unresolved_source is True
+
+    def test_external_secret_reference_with_prefix_stays_unresolved_not_ignored(
+        self, tmp_path
+    ):
+        f = tmp_path / "deployment.yaml"
+        f.write_text(
+            self._manifest(
+                "            - secretRef:\n"
+                "                name: not-in-this-file\n"
+                "              prefix: EXT_\n"
+            )
+        )
+        parser = KubernetesParser()
+
+        variables = parser.get_vars(str(f), get_values=True)
+
+        assert variables == {}
+        assert parser.has_unresolved_source is True
+
+    def test_prefix_on_configmap_does_not_affect_a_sibling_unprefixed_secret(
+        self, tmp_path
+    ):
+        f = tmp_path / "deployment.yaml"
+        f.write_text(
+            self._manifest(
+                "            - configMapRef:\n"
+                "                name: app-config\n"
+                "              prefix: CM_\n"
+                "            - secretRef:\n"
+                "                name: app-secret\n"
+            )
+        )
+
+        variables = KubernetesParser().get_vars(str(f), get_values=True)
+
+        assert variables["CM_CM_KEY_A"] == "valueA"
+        assert variables["SECRET_KEY_A"] == KubernetesParser.UNRESOLVED_VALUE
+
+
 def test_parser_raises_when_container_ambiguous(tmp_path):
     f = tmp_path / "deployment.yaml"
     f.write_text(
