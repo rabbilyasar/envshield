@@ -39,7 +39,21 @@ class KubernetesParser(BaseParser):
     file. A 'valueFrom' entry is reported as present with a placeholder
     value (UNRESOLVED_VALUE), since its real value lives in the cluster,
     not in this file -- the variable NAME is still known there, only the
-    value isn't. An 'envFrom' reference to a ConfigMap/Secret that ISN'T
+    value isn't. EXCEPTION: for 'valueFrom.secretKeyRef'/'configMapKeyRef'
+    specifically, when the referenced Secret/ConfigMap IS defined in this
+    same file, the referenced '.key' is cross-checked against that
+    object's own known keys -- a key that genuinely doesn't exist there
+    means the variable is excluded entirely (not reported present), since
+    real Kubernetes fails the pod at apply-time in that case (or, with
+    'optional: true', simply never injects it) rather than delivering
+    anything. A reference to a Secret/ConfigMap NOT defined in this file
+    keeps the plain present/UNRESOLVED_VALUE behavior -- its keys aren't
+    knowable here, so absence can't be confirmed (same epistemic stance
+    'envFrom' already takes below). Neither this key-existence check nor
+    'envFrom' ever decodes/exposes a real Secret value; a same-file
+    ConfigMap's *value* also still isn't surfaced for 'valueFrom' (only
+    for 'envFrom', which was already resolving real values before this).
+    An 'envFrom' reference to a ConfigMap/Secret that ISN'T
     defined in the supplied file is a different, weaker case: the
     variable NAMES it might supply aren't knowable at all, so nothing can
     be added to the returned set for it -- instead it's surfaced via
@@ -123,11 +137,34 @@ class KubernetesParser(BaseParser):
             name = env_entry.get("name")
             if not name:
                 continue
-            variables[name] = (
-                str(env_entry["value"])
-                if "value" in env_entry
-                else self.UNRESOLVED_VALUE
-            )
+            if "value" in env_entry:
+                variables[name] = str(env_entry["value"])
+                continue
+
+            # env[].name is the injected variable name regardless of what
+            # key the Secret/ConfigMap stores it under -- that part of the
+            # existing match is correct. What's missing is cross-checking
+            # the referenced *key* itself (BL-011 #3) when the Secret/
+            # ConfigMap is defined in this same manifest: only then can
+            # EnvShield tell a genuinely-satisfied reference apart from one
+            # pointing at a key that doesn't exist (which fails the pod at
+            # apply-time -- see class docstring's optional/valueFrom note).
+            # An object NOT defined in this file keeps today's behavior
+            # (present/UNRESOLVED_VALUE) -- its keys aren't knowable here.
+            value_from = env_entry.get("valueFrom") or {}
+            key_ref = value_from.get("secretKeyRef")
+            known_keys: dict[str, str] | set[str] | None = None
+            if isinstance(key_ref, dict):
+                known_keys = secrets.get(key_ref.get("name"))
+            else:
+                key_ref = value_from.get("configMapKeyRef")
+                if isinstance(key_ref, dict):
+                    known_keys = config_maps.get(key_ref.get("name"))
+
+            if key_ref is not None and known_keys is not None:
+                if key_ref.get("key") not in known_keys:
+                    continue  # broken same-file key reference: not usably present
+            variables[name] = self.UNRESOLVED_VALUE
 
         for env_from in target.get("envFrom") or []:
             cm_ref = (env_from.get("configMapRef") or {}).get("name")

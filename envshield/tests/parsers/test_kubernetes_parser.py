@@ -112,6 +112,234 @@ def test_parser_resolves_secret_keys_as_present_but_unresolved(tmp_path):
     assert variables["DATABASE_URL"] == KubernetesParser.UNRESOLVED_VALUE
 
 
+class TestValueFromKeyValidation:
+    """
+    Regression coverage for BL-011 #3: 'env[].valueFrom.secretKeyRef'/
+    'configMapKeyRef' used to be matched purely by 'env[].name', with no
+    check that the referenced '.key' actually exists in a same-file
+    Secret/ConfigMap -- a broken key reference was reported identically to
+    a genuinely-satisfied one. Real Kubernetes fails the pod at apply-time
+    (or, with 'optional: true', simply never injects the variable) when
+    the key doesn't exist, so a broken same-file reference is now excluded
+    from the result entirely rather than reported present.
+    """
+
+    def _manifest(self, env_entries: str) -> str:
+        return (
+            "apiVersion: v1\n"
+            "kind: Secret\n"
+            "metadata:\n  name: db-secret\n"
+            "data:\n  ACTUAL_KEY: dmFsdWU=\n  OTHER_KEY: dmFsdWUy\n"
+            "---\n"
+            "apiVersion: v1\n"
+            "kind: ConfigMap\n"
+            "metadata:\n  name: app-config\n"
+            "data:\n  REAL_CM_KEY: hello\n"
+            "---\n"
+            "apiVersion: apps/v1\n"
+            "kind: Deployment\n"
+            "metadata:\n  name: api\n"
+            "spec:\n"
+            "  template:\n"
+            "    spec:\n"
+            "      containers:\n"
+            "        - name: api\n"
+            "          env:\n" + env_entries
+        )
+
+    def test_broken_in_file_secret_key_ref_excludes_the_variable(self, tmp_path):
+        f = tmp_path / "deployment.yaml"
+        f.write_text(
+            self._manifest(
+                "            - name: DATABASE_PASSWORD\n"
+                "              valueFrom:\n"
+                "                secretKeyRef:\n"
+                "                  name: db-secret\n"
+                "                  key: MISSING_KEY\n"
+            )
+        )
+
+        variables = KubernetesParser().get_vars(str(f), get_values=True)
+
+        assert "DATABASE_PASSWORD" not in variables
+
+    def test_valid_in_file_secret_key_ref_is_reported_present(self, tmp_path):
+        f = tmp_path / "deployment.yaml"
+        f.write_text(
+            self._manifest(
+                "            - name: DATABASE_PASSWORD\n"
+                "              valueFrom:\n"
+                "                secretKeyRef:\n"
+                "                  name: db-secret\n"
+                "                  key: ACTUAL_KEY\n"
+            )
+        )
+
+        variables = KubernetesParser().get_vars(str(f), get_values=True)
+
+        assert variables["DATABASE_PASSWORD"] == KubernetesParser.UNRESOLVED_VALUE
+
+    def test_broken_in_file_config_map_key_ref_excludes_the_variable(self, tmp_path):
+        f = tmp_path / "deployment.yaml"
+        f.write_text(
+            self._manifest(
+                "            - name: APP_SETTING\n"
+                "              valueFrom:\n"
+                "                configMapKeyRef:\n"
+                "                  name: app-config\n"
+                "                  key: MISSING_CM_KEY\n"
+            )
+        )
+
+        variables = KubernetesParser().get_vars(str(f), get_values=True)
+
+        assert "APP_SETTING" not in variables
+
+    def test_valid_in_file_config_map_key_ref_is_reported_present(self, tmp_path):
+        f = tmp_path / "deployment.yaml"
+        f.write_text(
+            self._manifest(
+                "            - name: APP_SETTING\n"
+                "              valueFrom:\n"
+                "                configMapKeyRef:\n"
+                "                  name: app-config\n"
+                "                  key: REAL_CM_KEY\n"
+            )
+        )
+
+        variables = KubernetesParser().get_vars(str(f), get_values=True)
+
+        assert variables["APP_SETTING"] == KubernetesParser.UNRESOLVED_VALUE
+
+    def test_multiple_env_vars_referencing_different_keys_of_the_same_secret(
+        self, tmp_path
+    ):
+        f = tmp_path / "deployment.yaml"
+        f.write_text(
+            self._manifest(
+                "            - name: FIRST_VAR\n"
+                "              valueFrom:\n"
+                "                secretKeyRef:\n"
+                "                  name: db-secret\n"
+                "                  key: ACTUAL_KEY\n"
+                "            - name: SECOND_VAR\n"
+                "              valueFrom:\n"
+                "                secretKeyRef:\n"
+                "                  name: db-secret\n"
+                "                  key: OTHER_KEY\n"
+                "            - name: THIRD_VAR\n"
+                "              valueFrom:\n"
+                "                secretKeyRef:\n"
+                "                  name: db-secret\n"
+                "                  key: MISSING_KEY\n"
+            )
+        )
+
+        variables = KubernetesParser().get_vars(str(f), get_values=True)
+
+        assert variables["FIRST_VAR"] == KubernetesParser.UNRESOLVED_VALUE
+        assert variables["SECOND_VAR"] == KubernetesParser.UNRESOLVED_VALUE
+        assert "THIRD_VAR" not in variables
+
+    def test_external_secret_reference_keeps_existing_unresolved_behavior(
+        self, tmp_path
+    ):
+        f = tmp_path / "deployment.yaml"
+        f.write_text(
+            self._manifest(
+                "            - name: EXTERNAL_VAR\n"
+                "              valueFrom:\n"
+                "                secretKeyRef:\n"
+                "                  name: not-in-this-file\n"
+                "                  key: whatever\n"
+            )
+        )
+
+        variables = KubernetesParser().get_vars(str(f), get_values=True)
+
+        assert variables["EXTERNAL_VAR"] == KubernetesParser.UNRESOLVED_VALUE
+
+    def test_external_config_map_reference_keeps_existing_unresolved_behavior(
+        self, tmp_path
+    ):
+        f = tmp_path / "deployment.yaml"
+        f.write_text(
+            self._manifest(
+                "            - name: EXTERNAL_VAR\n"
+                "              valueFrom:\n"
+                "                configMapKeyRef:\n"
+                "                  name: not-in-this-file\n"
+                "                  key: whatever\n"
+            )
+        )
+
+        variables = KubernetesParser().get_vars(str(f), get_values=True)
+
+        assert variables["EXTERNAL_VAR"] == KubernetesParser.UNRESOLVED_VALUE
+
+    def test_field_ref_is_unaffected(self, tmp_path):
+        f = tmp_path / "deployment.yaml"
+        f.write_text(
+            self._manifest(
+                "            - name: POD_NAME\n"
+                "              valueFrom:\n"
+                "                fieldRef:\n"
+                "                  fieldPath: metadata.name\n"
+            )
+        )
+
+        variables = KubernetesParser().get_vars(str(f), get_values=True)
+
+        assert variables["POD_NAME"] == KubernetesParser.UNRESOLVED_VALUE
+
+    def test_resource_field_ref_is_unaffected(self, tmp_path):
+        f = tmp_path / "deployment.yaml"
+        f.write_text(
+            self._manifest(
+                "            - name: CPU_LIMIT\n"
+                "              valueFrom:\n"
+                "                resourceFieldRef:\n"
+                "                  resource: limits.cpu\n"
+            )
+        )
+
+        variables = KubernetesParser().get_vars(str(f), get_values=True)
+
+        assert variables["CPU_LIMIT"] == KubernetesParser.UNRESOLVED_VALUE
+
+    def test_literal_value_is_unaffected(self, tmp_path):
+        f = tmp_path / "deployment.yaml"
+        f.write_text(
+            self._manifest("            - name: LOG_LEVEL\n              value: info\n")
+        )
+
+        variables = KubernetesParser().get_vars(str(f), get_values=True)
+
+        assert variables["LOG_LEVEL"] == "info"
+
+    def test_malformed_secret_key_ref_missing_its_own_name_falls_back_safely(
+        self, tmp_path
+    ):
+        """
+        No 'name:' on the secretKeyRef itself -- the existing lenient
+        fallback (present/UNRESOLVED_VALUE) is preserved rather than
+        crashing or misbehaving on malformed manifest content.
+        """
+        f = tmp_path / "deployment.yaml"
+        f.write_text(
+            self._manifest(
+                "            - name: MALFORMED\n"
+                "              valueFrom:\n"
+                "                secretKeyRef:\n"
+                "                  key: ACTUAL_KEY\n"
+            )
+        )
+
+        variables = KubernetesParser().get_vars(str(f), get_values=True)
+
+        assert variables["MALFORMED"] == KubernetesParser.UNRESOLVED_VALUE
+
+
 class TestEnvFromUnresolvedReference:
     """
     Regression: an envFrom.configMapRef/secretRef naming a ConfigMap/Secret
