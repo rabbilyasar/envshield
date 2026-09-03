@@ -392,6 +392,115 @@ class TestVariableInterpolation:
         assert variables["URL"] == "https://${HOST:-localhost}/api"
 
 
+class TestNoColonDefaultInterpolation:
+    """
+    Regression coverage for BL-011 #1: Compose's colon in '${VAR:-default}'
+    is optional -- '${VAR-default}' is equally valid syntax, differing only
+    in whether an empty *runtime* value also falls back to the default, a
+    distinction this static parser can't observe. The old regex required
+    the literal ':-' sequence, so '${VAR-default}' failed to match entirely
+    and was stored as the literal, un-interpolated template text instead of
+    being resolved.
+    """
+
+    def test_reference_with_no_colon_default_resolves_to_the_default(self, tmp_path):
+        f = tmp_path / "docker-compose.yml"
+        f.write_text(
+            "services:\n  api:\n    environment:\n      DB_PORT: ${DB_PORT-3307}\n"
+        )
+
+        variables = DockerComposeParser().get_vars(str(f), get_values=True)
+
+        assert variables["DB_PORT"] == "3307"
+        assert variables["DB_PORT"] != "${DB_PORT-3307}"
+
+    def test_list_style_environment_also_resolves_no_colon_default(self, tmp_path):
+        f = tmp_path / "docker-compose.yml"
+        f.write_text(
+            "services:\n"
+            "  api:\n"
+            "    environment:\n"
+            "      - FLASK_APP=${FLASK_APP-app}\n"
+        )
+
+        variables = DockerComposeParser().get_vars(str(f), get_values=True)
+
+        assert variables["FLASK_APP"] == "app"
+
+    def test_no_colon_empty_default_resolves_to_empty_string(self, tmp_path):
+        f = tmp_path / "docker-compose.yml"
+        f.write_text(
+            "services:\n  api:\n    environment:\n      OPTIONAL_FLAG: ${OPTIONAL_FLAG-}\n"
+        )
+
+        variables = DockerComposeParser().get_vars(str(f), get_values=True)
+
+        assert variables["OPTIONAL_FLAG"] == ""
+
+    def test_colon_empty_default_resolves_to_empty_string(self, tmp_path):
+        f = tmp_path / "docker-compose.yml"
+        f.write_text(
+            "services:\n  api:\n    environment:\n      OPTIONAL_FLAG: ${OPTIONAL_FLAG:-}\n"
+        )
+
+        variables = DockerComposeParser().get_vars(str(f), get_values=True)
+
+        assert variables["OPTIONAL_FLAG"] == ""
+
+    def test_default_value_itself_starting_with_a_dash_is_captured_whole(
+        self, tmp_path
+    ):
+        """Only the first '-' after the (optional) colon is the separator."""
+        f = tmp_path / "docker-compose.yml"
+        f.write_text(
+            "services:\n"
+            "  api:\n"
+            "    environment:\n"
+            "      FLAGS: ${FLAGS--leading-dash-value}\n"
+        )
+
+        variables = DockerComposeParser().get_vars(str(f), get_values=True)
+
+        assert variables["FLAGS"] == "-leading-dash-value"
+
+    def test_quoted_no_colon_default_resolves_the_same_as_unquoted(self, tmp_path):
+        f = tmp_path / "docker-compose.yml"
+        f.write_text(
+            'services:\n  api:\n    environment:\n      DB_PORT: "${DB_PORT-3307}"\n'
+        )
+
+        variables = DockerComposeParser().get_vars(str(f), get_values=True)
+
+        assert variables["DB_PORT"] == "3307"
+
+    def test_required_and_alternative_operators_remain_out_of_scope_and_literal(
+        self, tmp_path
+    ):
+        """
+        '${VAR:?err}'/'${VAR?err}' (required-or-error) and '${VAR:+alt}'/
+        '${VAR+alt}' (alternative-value) are different Compose operators,
+        deliberately unsupported -- the widened regex must not accidentally
+        start matching them.
+        """
+        f = tmp_path / "docker-compose.yml"
+        f.write_text(
+            "services:\n"
+            "  api:\n"
+            "    environment:\n"
+            "      A: ${A:?missing}\n"
+            "      B: ${B?missing}\n"
+            "      C: ${C:+alt}\n"
+            "      D: ${D+alt}\n"
+        )
+
+        variables = DockerComposeParser().get_vars(str(f), get_values=True)
+
+        assert variables["A"] == "${A:?missing}"
+        assert variables["B"] == "${B?missing}"
+        assert variables["C"] == "${C:+alt}"
+        assert variables["D"] == "${D+alt}"
+
+
 class TestInterpolationComparesAgainstHostVariableName:
     """
     Regression coverage for PDF finding 3.6: a whole-value '${VAR}' /
@@ -427,6 +536,23 @@ class TestInterpolationComparesAgainstHostVariableName:
             "  server:\n"
             "    environment:\n"
             "      AUTHENTIK_POSTGRESQL__HOST: ${PG_HOST:-localhost}\n"
+        )
+
+        variables = DockerComposeParser().get_vars(str(f), get_values=True)
+
+        assert variables == {"PG_HOST": "localhost"}
+        assert "AUTHENTIK_POSTGRESQL__HOST" not in variables
+
+    def test_renamed_variable_with_no_colon_default_is_keyed_by_host_name(
+        self, tmp_path
+    ):
+        """BL-011 #1: the no-colon default form must also resolve the rename."""
+        f = tmp_path / "docker-compose.yml"
+        f.write_text(
+            "services:\n"
+            "  server:\n"
+            "    environment:\n"
+            "      AUTHENTIK_POSTGRESQL__HOST: ${PG_HOST-localhost}\n"
         )
 
         variables = DockerComposeParser().get_vars(str(f), get_values=True)

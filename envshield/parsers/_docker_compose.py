@@ -10,13 +10,19 @@ from ._deployment import ensure_within_project, safe_yaml_error_message
 from ._dotenv import DotenvParser
 
 # Matches a value that is ENTIRELY one Compose variable-substitution
-# reference -- '${VAR}' or '${VAR:-default}'. A reference embedded inside a
-# larger string ('prefix-${VAR}-suffix') is intentionally left as literal
-# text: resolving a partial substitution would require modeling Compose's
-# full shell-style expansion grammar, which is out of scope here. The
-# common real-world case -- the whole value is one reference, e.g.
-# 'DB_PORT=${DB_PORT:-3307}' -- is what this closes.
-_INTERPOLATION_RE = re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)(:-(.*))?\}$")
+# reference -- '${VAR}', '${VAR:-default}', or '${VAR-default}'. Compose
+# treats the colon as purely optional here: it only changes whether an
+# empty *runtime* value also falls back to the default, a distinction this
+# static parser can't observe anyway (BL-011 #1) -- so both forms resolve
+# identically. A reference embedded inside a larger string
+# ('prefix-${VAR}-suffix') is intentionally left as literal text: resolving
+# a partial substitution would require modeling Compose's full shell-style
+# expansion grammar, which is out of scope here. The common real-world
+# case -- the whole value is one reference, e.g. 'DB_PORT=${DB_PORT-3307}'
+# -- is what this closes. Other Compose operators ('${VAR:?err}',
+# '${VAR?err}', '${VAR:+alt}', '${VAR+alt}') deliberately don't match and
+# stay literal -- out of scope.
+_INTERPOLATION_RE = re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)(:?-(.*))?\}$")
 
 
 class DockerComposeParser(BaseParser):
@@ -33,7 +39,7 @@ class DockerComposeParser(BaseParser):
     missing or blank, since the real value legitimately lives outside this
     file.
 
-    A whole-value '${VAR}'/'${VAR:-default}' reference is reported under
+    A whole-value '${VAR}'/'${VAR:-default}'/'${VAR-default}' reference is reported under
     VAR (the host-facing name the schema declares), not under the
     container-facing key it's assigned to -- e.g.
     'AUTHENTIK_POSTGRESQL__PASSWORD: ${PG_PASS}' contributes a PG_PASS
@@ -132,8 +138,8 @@ class DockerComposeParser(BaseParser):
 
     def _resolve_interpolation(self, value: str) -> tuple[str | None, str]:
         """
-        Resolves a value that is entirely one '${VAR}'/'${VAR:-default}'
-        Compose variable-substitution reference. With a fallback, the
+        Resolves a value that is entirely one '${VAR}'/'${VAR:-default}'/
+        '${VAR-default}' Compose variable-substitution reference. With a fallback, the
         fallback is the value this container actually receives absent a
         real shell environment -- the same reasoning schema.defaultValue
         already uses elsewhere. Without one, the real value legitimately
