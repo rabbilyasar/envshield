@@ -15,6 +15,7 @@ from envshield.core.exceptions import (
     UnsafePathError,
 )
 from envshield.utils import git_utils
+from envshield.utils.paths import is_within
 
 CONFIG_FILE_NAME = "envshield.yml"
 SCHEMA_FILE_NAME = "env.schema.toml"
@@ -34,12 +35,12 @@ def _ensure_within_project(path: str, label: str) -> str:
     for anyone who clones the repo and runs ordinary commands.
 
     The containment decision is made on the *resolved* (symlink-followed)
-    location of both sides, via os.path.realpath -- not just the lexically
-    normalized abspath. A committed symlink inside the project pointing
-    outside it (or a chain of them) satisfies a purely lexical abspath/
-    commonpath check while its real target does not, which is the P0-6
-    vulnerability this guards against. realpath resolves as much of the
-    path as exists and appends the remainder unresolved, so a dangling
+    location of both sides (see utils.paths.is_within), not just the
+    lexically normalized abspath. A committed symlink inside the project
+    pointing outside it (or a chain of them) satisfies a purely lexical
+    abspath/commonpath check while its real target does not, which is the
+    P0-6 vulnerability this guards against. realpath resolves as much of
+    the path as exists and appends the remainder unresolved, so a dangling
     symlink or a not-yet-existing target under a symlinked parent directory
     is still resolved and checked correctly -- no separate existence check
     is needed. The *returned* value is still the original `path` string,
@@ -48,17 +49,38 @@ def _ensure_within_project(path: str, label: str) -> str:
     with a machine-specific one.
     """
     project_root = os.path.abspath(os.getcwd())
-    real_root = os.path.realpath(project_root)
-    real_candidate = os.path.realpath(os.path.join(project_root, path))
-    try:
-        is_within = os.path.commonpath([real_root, real_candidate]) == real_root
-    except ValueError:
-        # Raised on Windows when the two paths are on different drives --
-        # definitionally not "within" the project.
-        is_within = False
-    if not is_within:
+    candidate = os.path.join(project_root, path)
+    if not is_within(candidate, project_root):
         raise UnsafePathError(label, path, project_root)
     return path
+
+
+def _check_schema_extends_cycle(schema_path: str, visited: frozenset) -> str:
+    """
+    Returns the resolved real path for `schema_path` (for the caller to add
+    to its own `visited` set), raising SchemaParseError if it's already in
+    `visited`. Shared by _load_schema_file and resolve_field_provenance so
+    a future fix to this check can't patch only one of the two (see
+    BL-010) -- both already mirror each other's extends-recursion exactly.
+
+    Uses os.path.realpath, not os.path.abspath: abspath only normalizes a
+    path lexically (collapsing '.'/'..' segments) and never follows
+    symlinks, so a self-referencing symlink chain (e.g. 'real_dir/self'
+    pointing back to 'real_dir') produces a different-looking-but-
+    identical-target path on every recursive visit -- 'real_dir/x.toml',
+    'real_dir/self/x.toml', 'real_dir/self/self/x.toml', ... -- and never
+    repeats lexically, so this check never fires. The recursion was then
+    only bounded by the OS's own symlink-resolution depth limit (ELOOP),
+    producing a garbled SchemaNotFoundError instead of a clean, immediate
+    "circular 'extends' chain detected". realpath collapses every one of
+    those spellings to the same real target, so the true cycle is caught
+    on its second visit, exactly like an ordinary non-symlinked cycle
+    already is.
+    """
+    real_path = os.path.realpath(schema_path)
+    if real_path in visited:
+        raise SchemaParseError(schema_path, "circular 'extends' chain detected")
+    return real_path
 
 
 def find_project_root(start: str = ".") -> Optional[str]:
@@ -243,9 +265,7 @@ def _load_schema_file(
     would be the same supply-chain-style path-traversal risk.
     """
     visited = _visited or frozenset()
-    real_path = os.path.abspath(schema_path)
-    if real_path in visited:
-        raise SchemaParseError(schema_path, "circular 'extends' chain detected")
+    real_path = _check_schema_extends_cycle(schema_path, visited)
     visited = visited | {real_path}
 
     raw = load_toml_schema(schema_path)
@@ -290,9 +310,7 @@ def resolve_field_provenance(
     resolution path.
     """
     visited = _visited or frozenset()
-    real_path = os.path.abspath(schema_path)
-    if real_path in visited:
-        raise SchemaParseError(schema_path, "circular 'extends' chain detected")
+    real_path = _check_schema_extends_cycle(schema_path, visited)
     visited = visited | {real_path}
 
     raw = load_toml_schema(schema_path)

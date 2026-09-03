@@ -6,7 +6,7 @@ import yaml
 
 from ..core.exceptions import EnvShieldException
 from ._base import BaseParser
-from ._deployment import safe_yaml_error_message
+from ._deployment import ensure_within_project, safe_yaml_error_message
 from ._dotenv import DotenvParser
 
 # Matches a value that is ENTIRELY one Compose variable-substitution
@@ -101,7 +101,9 @@ class DockerComposeParser(BaseParser):
                     env_file = env_file.get("path")
                 if not env_file:
                     continue
-                env_file_path = os.path.join(base_dir, env_file)
+                env_file_path = ensure_within_project(
+                    base_dir, env_file, "docker-compose 'env_file' reference"
+                )
                 if os.path.exists(env_file_path):
                     try:
                         variables.update(

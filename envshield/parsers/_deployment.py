@@ -6,6 +6,47 @@ import re
 
 import yaml
 
+from ..core.exceptions import UnsafePathError
+from ..utils.paths import is_within
+
+
+def ensure_within_project(base_dir: str, relative_path: str, label: str) -> str:
+    """
+    Resolves `relative_path` against `base_dir` (e.g. a manifest's own
+    directory, for a reference like 'env_file:' that's relative to the
+    manifest, not the project root) and validates the result stays within
+    the current project boundary. Raises UnsafePathError otherwise;
+    returns the resolved (but not realpath'd) absolute path on success.
+
+    The actual containment check (utils.paths.is_within) is shared with
+    config/manager.py's own _ensure_within_project -- both need the exact
+    same realpath-based, symlink-safe comparison (a symlink can satisfy a
+    lexical containment check while its real target does not), and a
+    review confirmed sharing it introduces no coupling either function
+    didn't already have: utils/ is a pre-existing, dependency-free leaf
+    package (see git_utils.py, already used by both config/manager.py and
+    core/dependency_snapshot.py) that both this module and config/
+    manager.py can depend on downward without depending on each other.
+    This function keeps its own join semantics (relative to `base_dir`,
+    not the project root) and its own return contract (the resolved
+    absolute path, for immediate use -- unlike config/manager.py's
+    version, which returns the original portable path for persistence
+    into envshield.yml), since those genuinely differ between the two
+    callers; only the shared boolean check itself was extracted. By the
+    time any parser runs, the CLI has already chdir'd to the project root
+    (see cli.py's startup sequence), which is the same assumption
+    _ensure_within_project itself makes.
+
+    A manifest is committed, untrusted content -- a 'env_file: ../../
+    outside.env' reference could otherwise make EnvShield read an
+    arbitrary file outside the project (BL-008).
+    """
+    candidate = os.path.join(base_dir, relative_path)
+    project_root = os.path.abspath(os.getcwd())
+    if not is_within(candidate, project_root):
+        raise UnsafePathError(label, relative_path, project_root)
+    return candidate
+
 
 def detect_deployment_format(file_path: str) -> str | None:
     """

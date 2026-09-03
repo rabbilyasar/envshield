@@ -1,7 +1,7 @@
 # envshield/tests/parsers/test_docker_compose_parser.py
 import pytest
 
-from envshield.core.exceptions import EnvShieldException
+from envshield.core.exceptions import EnvShieldException, UnsafePathError
 from envshield.parsers._deployment import (
     detect_deployment_format,
     looks_like_unrendered_helm_template,
@@ -126,8 +126,9 @@ def test_parser_raises_for_unknown_container(tmp_path):
         DockerComposeParser(container="worker").get_vars(str(f))
 
 
-def test_parser_merges_env_file_with_environment_block(tmp_path):
+def test_parser_merges_env_file_with_environment_block(tmp_path, monkeypatch):
     """'environment:' wins over 'env_file:' on a key conflict, matching docker-compose's own precedence."""
+    monkeypatch.chdir(tmp_path)
     (tmp_path / ".env").write_text(
         "DATABASE_URL=from-env-file\nREDIS_URL=redis://cache\n"
     )
@@ -212,7 +213,8 @@ class TestEnvFileLongForm:
     was a plain string.
     """
 
-    def test_dict_entry_with_existing_file_loads_variables(self, tmp_path):
+    def test_dict_entry_with_existing_file_loads_variables(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
         (tmp_path / ".env").write_text("FOO=bar\n")
         f = tmp_path / "docker-compose.yml"
         f.write_text(
@@ -224,8 +226,9 @@ class TestEnvFileLongForm:
         assert variables == {"FOO": "bar"}
 
     def test_dict_entry_with_missing_optional_file_is_skipped_not_crashed(
-        self, tmp_path
+        self, tmp_path, monkeypatch
     ):
+        monkeypatch.chdir(tmp_path)
         f = tmp_path / "docker-compose.yml"
         f.write_text(
             "services:\n  api:\n    env_file:\n      - path: .env.missing\n        required: false\n"
@@ -234,6 +237,88 @@ class TestEnvFileLongForm:
         variables = DockerComposeParser().get_vars(str(f), get_values=True)
 
         assert variables == {}
+
+
+class TestEnvFileProjectBoundary:
+    """
+    Regression coverage for BL-008: a docker-compose file is committed,
+    untrusted content -- an 'env_file:' entry pointing outside the project
+    (directly via '../', or indirectly via a symlink) must never be read,
+    the same trust boundary schema/local_file/example_file paths in
+    envshield.yml already have (see config/manager.py's
+    _ensure_within_project, which this mirrors via
+    parsers/_deployment.ensure_within_project).
+    """
+
+    def test_valid_sibling_env_file_still_loads(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".env").write_text("FOO=bar\n")
+        f = tmp_path / "docker-compose.yml"
+        f.write_text("services:\n  api:\n    env_file:\n      - .env\n")
+
+        variables = DockerComposeParser().get_vars(str(f), get_values=True)
+
+        assert variables == {"FOO": "bar"}
+
+    def test_valid_nested_relative_env_file_still_loads(self, tmp_path, monkeypatch):
+        """Existing relative-path behavior (a subdirectory reference, not
+        just a same-directory sibling) is unaffected."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "config").mkdir()
+        (tmp_path / "config" / ".env").write_text("NESTED=ok\n")
+        f = tmp_path / "docker-compose.yml"
+        f.write_text("services:\n  api:\n    env_file:\n      - config/.env\n")
+
+        variables = DockerComposeParser().get_vars(str(f), get_values=True)
+
+        assert variables == {"NESTED": "ok"}
+
+    def test_direct_dotdot_escape_is_refused(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        outside = tmp_path.parent / f"{tmp_path.name}_outside"
+        outside.mkdir(exist_ok=True)
+        (outside / "secrets.env").write_text("SUPER_SECRET_OUTSIDE=leaked\n")
+        f = tmp_path / "docker-compose.yml"
+        f.write_text(
+            f"services:\n  api:\n    env_file:\n      - ../{outside.name}/secrets.env\n"
+        )
+
+        with pytest.raises(UnsafePathError):
+            DockerComposeParser().get_vars(str(f), get_values=True)
+
+    def test_symlink_escape_is_refused(self, tmp_path, monkeypatch):
+        """
+        A lexical containment check alone would be satisfied by a symlink
+        living inside the project directory -- the security-relevant
+        question is where it *resolves*, not where it lexically sits.
+        """
+        monkeypatch.chdir(tmp_path)
+        outside = tmp_path.parent / f"{tmp_path.name}_outside"
+        outside.mkdir(exist_ok=True)
+        (outside / "secrets.env").write_text("SUPER_SECRET_OUTSIDE=leaked\n")
+        (tmp_path / "linked.env").symlink_to(outside / "secrets.env")
+        f = tmp_path / "docker-compose.yml"
+        f.write_text("services:\n  api:\n    env_file:\n      - linked.env\n")
+
+        with pytest.raises(UnsafePathError):
+            DockerComposeParser().get_vars(str(f), get_values=True)
+
+    def test_error_message_matches_the_existing_unsafe_path_convention(
+        self, tmp_path, monkeypatch
+    ):
+        """Same exception type and message shape as every other
+        envshield.yml-sourced path (schema/local_file/example_file/
+        extends) -- callers that already handle UnsafePathError generically
+        (e.g. explain.py's ManifestReference error status) need no new
+        handling for this case."""
+        monkeypatch.chdir(tmp_path)
+        f = tmp_path / "docker-compose.yml"
+        f.write_text(
+            "services:\n  api:\n    env_file:\n      - ../../../etc/passwd\n"
+        )
+
+        with pytest.raises(UnsafePathError, match="resolves outside the project"):
+            DockerComposeParser().get_vars(str(f), get_values=True)
 
 
 class TestVariableInterpolation:
@@ -443,8 +528,11 @@ class TestInterpolationComparesAgainstHostVariableName:
 
         assert variables == {"URL": "https://${HOST:-localhost}/api"}
 
-    def test_environment_block_rename_still_overrides_env_file(self, tmp_path):
+    def test_environment_block_rename_still_overrides_env_file(
+        self, tmp_path, monkeypatch
+    ):
         """The existing 'environment: wins over env_file:' precedence still applies when the winning entry is a rename."""
+        monkeypatch.chdir(tmp_path)
         (tmp_path / ".env").write_text("PG_PASS=from-env-file\n")
         f = tmp_path / "docker-compose.yml"
         f.write_text(

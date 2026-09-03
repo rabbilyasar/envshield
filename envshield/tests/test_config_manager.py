@@ -394,6 +394,59 @@ def test_load_schema_detects_circular_extends(tmp_path, monkeypatch):
         config_manager._load_schema_file("a.schema.toml")
 
 
+def test_load_schema_detects_an_equivalent_relative_path_cycle(tmp_path, monkeypatch):
+    """
+    Two different relative-path spellings that already normalize to the
+    same abspath (no symlink involved) -- confirms this pre-existing
+    correctness (already handled by plain os.path.abspath's own lexical
+    '.'/'..' collapsing) survives the BL-010 fix, not just the new
+    symlink case."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "dir").mkdir()
+    with open("dir/a.schema.toml", "w") as f:
+        f.write('extends = "../dir/b.schema.toml"\n')
+    with open("dir/b.schema.toml", "w") as f:
+        f.write('extends = "./a.schema.toml"\n')
+
+    with pytest.raises(SchemaParseError, match="circular"):
+        config_manager._load_schema_file("dir/a.schema.toml")
+
+
+def test_load_schema_detects_a_symlinked_extends_cycle(tmp_path, monkeypatch):
+    """
+    Regression for BL-010: cycle detection used a purely lexical
+    os.path.abspath, which never follows symlinks -- a self-referencing
+    symlink produced a different (never-repeating) path string on every
+    recursive visit, so the cycle was never detected and the recursion
+    was only bounded by the OS's own symlink-depth limit (ELOOP),
+    producing a garbled error instead of a clean "circular" one.
+    """
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "real_dir").mkdir()
+    (tmp_path / "real_dir" / "self").symlink_to(tmp_path / "real_dir")
+    with open("real_dir/x.schema.toml", "w") as f:
+        f.write('extends = "self/x.schema.toml"\n\n[FOO]\ndescription = "x"\n')
+
+    with pytest.raises(SchemaParseError, match="circular"):
+        config_manager._load_schema_file("real_dir/x.schema.toml")
+
+
+def test_resolve_field_provenance_detects_a_symlinked_extends_cycle(
+    tmp_path, monkeypatch
+):
+    """Mirrors _load_schema_file's own symlink-cycle regression above --
+    BACKLOG.md's BL-010 entry confirms both functions share the exact
+    same lexical-not-physical bug, so both need their own regression."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "real_dir").mkdir()
+    (tmp_path / "real_dir" / "self").symlink_to(tmp_path / "real_dir")
+    with open("real_dir/x.schema.toml", "w") as f:
+        f.write('extends = "self/x.schema.toml"\n\n[FOO]\ndescription = "x"\n')
+
+    with pytest.raises(SchemaParseError, match="circular"):
+        config_manager.resolve_field_provenance("real_dir/x.schema.toml")
+
+
 def test_load_schema_raises_when_extends_target_is_missing(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     with open("env.schema.toml", "w") as f:
