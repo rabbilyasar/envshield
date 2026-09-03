@@ -34,6 +34,20 @@ class KubernetesParser(BaseParser):
     CronJob/Pod, possibly several in one multi-document YAML file -- for
     one container's declared environment.
 
+    'initContainers' entries are treated as additional, explicitly-
+    selectable containers via '--container' -- exactly like a main
+    container, since they're just as capable of declaring their own
+    required 'env'/'envFrom' (a migration/setup job needing its own
+    config). They are never auto-selected by default, though: default
+    selection (no '--container' given) considers only the pod's main
+    'containers' list, unchanged from before this existed -- a schema is
+    conventionally about the main application container's configuration,
+    not a one-shot init job's, and a manifest with exactly one main
+    container plus one or more init containers must keep auto-selecting
+    that main container with no flag required, exactly as it always has
+    (BL-011 #4). To check an init container's own variables, pass
+    '--container <init-container-name>' explicitly.
+
     A value sourced from 'envFrom' (a ConfigMap/Secret reference) is
     resolved only if that ConfigMap/Secret is itself defined in the same
     file, keyed by the name the container actually receives -- its own
@@ -93,7 +107,8 @@ class KubernetesParser(BaseParser):
 
         config_maps: dict[str, dict[str, str]] = {}
         secrets: dict[str, set[str]] = {}
-        containers: list[dict[str, Any]] = []
+        main_containers: list[dict[str, Any]] = []
+        init_containers: list[dict[str, Any]] = []
 
         for doc in docs:
             kind = doc.get("kind")
@@ -109,15 +124,21 @@ class KubernetesParser(BaseParser):
 
             pod_spec = _extract_pod_spec(doc)
             if pod_spec:
-                containers.extend(pod_spec.get("containers") or [])
+                main_containers.extend(pod_spec.get("containers") or [])
+                init_containers.extend(pod_spec.get("initContainers") or [])
 
-        if not containers:
+        if not main_containers:
             return {} if get_values else set()
 
+        # Default (no --container) selection considers only main
+        # containers -- unchanged from before initContainers were
+        # selectable at all, so a manifest with one main container plus
+        # any number of init containers keeps auto-selecting that main
+        # container with no flag required (BL-011 #4).
         container_name = self.container
         if container_name is None:
-            names_in_order = [c.get("name") for c in containers]
-            if len(containers) == 1:
+            names_in_order = [c.get("name") for c in main_containers]
+            if len(main_containers) == 1:
                 container_name = names_in_order[0]
             elif self.prefer and self.prefer in names_in_order:
                 container_name = self.prefer
@@ -127,9 +148,15 @@ class KubernetesParser(BaseParser):
                     f"This manifest declares multiple containers ({names}) -- pass --container to pick one."
                 )
 
-        target = next((c for c in containers if c.get("name") == container_name), None)
+        # An explicit --container may name either a main or an init
+        # container -- both are real, independently-configurable
+        # containers in the same pod. Main containers are searched first,
+        # matching the name any single-main-container manifest already
+        # auto-selected above.
+        all_containers = main_containers + init_containers
+        target = next((c for c in all_containers if c.get("name") == container_name), None)
         if target is None:
-            names = ", ".join(c.get("name", "?") for c in containers)
+            names = ", ".join(c.get("name", "?") for c in all_containers)
             raise EnvShieldException(
                 f"Container '{container_name}' not found in this manifest. Available: {names}"
             )

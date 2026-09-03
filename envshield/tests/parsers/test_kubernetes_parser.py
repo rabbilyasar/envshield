@@ -758,6 +758,281 @@ def test_parser_uses_prefer_hint_to_resolve_ambiguity(tmp_path):
     assert variables == {"FOO": "sidecar-value"}
 
 
+class TestInitContainers:
+    """
+    Regression coverage for BL-011 #4: initContainers were never inspected
+    at all -- not even selectable via --container -- so a variable set
+    only on an init container (a migration/setup job's own required
+    config) was invisible no matter what. initContainers are now treated
+    as additional, explicitly-selectable containers, exactly like a main
+    container, but are never auto-selected by default -- a manifest with
+    one main container plus any number of init containers must keep
+    auto-selecting that main container with no flag required, unchanged
+    from before this existed.
+    """
+
+    def _manifest(self, extra_containers: str = "") -> str:
+        return (
+            "apiVersion: apps/v1\n"
+            "kind: Deployment\n"
+            "metadata:\n  name: app\n"
+            "spec:\n"
+            "  template:\n"
+            "    spec:\n"
+            "      initContainers:\n"
+            "        - name: init\n"
+            "          env:\n"
+            "            - name: MIGRATION_FLAG\n"
+            "              value: \"true\"\n"
+            "      containers:\n"
+            "        - name: app\n"
+            "          env:\n"
+            "            - name: LOG_LEVEL\n"
+            "              value: info\n" + extra_containers
+        )
+
+    def test_variable_only_in_an_init_container_is_invisible_by_default(
+        self, tmp_path
+    ):
+        """
+        Unchanged behavior: a schema check with no --container still
+        validates against the main container, exactly as before
+        initContainers were selectable at all.
+        """
+        f = tmp_path / "deployment.yaml"
+        f.write_text(self._manifest())
+
+        variables = KubernetesParser().get_vars(str(f), get_values=True)
+
+        assert variables == {"LOG_LEVEL": "info"}
+        assert "MIGRATION_FLAG" not in variables
+
+    def test_variable_only_in_an_init_container_is_visible_when_explicitly_selected(
+        self, tmp_path
+    ):
+        f = tmp_path / "deployment.yaml"
+        f.write_text(self._manifest())
+
+        variables = KubernetesParser(container="init").get_vars(
+            str(f), get_values=True
+        )
+
+        assert variables == {"MIGRATION_FLAG": "true"}
+
+    def test_a_variable_present_in_both_main_and_init_container_is_resolved_independently(
+        self, tmp_path
+    ):
+        f = tmp_path / "deployment.yaml"
+        f.write_text(
+            "apiVersion: apps/v1\n"
+            "kind: Deployment\n"
+            "metadata:\n  name: app\n"
+            "spec:\n"
+            "  template:\n"
+            "    spec:\n"
+            "      initContainers:\n"
+            "        - name: init\n"
+            "          env:\n"
+            "            - name: SHARED_VAR\n"
+            "              value: init-value\n"
+            "      containers:\n"
+            "        - name: app\n"
+            "          env:\n"
+            "            - name: SHARED_VAR\n"
+            "              value: main-value\n"
+        )
+
+        assert KubernetesParser().get_vars(str(f), get_values=True) == {
+            "SHARED_VAR": "main-value"
+        }
+        assert KubernetesParser(container="init").get_vars(str(f), get_values=True) == {
+            "SHARED_VAR": "init-value"
+        }
+
+    def test_multiple_init_containers_are_each_independently_selectable(
+        self, tmp_path
+    ):
+        f = tmp_path / "deployment.yaml"
+        f.write_text(
+            "apiVersion: apps/v1\n"
+            "kind: Deployment\n"
+            "metadata:\n  name: app\n"
+            "spec:\n"
+            "  template:\n"
+            "    spec:\n"
+            "      initContainers:\n"
+            "        - name: init-a\n"
+            "          env:\n"
+            "            - name: FLAG_A\n"
+            "              value: a\n"
+            "        - name: init-b\n"
+            "          env:\n"
+            "            - name: FLAG_B\n"
+            "              value: b\n"
+            "      containers:\n"
+            "        - name: app\n"
+            "          env:\n"
+            "            - name: LOG_LEVEL\n"
+            "              value: info\n"
+        )
+
+        assert KubernetesParser(container="init-a").get_vars(str(f), get_values=True) == {
+            "FLAG_A": "a"
+        }
+        assert KubernetesParser(container="init-b").get_vars(str(f), get_values=True) == {
+            "FLAG_B": "b"
+        }
+        # Default selection is still unaffected by however many init containers exist.
+        assert KubernetesParser().get_vars(str(f), get_values=True) == {
+            "LOG_LEVEL": "info"
+        }
+
+    def test_single_main_container_plus_init_containers_still_auto_selects_with_no_flag(
+        self, tmp_path
+    ):
+        """
+        The critical non-regression: this exact shape (one main container,
+        one or more init containers) is an extremely common real manifest
+        -- it must not newly become "ambiguous, pass --container."
+        """
+        f = tmp_path / "deployment.yaml"
+        f.write_text(self._manifest())
+
+        variables = KubernetesParser().get_vars(str(f), get_values=True)
+
+        assert variables == {"LOG_LEVEL": "info"}
+
+    def test_multiple_main_containers_plus_an_init_container_ambiguity_lists_only_main_containers(
+        self, tmp_path
+    ):
+        """
+        Ambiguity resolution for the default (no --container) case is
+        unaffected by init containers -- they were never part of it and
+        still aren't; the error must not mislead by listing a container
+        that was never a candidate for auto-selection.
+        """
+        f = tmp_path / "deployment.yaml"
+        f.write_text(
+            self._manifest(
+                "        - name: sidecar\n"
+                "          env:\n"
+                "            - name: SIDECAR_VAR\n"
+                "              value: x\n"
+            )
+        )
+
+        with pytest.raises(EnvShieldException, match="multiple containers") as exc_info:
+            KubernetesParser().get_vars(str(f))
+
+        assert "init" not in str(exc_info.value)
+
+    def test_not_found_error_lists_both_main_and_init_containers(self, tmp_path):
+        """
+        Since an init container is now a legitimate explicit --container
+        target, the error naming what's actually available must include
+        it -- otherwise the message would be misleadingly incomplete.
+        """
+        f = tmp_path / "deployment.yaml"
+        f.write_text(self._manifest())
+
+        with pytest.raises(EnvShieldException, match="Available: app, init"):
+            KubernetesParser(container="typo").get_vars(str(f))
+
+    def test_prefer_hint_never_resolves_to_an_init_container(self, tmp_path):
+        """
+        --service's soft-match hint is scoped to main containers only --
+        an init container coincidentally sharing a service's name must
+        never be silently auto-selected by it.
+        """
+        f = tmp_path / "deployment.yaml"
+        f.write_text(
+            "apiVersion: apps/v1\n"
+            "kind: Deployment\n"
+            "metadata:\n  name: app\n"
+            "spec:\n"
+            "  template:\n"
+            "    spec:\n"
+            "      initContainers:\n"
+            "        - name: web\n"
+            "          env:\n"
+            "            - name: INIT_ONLY_VAR\n"
+            "              value: should-not-be-selected\n"
+            "      containers:\n"
+            "        - name: api\n"
+            "          env:\n"
+            "            - name: MAIN_VAR\n"
+            "              value: main\n"
+            "        - name: web\n"
+            "          env:\n"
+            "            - name: LOG_LEVEL\n"
+            "              value: info\n"
+        )
+
+        variables = KubernetesParser(prefer="web").get_vars(str(f), get_values=True)
+
+        assert variables == {"LOG_LEVEL": "info"}
+
+    def test_no_main_containers_still_returns_empty_regardless_of_init_containers(
+        self, tmp_path
+    ):
+        """
+        Pre-existing behavior for a manifest with no main containers
+        (BL-011 #5's own territory, untouched here) must not change just
+        because init containers now participate in explicit selection.
+        """
+        f = tmp_path / "deployment.yaml"
+        f.write_text(
+            "apiVersion: apps/v1\n"
+            "kind: Deployment\n"
+            "metadata:\n  name: app\n"
+            "spec:\n"
+            "  template:\n"
+            "    spec:\n"
+            "      initContainers:\n"
+            "        - name: init\n"
+            "          env:\n"
+            "            - name: MIGRATION_FLAG\n"
+            "              value: \"true\"\n"
+            "      containers: []\n"
+        )
+
+        variables = KubernetesParser().get_vars(str(f), get_values=True)
+
+        assert variables == {}
+
+    def test_env_from_on_an_init_container_still_works(self, tmp_path):
+        """envFrom/env resolution logic itself is unchanged -- it operates
+        identically on whichever container is selected."""
+        f = tmp_path / "deployment.yaml"
+        f.write_text(
+            "apiVersion: v1\n"
+            "kind: ConfigMap\n"
+            "metadata:\n  name: app-config\n"
+            "data:\n  MIGRATION_TARGET: v2\n"
+            "---\n"
+            "apiVersion: apps/v1\n"
+            "kind: Deployment\n"
+            "metadata:\n  name: app\n"
+            "spec:\n"
+            "  template:\n"
+            "    spec:\n"
+            "      initContainers:\n"
+            "        - name: init\n"
+            "          envFrom:\n"
+            "            - configMapRef:\n"
+            "                name: app-config\n"
+            "      containers:\n"
+            "        - name: app\n"
+            "          env:\n"
+            "            - name: LOG_LEVEL\n"
+            "              value: info\n"
+        )
+
+        variables = KubernetesParser(container="init").get_vars(str(f), get_values=True)
+
+        assert variables == {"MIGRATION_TARGET": "v2"}
+
+
 def test_parser_handles_bare_pod_manifest(tmp_path):
     f = tmp_path / "pod.yaml"
     f.write_text(
