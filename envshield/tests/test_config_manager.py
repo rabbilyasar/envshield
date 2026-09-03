@@ -541,7 +541,7 @@ class TestLoadSchemaRejectsSecretDefaults:
         """Sanity check: a secret field with no defaultValue at all -- the ordinary, correct case -- still loads."""
         monkeypatch.chdir(tmp_path)
         with open("env.schema.toml", "w") as f:
-            f.write('[API_TOKEN]\nsecret=true\n')
+            f.write("[API_TOKEN]\nsecret=true\n")
         with open("envshield.yml", "w") as f:
             f.write("services:\n  api:\n    schema: env.schema.toml\n")
 

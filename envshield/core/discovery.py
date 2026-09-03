@@ -121,7 +121,9 @@ def _collect_os_bindings(tree: ast.Module) -> _OsBindings:
     """
     bindings = _OsBindings()
     for node in tree.body:
-        if not (isinstance(node, ast.ImportFrom) and node.module == "os" and node.level == 0):
+        if not (
+            isinstance(node, ast.ImportFrom) and node.module == "os" and node.level == 0
+        ):
             continue
         for alias in node.names:
             if alias.asname is not None:
@@ -208,7 +210,9 @@ def _collect_flask_bindings(tree: ast.Module) -> _FlaskBindings:
     names = set()
     for node in ast.walk(tree):
         if not (
-            isinstance(node, ast.ImportFrom) and node.module == "flask" and node.level == 0
+            isinstance(node, ast.ImportFrom)
+            and node.module == "flask"
+            and node.level == 0
         ):
             continue
         for alias in node.names:
@@ -285,7 +289,10 @@ class _UsageVisitor(ast.NodeVisitor):
                 # certain as a direct os.environ/os.getenv read, hence
                 # "medium" rather than "high" (see DiscoveredVariableUsage).
                 self._record(
-                    key, node.lineno, "flask.current_app.config.get", confidence="medium"
+                    key,
+                    node.lineno,
+                    "flask.current_app.config.get",
+                    confidence="medium",
                 )
 
         self.generic_visit(node)
@@ -339,7 +346,9 @@ def discover_python_usages(
         return []
 
     bindings = _collect_os_bindings(tree)
-    flask_bindings = _collect_flask_bindings(tree) if "current_app" in content else _FlaskBindings()
+    flask_bindings = (
+        _collect_flask_bindings(tree) if "current_app" in content else _FlaskBindings()
+    )
     visitor = _UsageVisitor(file_path, bindings, flask_bindings)
     try:
         visitor.visit(tree)
@@ -387,7 +396,10 @@ def _is_recognized_env_call(node: ast.expr, bindings: _OsBindings) -> bool:
         isinstance(node, ast.Call)
         and bool(node.args)
         and _literal_str(node.args[0]) is not None
-        and (_is_os_environ_get(node.func, bindings) or _is_os_getenv(node.func, bindings))
+        and (
+            _is_os_environ_get(node.func, bindings)
+            or _is_os_getenv(node.func, bindings)
+        )
     )
 
 
@@ -409,7 +421,8 @@ def _contains_recognized_env_read(node: ast.expr, bindings: _OsBindings) -> bool
     alias/attribute-name convention below.
     """
     return any(
-        _is_recognized_env_call(sub, bindings) or _is_recognized_env_subscript(sub, bindings)
+        _is_recognized_env_call(sub, bindings)
+        or _is_recognized_env_subscript(sub, bindings)
         for sub in ast.walk(node)
     )
 

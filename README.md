@@ -41,8 +41,10 @@ env.schema.toml
 ## Quick Start
 
 ```bash
-pip install envshield
+pipx install envshield
 ```
+
+Prefer an existing Python/pip workflow instead? `pip install envshield` works the same way, as an alternative.
 
 In an existing project:
 
@@ -240,7 +242,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
-      - run: pip install envshield
+      - run: pipx install envshield
       - run: |
           BASE=$(git merge-base "origin/${{ github.base_ref }}" HEAD)
           envshield schema diff "$BASE" HEAD
@@ -370,8 +372,8 @@ A supporting check alongside the contract, not the product itself. `secret = tru
 
 EnvShield is built around the patterns real projects actually use. A few narrower cases aren't handled yet — none of them let a secret leak or let a genuinely missing required variable pass as clean:
 
-- **Docker Compose:** `${VAR}` and `${VAR:-default}` are supported. The no-colon `${VAR-default}` form, the `${VAR:?}`/`${VAR:+}` forms, and embedded/multiple interpolation references in one value aren't evaluated yet.
-- **Kubernetes:** `secretKeyRef`/`configMapKeyRef` are matched by the container's environment-variable name (`env[].name`), not the referenced Secret/ConfigMap's internal key — name your schema variable after the env var, not the key. `envFrom.prefix` isn't applied yet.
+- **Docker Compose:** `${VAR}`, `${VAR:-default}`, and the no-colon `${VAR-default}` form are all supported. The `${VAR:?}`/`${VAR:+}` forms and embedded/multiple interpolation references in one value aren't evaluated yet.
+- **Kubernetes:** `env[].valueFrom.secretKeyRef`/`configMapKeyRef` are matched by the container's environment-variable name (`env[].name`) — name your schema variable after the env var, not the key — and, when the referenced Secret/ConfigMap is defined in the same manifest, the referenced key is validated to actually exist there. `envFrom.prefix` is applied. `initContainers` are selectable via `--container` but never auto-selected by default.
 - **Source discovery:** Python is AST-based; JavaScript/TypeScript is pattern-based. No other language is discovered yet.
 - **.env:** multiline quoted values aren't supported.
 

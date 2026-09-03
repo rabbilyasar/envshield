@@ -2,6 +2,105 @@
 
 All notable changes to this project are documented in this file.
 
+## [4.7.0] - 2026-09-03
+
+A feature and correctness release. Adds multi-source schema completeness for
+services whose configuration is genuinely split across more than one
+registered source, shared-library visibility for source discovery, and
+Flask configuration-object recognition — alongside a security fix and a set
+of Docker Compose / Kubernetes deployment-manifest correctness fixes found
+through real-world adoption dogfooding.
+
+### Security
+- **A malformed Docker Compose file's YAML parse-error message could echo a
+  fragment of the offending line's real content**, including a secret-shaped
+  value, into the raised error message — surfaced wherever that error reaches
+  the user (`check`, `doctor`, `explain`, `--json`). The message is now built
+  only from the parser's structural failure description and line/column
+  numbers, never from the raw exception text.
+- **A Docker Compose `env_file:` reference could read a file outside the
+  project boundary** (`env_file: ../../outside.env`, or a symlink resolving
+  outside the project) with no containment check. Now validated the same way
+  every other path in `envshield.yml` already is, symlink-safe.
+- **A self-referencing `extends` chain built from a symlink was not detected
+  as a cycle** — the existing cycle check compared paths lexically, which a
+  symlink can satisfy while its real target still points back at an ancestor.
+  Now resolved via `os.path.realpath`, so the cycle is caught immediately
+  with a clear error instead of eventually failing on the operating system's
+  own symlink-depth limit.
+
+### Added
+- **`completeness: union`** — an opt-in, per-service `envshield.yml` setting
+  for a service whose real configuration is split across more than one
+  registered source (e.g. some variables set in a local config file, others
+  in a deployment manifest). `check`/`doctor` validate the *combined*
+  presence of all registered sources instead of expecting each one to be
+  independently self-sufficient. See
+  [Multiple sources per service](README.md#multiple-sources-per-service-completeness-union).
+- **`additional_source_roots`** — an opt-in, per-service `envshield.yml`
+  setting that widens `undeclared`/`explain`'s discovery scope to cover
+  extra directories outside a service's own — for a shared internal library
+  imported by several services, whose environment reads were previously
+  invisible to every one of them. See
+  [Discovering reads in a shared library](README.md#discovering-reads-in-a-shared-library-additional_source_roots).
+- **`explain` recognizes Flask's `current_app.config[...]`/`.get(...)`
+  reads** (including the common `from flask import current_app as <alias>`
+  import form), reported at medium confidence. `explain`-only by design —
+  never affects `undeclared`'s or `scan`'s pass/fail signal.
+
+### Fixed
+- **Docker Compose's no-colon `${VAR-default}` interpolation form was not
+  recognized at all** — only `${VAR:-default}` (with a colon) resolved
+  correctly; the no-colon form fell through to the literal, un-interpolated
+  template text, which could then fail schema validation on syntactically
+  valid Compose.
+- **Kubernetes `envFrom.prefix` was ignored** — a key pulled from a same-file
+  ConfigMap/Secret was reported under its own unprefixed name (which the
+  container never actually receives) instead of the prefixed name it's
+  actually injected as.
+- **Kubernetes `secretKeyRef`/`configMapKeyRef` were never checked against
+  the referenced Secret/ConfigMap's actual keys** when that object is
+  defined in the same manifest — a broken key reference (which fails the
+  pod at apply-time in real Kubernetes) was reported identically to a
+  genuinely-satisfied one. Now cross-checked when the referenced object is
+  local to the manifest; a reference to an object outside the manifest is
+  unchanged, since its keys aren't knowable.
+- **Kubernetes `initContainers` were invisible entirely** — not inspected,
+  and not even selectable via `--container`. An init container's own
+  required configuration can now be checked by explicitly targeting it with
+  `--container <name>`; default (no-flag) selection is unaffected and still
+  resolves to the pod's main container(s) exactly as before.
+- **`service add` silently dropped previously-set fields** (`description`,
+  `local_file`, `example_file`, `config_source`) when called again for an
+  already-registered service with a different subset of flags. Now merges
+  into the existing entry, matching `add_manifest`'s already-additive
+  behavior.
+- **`explain` on an undeclared variable failed with a bare error** instead of
+  showing what it could — source-code usages and manifest references are
+  now reported for an undeclared variable the same way they are for a
+  declared one, with the report explicitly noting it isn't in the schema
+  yet.
+- **Secret-keyword classification missed the `_PASS` abbreviation**
+  (`DB_PASS`, `REDIS_PASS`, and similar) — `import`/`service discover` now
+  classify these as secrets automatically, matching the existing
+  `_PASSWORD` recognition.
+- **Python source discovery missed `from os import getenv` / `environ` plus
+  a bare `getenv(...)`/`environ[...]` call** — only the qualified
+  `os.getenv(...)`/`os.environ[...]` forms were recognized. Both import
+  styles are now recognized identically by `scan`, `undeclared`, `explain`,
+  and `import`.
+
+### Performance
+- **`scan`'s secret-pattern matching now compiles its regular expressions
+  once**, at import time, instead of on every line of every scanned file —
+  roughly a 22% reduction in repo-wide `scan` time on a large monorepo.
+  Scan results are unchanged; this is purely an internal hot-path fix.
+
+### Packaging
+- **The built wheel no longer includes the `envshield.tests` package.**
+  Purely a size/hygiene fix — no secret or sensitive content was ever
+  present in the excluded test files.
+
 ## [4.6.2] - 2026-08-30
 
 A correctness patch. Fixes a silent false-clean in `schema sync --check` —

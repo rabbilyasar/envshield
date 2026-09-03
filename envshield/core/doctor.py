@@ -234,7 +234,11 @@ def _check_union_completeness(service_name: str):
 
     result = schema_manager.evaluate_union_completeness(schema, sources)
     if errors:
-        detail = result.summary() if not result.is_clean else "the sources that did load are otherwise complete"
+        detail = (
+            result.summary()
+            if not result.is_clean
+            else "the sources that did load are otherwise complete"
+        )
         return (
             False,
             f"Could not fully evaluate -- {'; '.join(errors)} ({detail})",

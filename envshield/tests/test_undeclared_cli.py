@@ -502,9 +502,7 @@ class TestAdditionalSourceRootsEndToEnd:
                 "import os\nx = os.environ.get('SHARED_FLAG')\n",
             )
 
-            result = runner.invoke(
-                app, ["undeclared", "--service", "api", "--json"]
-            )
+            result = runner.invoke(app, ["undeclared", "--service", "api", "--json"])
 
             assert result.exit_code == 1
             payload = json.loads(result.stdout)

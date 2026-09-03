@@ -185,9 +185,7 @@ class TestNoArgumentDiffDirection:
                 }
 
             assert categories(implicit) == categories(explicit)
-            assert (
-                implicit["has_breaking_changes"] == explicit["has_breaking_changes"]
-            )
+            assert implicit["has_breaking_changes"] == explicit["has_breaking_changes"]
 
     def test_two_explicit_revisions_are_compared(self, tmp_path):
         with runner.isolated_filesystem(temp_dir=tmp_path):

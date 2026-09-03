@@ -547,7 +547,9 @@ class TestCheckExampleFileSyncValidatesPythonLocalFiles:
         with open("alpha/env_config.local.py", "w") as f:
             f.write(local_file_content)
 
-    def test_passes_when_every_required_variable_is_present(self, tmp_path, monkeypatch):
+    def test_passes_when_every_required_variable_is_present(
+        self, tmp_path, monkeypatch
+    ):
         self._write_project(
             tmp_path,
             monkeypatch,

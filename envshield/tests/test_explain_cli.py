@@ -400,17 +400,13 @@ class TestAdditionalSourceRootsEndToEnd:
                 "    schema: services/api/env.schema.toml\n"
                 "    additional_source_roots:\n      - shared/lib\n",
             )
-            _write(
-                "services/api/env.schema.toml", '[SHARED_FLAG]\ndescription = "x"\n'
-            )
+            _write("services/api/env.schema.toml", '[SHARED_FLAG]\ndescription = "x"\n')
             _write(
                 "shared/lib/util.py",
                 "import os\nx = os.environ.get('SHARED_FLAG')\n",
             )
 
-            result = runner.invoke(
-                app, ["explain", "SHARED_FLAG", "--service", "api"]
-            )
+            result = runner.invoke(app, ["explain", "SHARED_FLAG", "--service", "api"])
 
             assert result.exit_code == 0
             assert "shared/lib/util.py" in result.stdout

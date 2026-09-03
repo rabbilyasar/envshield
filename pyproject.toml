@@ -48,6 +48,7 @@ envshield = "envshield.cli:app"
 
 [tool.setuptools.packages.find]
 include = ["envshield*"]
+exclude = ["envshield.tests*"]
 
 [project.optional-dependencies]
 dev = [

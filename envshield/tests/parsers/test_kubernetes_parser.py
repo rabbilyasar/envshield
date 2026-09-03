@@ -560,9 +560,7 @@ class TestEnvFromPrefix:
             "          envFrom:\n" + env_from_entries
         )
 
-    def test_config_map_with_prefix_is_reported_under_the_prefixed_name(
-        self, tmp_path
-    ):
+    def test_config_map_with_prefix_is_reported_under_the_prefixed_name(self, tmp_path):
         f = tmp_path / "deployment.yaml"
         f.write_text(
             self._manifest(
@@ -614,7 +612,9 @@ class TestEnvFromPrefix:
     def test_no_prefix_key_is_unchanged_from_existing_behavior(self, tmp_path):
         f = tmp_path / "deployment.yaml"
         f.write_text(
-            self._manifest("            - configMapRef:\n                name: app-config\n")
+            self._manifest(
+                "            - configMapRef:\n                name: app-config\n"
+            )
         )
 
         variables = KubernetesParser().get_vars(str(f), get_values=True)
@@ -629,7 +629,7 @@ class TestEnvFromPrefix:
             self._manifest(
                 "            - configMapRef:\n"
                 "                name: app-config\n"
-                "              prefix: \"\"\n"
+                '              prefix: ""\n'
             )
         )
 
@@ -783,7 +783,7 @@ class TestInitContainers:
             "        - name: init\n"
             "          env:\n"
             "            - name: MIGRATION_FLAG\n"
-            "              value: \"true\"\n"
+            '              value: "true"\n'
             "      containers:\n"
             "        - name: app\n"
             "          env:\n"
@@ -791,9 +791,7 @@ class TestInitContainers:
             "              value: info\n" + extra_containers
         )
 
-    def test_variable_only_in_an_init_container_is_invisible_by_default(
-        self, tmp_path
-    ):
+    def test_variable_only_in_an_init_container_is_invisible_by_default(self, tmp_path):
         """
         Unchanged behavior: a schema check with no --container still
         validates against the main container, exactly as before
@@ -813,9 +811,7 @@ class TestInitContainers:
         f = tmp_path / "deployment.yaml"
         f.write_text(self._manifest())
 
-        variables = KubernetesParser(container="init").get_vars(
-            str(f), get_values=True
-        )
+        variables = KubernetesParser(container="init").get_vars(str(f), get_values=True)
 
         assert variables == {"MIGRATION_FLAG": "true"}
 
@@ -849,9 +845,7 @@ class TestInitContainers:
             "SHARED_VAR": "init-value"
         }
 
-    def test_multiple_init_containers_are_each_independently_selectable(
-        self, tmp_path
-    ):
+    def test_multiple_init_containers_are_each_independently_selectable(self, tmp_path):
         f = tmp_path / "deployment.yaml"
         f.write_text(
             "apiVersion: apps/v1\n"
@@ -876,12 +870,12 @@ class TestInitContainers:
             "              value: info\n"
         )
 
-        assert KubernetesParser(container="init-a").get_vars(str(f), get_values=True) == {
-            "FLAG_A": "a"
-        }
-        assert KubernetesParser(container="init-b").get_vars(str(f), get_values=True) == {
-            "FLAG_B": "b"
-        }
+        assert KubernetesParser(container="init-a").get_vars(
+            str(f), get_values=True
+        ) == {"FLAG_A": "a"}
+        assert KubernetesParser(container="init-b").get_vars(
+            str(f), get_values=True
+        ) == {"FLAG_B": "b"}
         # Default selection is still unaffected by however many init containers exist.
         assert KubernetesParser().get_vars(str(f), get_values=True) == {
             "LOG_LEVEL": "info"
@@ -992,7 +986,7 @@ class TestInitContainers:
             "        - name: init\n"
             "          env:\n"
             "            - name: MIGRATION_FLAG\n"
-            "              value: \"true\"\n"
+            '              value: "true"\n'
             "      containers: []\n"
         )
 

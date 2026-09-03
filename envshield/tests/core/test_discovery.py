@@ -182,7 +182,9 @@ class TestBareOsImportRecognition:
         """A file that imports both ways ('import os' AND 'from os import
         getenv') must still recognize the qualified os.getenv(...) form
         too -- the two recognition paths are additive, not exclusive."""
-        content = "import os\nfrom os import getenv\na = os.getenv('A')\nb = getenv('B')\n"
+        content = (
+            "import os\nfrom os import getenv\na = os.getenv('A')\nb = getenv('B')\n"
+        )
         result = _usages(content)
         assert {u.variable for u in result} == {"A", "B"}
 
@@ -247,7 +249,9 @@ class TestFlaskConfigAliasedImport:
         assert usage.access_type == "flask.current_app.config.get"
 
     def test_a_different_alias_name_is_still_recognized(self):
-        content = "from flask import current_app as flask_app\nx = flask_app.config['X']\n"
+        content = (
+            "from flask import current_app as flask_app\nx = flask_app.config['X']\n"
+        )
         usage = _one(content)
         assert usage.variable == "X"
 
@@ -348,7 +352,9 @@ class TestFlaskConfigAliasingOutOfScope:
         almost no real reads in either evidence codebase. A locally
         constructed app with no current_app import is not recognized.
         """
-        content = "from flask import Flask\napp = Flask(__name__)\nx = app.config['X']\n"
+        content = (
+            "from flask import Flask\napp = Flask(__name__)\nx = app.config['X']\n"
+        )
         assert _usages(content) == []
 
 

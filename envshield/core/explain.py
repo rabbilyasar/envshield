@@ -286,7 +286,9 @@ class UndeclaredVariableReport:
         }
 
 
-def build_undeclared_report(variable: str, service_name: str) -> UndeclaredVariableReport:
+def build_undeclared_report(
+    variable: str, service_name: str
+) -> UndeclaredVariableReport:
     """
     The undeclared-variable counterpart to build_report -- called by the
     CLI specifically when build_report has already raised
@@ -296,9 +298,7 @@ def build_undeclared_report(variable: str, service_name: str) -> UndeclaredVaria
     matching build_report's own contract.
     """
     service_dir = config_manager.get_service_dir(service_name)
-    additional_roots = config_manager.get_service_additional_source_roots(
-        service_name
-    )
+    additional_roots = config_manager.get_service_additional_source_roots(service_name)
     manifests = config_manager.get_deployment_manifests(service_name)
     return UndeclaredVariableReport(
         variable=variable,
@@ -364,9 +364,7 @@ def build_report(variable: str, service_name: str) -> ExplainReport:
         provenance["inherited"] = contributing != schema_path
 
     service_dir = config_manager.get_service_dir(service_name)
-    additional_roots = config_manager.get_service_additional_source_roots(
-        service_name
-    )
+    additional_roots = config_manager.get_service_additional_source_roots(service_name)
     manifests = config_manager.get_deployment_manifests(service_name)
 
     return ExplainReport(

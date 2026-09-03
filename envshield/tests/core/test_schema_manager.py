@@ -354,7 +354,11 @@ def test_sync_schema_reports_when_python_file_already_declares_everything(
 
 
 def _write_generic_union_project(
-    tmp_path, monkeypatch, schema_toml: str, python_local_content: str, compose_content: str
+    tmp_path,
+    monkeypatch,
+    schema_toml: str,
+    python_local_content: str,
+    compose_content: str,
 ):
     """
     Shared setup for BL-030 union tests: one generic service ('app') with a
@@ -398,7 +402,7 @@ class TestUnionSync:
             ),
             python_local_content='DB_HOST = "localhost"\n',
             compose_content=(
-                "services:\n  app:\n    image: x\n    environment:\n      FEATURE_MODE: \"on\"\n"
+                'services:\n  app:\n    image: x\n    environment:\n      FEATURE_MODE: "on"\n'
             ),
         )
 
@@ -446,7 +450,7 @@ class TestUnionSync:
             f.write('DB_HOST = "localhost"\n')
         with open("docker-compose.yml", "w") as f:
             f.write(
-                "services:\n  app:\n    image: x\n    environment:\n      FEATURE_MODE: \"on\"\n"
+                'services:\n  app:\n    image: x\n    environment:\n      FEATURE_MODE: "on"\n'
             )
 
         schema_manager.sync_schema(service_name="app")
@@ -468,7 +472,7 @@ class TestLoadUnionSources:
             schema_toml='[DB_HOST]\ndescription="x"\n\n[FEATURE_MODE]\ndescription="x"\n',
             python_local_content='DB_HOST = "localhost"\n',
             compose_content=(
-                "services:\n  app:\n    image: x\n    environment:\n      FEATURE_MODE: \"on\"\n"
+                'services:\n  app:\n    image: x\n    environment:\n      FEATURE_MODE: "on"\n'
             ),
         )
 
@@ -515,7 +519,7 @@ class TestUnionSourceHealthNeverHiddenByCompleteness:
             schema_toml='[FEATURE_MODE]\ndescription="Compose-owned, fully covered"\n',
             python_local_content="this is not valid python (((\n",
             compose_content=(
-                "services:\n  app:\n    image: x\n    environment:\n      FEATURE_MODE: \"on\"\n"
+                'services:\n  app:\n    image: x\n    environment:\n      FEATURE_MODE: "on"\n'
             ),
         )
         schema = config_manager.load_schema(service_name="app")
@@ -698,9 +702,7 @@ class TestEvaluateUnionCompleteness:
     def test_unresolved_source_reference_reports_unresolved_not_missing(self):
         schema = {"SECRET_X": {"description": "x", "secret": True}}
         sources = [
-            schema_manager.UnionSource(
-                "source-a", {}, has_unresolved_source=True
-            )
+            schema_manager.UnionSource("source-a", {}, has_unresolved_source=True)
         ]
 
         result = schema_manager.evaluate_union_completeness(schema, sources)
@@ -795,16 +797,16 @@ class TestUnionRequiredIf:
         assert result.is_clean is True
         assert result.ambiguous_requiredif == {}
 
-    def test_trigger_with_conflicting_values_across_sources_is_ambiguous_not_guessed(self):
+    def test_trigger_with_conflicting_values_across_sources_is_ambiguous_not_guessed(
+        self,
+    ):
         """
         Explicit product decision: never pick a winner by registration
         order or any other implicit rule -- an unresolvable conflict must
         fail loudly, with both conflicting values and their sources named.
         """
         sources = [
-            schema_manager.UnionSource(
-                "compose", {"PAYMENTS_ENABLED": "true"}
-            ),
+            schema_manager.UnionSource("compose", {"PAYMENTS_ENABLED": "true"}),
             schema_manager.UnionSource(
                 "python", {"PAYMENTS_ENABLED": "false", "STRIPE_KEY": "sk_test"}
             ),

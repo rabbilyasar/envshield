@@ -267,12 +267,8 @@ class TestAdditionalSourceRoots:
             "    additional_source_roots:\n      - shared/lib\n      - vendor/other\n",
         )
         monkeypatch.chdir(tmp_path)
-        _write(
-            tmp_path, "shared/lib/util.py", "import os\nx = os.environ.get('A')\n"
-        )
-        _write(
-            tmp_path, "vendor/other/mod.py", "import os\nx = os.environ.get('B')\n"
-        )
+        _write(tmp_path, "shared/lib/util.py", "import os\nx = os.environ.get('A')\n")
+        _write(tmp_path, "vendor/other/mod.py", "import os\nx = os.environ.get('B')\n")
 
         usages_a, usages_b = dependency_snapshot.discover_usages_for_service("api")
 

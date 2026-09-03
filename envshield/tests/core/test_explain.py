@@ -99,9 +99,7 @@ class TestBuildUndeclaredReport:
     case that exception signals.
     """
 
-    def test_declared_variable_with_a_source_read_is_named(
-        self, tmp_path, monkeypatch
-    ):
+    def test_declared_variable_with_a_source_read_is_named(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         _write_root_service()
         with open(SCHEMA_FILE_NAME, "w") as f:
@@ -238,9 +236,7 @@ class TestAdditionalSourceRoots:
 
     def test_one_additional_root_is_discovered(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        self._service_with_roots(
-            "    additional_source_roots:\n      - shared/lib\n"
-        )
+        self._service_with_roots("    additional_source_roots:\n      - shared/lib\n")
         import os as _os
 
         _os.makedirs("shared/lib", exist_ok=True)
@@ -353,9 +349,7 @@ class TestAdditionalSourceRoots:
         outside the project entirely.
         """
         monkeypatch.chdir(tmp_path)
-        self._service_with_roots(
-            "    additional_source_roots:\n      - shared/lib\n"
-        )
+        self._service_with_roots("    additional_source_roots:\n      - shared/lib\n")
         import os as _os
 
         _os.makedirs("real_shared_lib", exist_ok=True)
@@ -386,8 +380,7 @@ class TestFlaskConfidenceIsPreservedByExplain:
             f.write('[DATABASE_URL]\ndescription = "x"\n')
         with open("config.py", "w") as f:
             f.write(
-                "from flask import current_app as app\n"
-                "x = app.config['DATABASE_URL']\n"
+                "from flask import current_app as app\nx = app.config['DATABASE_URL']\n"
             )
 
         report = explain.build_report("DATABASE_URL", "app")

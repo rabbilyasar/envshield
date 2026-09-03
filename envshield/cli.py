@@ -171,7 +171,9 @@ def _print_union_completeness_summary(
             f"{', '.join(sorted(union_result.blank))}"
         )
     if union_result.invalid:
-        details = "; ".join(f"{k} ({v})" for k, v in sorted(union_result.invalid.items()))
+        details = "; ".join(
+            f"{k} ({v})" for k, v in sorted(union_result.invalid.items())
+        )
         console.print(f"  [red]Invalid:[/red] {details}")
     if union_result.unresolved:
         console.print(
@@ -496,8 +498,7 @@ def check(
         # which is unaffected by (and skips) union evaluation entirely,
         # same as it already skips registered manifests below.
         is_union = (
-            not file
-            and config_manager.get_service_completeness_mode(target) == "union"
+            not file and config_manager.get_service_completeness_mode(target) == "union"
         )
         try:
             resolved_file = (

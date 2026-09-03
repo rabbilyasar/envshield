@@ -133,8 +133,7 @@ def test_generate_typescript_infers_types_from_default_values():
     # this assertion previously encoded the broken trailing form.
     assert (
         '"DEBUG": z.string().default("true").transform((s) => s.toLowerCase())'
-        '.pipe(z.enum(["true", "false"])).transform((s) => s === "true"),'
-        in content
+        '.pipe(z.enum(["true", "false"])).transform((s) => s === "true"),' in content
     )
 
     # Non-secret fields are passed through directly, not wrapped in Secret.
@@ -483,7 +482,9 @@ def _extract_field_expr(content: str, key: str) -> str:
     source, e.g. content containing '"ALLOW_EMAILS": z.string()...,' returns
     'z.string()...' with the trailing comma stripped."""
     prefix = f'"{key}": '
-    line = next(line for line in content.splitlines() if line.strip().startswith(prefix))
+    line = next(
+        line for line in content.splitlines() if line.strip().startswith(prefix)
+    )
     return line.strip()[len(prefix) :].rstrip(",")
 
 
@@ -587,9 +588,7 @@ def _run_bool_matrix(tmp_path, expr: str, inputs: list) -> dict:
     return zod3
 
 
-def _run_bool_matrix_under(
-    tmp_path, expr: str, inputs: list, *, reparse: bool
-) -> dict:
+def _run_bool_matrix_under(tmp_path, expr: str, inputs: list, *, reparse: bool) -> dict:
     """One matrix run under a single major's '.default()' semantics."""
     js_inputs = "[" + ", ".join(_to_js_literal(v) for v in inputs) + "]"
     script = (
@@ -611,9 +610,7 @@ def _run_bool_matrix_under(
     )
     script_path = tmp_path / f"bool_matrix_{'zod3' if reparse else 'zod4'}.js"
     script_path.write_text(script)
-    result = subprocess.run(
-        ["node", str(script_path)], capture_output=True, text=True
-    )
+    result = subprocess.run(["node", str(script_path)], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout)
 
@@ -663,9 +660,7 @@ class TestTypeScriptBooleanCoercionMatchesTheContract:
         )
         expr = _extract_field_expr(content, "ALLOW_EMAILS")
 
-        results = _run_bool_matrix(
-            tmp_path, expr, ["True", "FALSE", "TrUe", "fAlSe"]
-        )
+        results = _run_bool_matrix(tmp_path, expr, ["True", "FALSE", "TrUe", "fAlSe"])
 
         assert results['"True"'] == "ok:true"
         assert results['"FALSE"'] == "ok:false"
@@ -703,9 +698,7 @@ class TestTypeScriptBooleanCoercionMatchesTheContract:
         assert results["true"] == "rejected"
         assert results["undefined"] == "rejected"
 
-    def test_a_defaulted_bool_defaults_correctly_under_zod3_semantics(
-        self, tmp_path
-    ):
+    def test_a_defaulted_bool_defaults_correctly_under_zod3_semantics(self, tmp_path):
         """
         The BL-003 follow-up regression, pinned directly.
 
@@ -738,9 +731,7 @@ class TestTypeScriptBooleanCoercionMatchesTheContract:
 
         assert results["undefined"] == "ok:false"
 
-    def test_a_defaulted_bool_defaults_correctly_under_zod4_semantics(
-        self, tmp_path
-    ):
+    def test_a_defaulted_bool_defaults_correctly_under_zod4_semantics(self, tmp_path):
         content = generator.generate_config(
             {
                 "FEATURE_ON": {

@@ -639,9 +639,7 @@ class TestScanCompletenessContract:
             assert "Commit aborted" in result.stdout
             assert "coverage is incomplete" in result.stdout
 
-    def test_staged_json_scan_exits_nonzero_and_reports_complete_false(
-        self, tmp_path
-    ):
+    def test_staged_json_scan_exits_nonzero_and_reports_complete_false(self, tmp_path):
         with runner.isolated_filesystem(temp_dir=tmp_path):
             self._git_init()
             self._write_oversized_secret_file()
@@ -701,9 +699,7 @@ class TestScanCompletenessContract:
             assert payload["complete"] is True
             assert payload["skipped_files"] == []
 
-    def test_excluded_but_brand_new_oversized_file_is_marked_incomplete(
-        self, tmp_path
-    ):
+    def test_excluded_but_brand_new_oversized_file_is_marked_incomplete(self, tmp_path):
         """The other half of the corrected ordering: an excluded file that's
         brand new (not in HEAD) is scanned in full *despite* the exclusion
         -- so its size still legitimately matters."""

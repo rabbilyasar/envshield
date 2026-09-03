@@ -478,7 +478,7 @@ class TestPythonLocalFileSurfaceIsDefinedOnce:
         'DB_USER = ""\n'
         'EMAIL_FROM_ADDRESS = "support@example.com"\n'
         "\n"
-        '# Local overrides -- the only os.environ reads in the whole file.\n'
+        "# Local overrides -- the only os.environ reads in the whole file.\n"
         'if os.environ.get("USE_LOCAL_DB") == "yes":\n'
         '    DB_HOST = "db"\n'
     )
@@ -514,9 +514,7 @@ class TestPythonLocalFileSurfaceIsDefinedOnce:
                 "EMAIL_FROM_ADDRESS",
             } <= set(schema)
 
-    def test_check_reports_no_drift_against_the_file_it_was_seeded_from(
-        self, tmp_path
-    ):
+    def test_check_reports_no_drift_against_the_file_it_was_seeded_from(self, tmp_path):
         """
         The property that actually matters: seeding a schema from a file
         and immediately validating that same, unmodified file must not
@@ -536,9 +534,7 @@ class TestPythonLocalFileSurfaceIsDefinedOnce:
             assert local["extra"] == []
             assert local["missing"] == []
 
-    def test_a_secret_looking_assignment_is_still_classified_as_secret(
-        self, tmp_path
-    ):
+    def test_a_secret_looking_assignment_is_still_classified_as_secret(self, tmp_path):
         """Seeding by role must not bypass the importer's secret classification."""
         with runner.isolated_filesystem(temp_dir=tmp_path):
             self._service_with_python_local_file()

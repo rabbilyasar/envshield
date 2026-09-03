@@ -313,9 +313,7 @@ class TestEnvFileProjectBoundary:
         handling for this case."""
         monkeypatch.chdir(tmp_path)
         f = tmp_path / "docker-compose.yml"
-        f.write_text(
-            "services:\n  api:\n    env_file:\n      - ../../../etc/passwd\n"
-        )
+        f.write_text("services:\n  api:\n    env_file:\n      - ../../../etc/passwd\n")
 
         with pytest.raises(UnsafePathError, match="resolves outside the project"):
             DockerComposeParser().get_vars(str(f), get_values=True)
@@ -417,10 +415,7 @@ class TestNoColonDefaultInterpolation:
     def test_list_style_environment_also_resolves_no_colon_default(self, tmp_path):
         f = tmp_path / "docker-compose.yml"
         f.write_text(
-            "services:\n"
-            "  api:\n"
-            "    environment:\n"
-            "      - FLASK_APP=${FLASK_APP-app}\n"
+            "services:\n  api:\n    environment:\n      - FLASK_APP=${FLASK_APP-app}\n"
         )
 
         variables = DockerComposeParser().get_vars(str(f), get_values=True)

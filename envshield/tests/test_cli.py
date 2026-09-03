@@ -378,10 +378,12 @@ def test_schema_sync_check_passes_for_a_union_satisfied_python_local_file(tmp_pa
                 '[FIELD_FROM_COMPOSE]\ndescription="Compose-owned"\n'
             )
         with open("svc/config.py", "w") as f:
-            f.write('FIELD_PRESENT = "hello"\n')  # FIELD_FROM_COMPOSE never declared here
+            f.write(
+                'FIELD_PRESENT = "hello"\n'
+            )  # FIELD_FROM_COMPOSE never declared here
         with open("docker-compose.yml", "w") as f:
             f.write(
-                "services:\n  svc:\n    image: x\n    environment:\n      FIELD_FROM_COMPOSE: \"on\"\n"
+                'services:\n  svc:\n    image: x\n    environment:\n      FIELD_FROM_COMPOSE: "on"\n'
             )
 
         result = runner.invoke(app, ["schema", "sync", "--check", "--service", "svc"])
@@ -1344,7 +1346,7 @@ def test_check_json_combined_key_present_and_clean_for_a_satisfied_union(tmp_pat
             ),
             python_local_content='DB_HOST = "localhost"\n',
             compose_content=(
-                "services:\n  app:\n    image: x\n    environment:\n      FEATURE_MODE: \"on\"\n"
+                'services:\n  app:\n    image: x\n    environment:\n      FEATURE_MODE: "on"\n'
             ),
         )
 
@@ -1394,7 +1396,7 @@ def test_check_json_combined_key_reports_ambiguous_requiredif(tmp_path):
             ),
             python_local_content='TOGGLE = "false"\nDEPENDENT = "x"\n',
             compose_content=(
-                "services:\n  app:\n    image: x\n    environment:\n      TOGGLE: \"true\"\n"
+                'services:\n  app:\n    image: x\n    environment:\n      TOGGLE: "true"\n'
             ),
         )
 
@@ -1413,7 +1415,7 @@ def test_check_json_combined_reports_false_clean_when_a_source_fails_to_load(tmp
             schema_toml='[FEATURE_MODE]\ndescription = "fully covered by Compose alone"\n',
             python_local_content="this is not valid python (((\n",
             compose_content=(
-                "services:\n  app:\n    image: x\n    environment:\n      FEATURE_MODE: \"on\"\n"
+                'services:\n  app:\n    image: x\n    environment:\n      FEATURE_MODE: "on"\n'
             ),
         )
 
@@ -1528,9 +1530,7 @@ def test_doctor_json_is_valid_single_document_on_a_malformed_python_local_file(
     """BL-002 regression: same stdout-corruption bug, reproduced through 'doctor --json'."""
     with runner.isolated_filesystem(temp_dir=tmp_path):
         os.system("git init -q")
-        config_manager.add_service(
-            "app", SCHEMA_FILE_NAME, local_file="config.py"
-        )
+        config_manager.add_service("app", SCHEMA_FILE_NAME, local_file="config.py")
         with open(SCHEMA_FILE_NAME, "w") as f:
             f.write('[API_KEY]\ndescription = "Test"\nsecret = true\n')
         with open("config.py", "w") as f:
@@ -1615,7 +1615,7 @@ def test_doctor_json_union_service_gets_source_health_and_aggregate_checks(tmp_p
             f.write('DB_HOST = "localhost"\n')
         with open("docker-compose.yml", "w") as f:
             f.write(
-                "services:\n  app:\n    image: x\n    environment:\n      FEATURE_MODE: \"on\"\n"
+                'services:\n  app:\n    image: x\n    environment:\n      FEATURE_MODE: "on"\n'
             )
 
         result = runner.invoke(app, ["doctor", "--json"])
@@ -1660,7 +1660,7 @@ def test_doctor_json_non_union_service_keeps_todays_checks_unchanged(tmp_path):
             f.write('DB_HOST = "localhost"\n')
         with open("docker-compose.yml", "w") as f:
             f.write(
-                "services:\n  app:\n    image: x\n    environment:\n      FEATURE_MODE: \"on\"\n"
+                'services:\n  app:\n    image: x\n    environment:\n      FEATURE_MODE: "on"\n'
             )
 
         result = runner.invoke(app, ["doctor", "--json"])
@@ -1701,7 +1701,7 @@ def test_doctor_json_union_source_error_remains_visible_and_fails_completeness(
             f.write("this is not valid python (((\n")
         with open("docker-compose.yml", "w") as f:
             f.write(
-                "services:\n  app:\n    image: x\n    environment:\n      FEATURE_MODE: \"on\"\n"
+                'services:\n  app:\n    image: x\n    environment:\n      FEATURE_MODE: "on"\n'
             )
 
         result = runner.invoke(app, ["doctor", "--json"])

@@ -154,7 +154,9 @@ class KubernetesParser(BaseParser):
         # matching the name any single-main-container manifest already
         # auto-selected above.
         all_containers = main_containers + init_containers
-        target = next((c for c in all_containers if c.get("name") == container_name), None)
+        target = next(
+            (c for c in all_containers if c.get("name") == container_name), None
+        )
         if target is None:
             names = ", ".join(c.get("name", "?") for c in all_containers)
             raise EnvShieldException(

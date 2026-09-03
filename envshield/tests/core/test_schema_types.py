@@ -53,9 +53,7 @@ class TestSecretDefaultConflict:
     def test_secret_with_non_string_default_conflicts(self):
         # A schema's own literal type (TOML int/bool/float) must still
         # trigger the conflict once stringified -- not just a str default.
-        assert schema_types.secret_default_conflict(
-            {"secret": True, "defaultValue": 0}
-        )
+        assert schema_types.secret_default_conflict({"secret": True, "defaultValue": 0})
         assert schema_types.secret_default_conflict(
             {"secret": True, "defaultValue": False}
         )

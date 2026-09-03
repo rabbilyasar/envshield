@@ -332,7 +332,8 @@ def _resolve_union_requiredif_triggers(
     trigger_vars = {
         details["requiredIf"]["var"]
         for details in schema.values()
-        if isinstance(details.get("requiredIf"), dict) and details["requiredIf"].get("var")
+        if isinstance(details.get("requiredIf"), dict)
+        and details["requiredIf"].get("var")
     }
 
     resolved: Dict[str, str] = {}
@@ -349,7 +350,8 @@ def _resolve_union_requiredif_triggers(
             resolved[trigger] = value
         else:
             parts = "; ".join(
-                f"{value!r} in {', '.join(labels)}" for value, labels in sorted(seen.items())
+                f"{value!r} in {', '.join(labels)}"
+                for value, labels in sorted(seen.items())
             )
             ambiguous[trigger] = (
                 f"requiredIf trigger '{trigger}' has conflicting values across "
@@ -417,7 +419,9 @@ def evaluate_union_completeness(
         else:
             missing.add(key)
 
-    return UnionCompletenessResult(missing, blank, invalid, unresolved, ambiguous_requiredif)
+    return UnionCompletenessResult(
+        missing, blank, invalid, unresolved, ambiguous_requiredif
+    )
 
 
 def load_union_sources(
@@ -463,12 +467,16 @@ def load_union_sources(
             manifest["path"], container=manifest_container, prefer=service_name
         )
         if not m_parser:
-            errors.append(f"{manifest['path']}: {_no_parser_found_message(manifest['path'])}")
+            errors.append(
+                f"{manifest['path']}: {_no_parser_found_message(manifest['path'])}"
+            )
             continue
         try:
             local_values = m_parser.get_vars(manifest["path"], get_values=True)
             sources.append(
-                UnionSource(manifest["path"], local_values, m_parser.has_unresolved_source)
+                UnionSource(
+                    manifest["path"], local_values, m_parser.has_unresolved_source
+                )
             )
         except (EnvShieldException, FileNotFoundError, ValueError) as e:
             errors.append(f"{manifest['path']}: {e}")
