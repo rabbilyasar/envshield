@@ -4,7 +4,26 @@ All notable changes to this project are documented in this file.
 
 ## [4.7.1] - 2026-09-08
 
-A correctness patch for Git hook installation and removal.
+A correctness patch for Git hook installation and removal, a new command
+for safely stepping back out of a project, and a hardening pass on the
+release pipeline itself.
+
+### Added
+- **`envshield uninstall`** — a project-level command that removes
+  EnvShield's Git hook integration while preserving your project
+  configuration. It never deletes `envshield.yml`, any `env.schema.toml`,
+  `.env.example`, or any registered local configuration file, regardless
+  of whether EnvShield originally created them. The only thing it ever
+  deletes is a Git hook whose content exactly matches what EnvShield
+  would generate right now — the same ownership rule `hook remove`
+  already uses, reused directly rather than reimplemented. A
+  hand-modified hook, a foreign hook (including one that happens to
+  contain EnvShield's marker comment), or a hook that's gone stale
+  relative to the current `envshield.yml` is left in place and reported,
+  never deleted. `--yes` skips the confirmation prompt only — it never
+  overrides the ownership check. There is no `--force` and no `--purge`;
+  `uninstall` is deliberately not a "delete everything EnvShield ever
+  created" command.
 
 ### Fixed
 - **Implicit hook installation (`init`, `setup`, `service discover`) could
@@ -34,6 +53,25 @@ silently regenerated or removed — it is left in place, and must be
 refreshed manually (`hook install --yes --force`, or delete and
 reinstall). This is a deliberate, conservative tradeoff: an automatic
 stale-hook refresh is not implemented in this release.
+
+### CI
+- **The tag-triggered PyPI publish workflow now runs the same
+  release-quality checks as the main CI pipeline, across the same
+  supported Python versions (3.10, 3.11, 3.12), before a release is
+  eligible to publish.** Previously, the publish workflow's own test job
+  only ran the unit test suite on a single Python version — a real
+  regression in linting, formatting, or EnvShield's own repository
+  self-scan on the tagged commit could reach PyPI without being caught by
+  the publish workflow itself. Publishing is unchanged in every other
+  respect: it remains a separate workflow from the main CI pipeline, not
+  merged into it, and no branch protection rule or external status check
+  was added — this only closes the gap in what the publish workflow's own
+  pre-publish check actually verifies.
+- **`.github/envshield.ci.yml`'s secret-scanning exclusions now also cover
+  `BACKLOG.md`.** It quotes illustrative secret-shaped and connection-
+  string-shaped example text as part of documenting real findings — the
+  same category of false positive already excluded for `README.md` — and
+  was tripping the CI pipeline's own EnvShield self-scan step.
 
 ## [4.7.0] - 2026-09-03
 
