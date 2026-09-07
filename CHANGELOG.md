@@ -2,6 +2,39 @@
 
 All notable changes to this project are documented in this file.
 
+## [4.7.1] - 2026-09-08
+
+A correctness patch for Git hook installation and removal.
+
+### Fixed
+- **Implicit hook installation (`init`, `setup`, `service discover`) could
+  re-touch and re-prompt for an already-present hook merely because the
+  *other* hook was missing** — installing pre-commit while only post-merge
+  was missing, for example, and vice versa. It now installs only whichever
+  hook is actually missing.
+- **A hook's ownership was decided by whether it merely contained
+  EnvShield's marker comment, not by whether its content actually matched
+  what EnvShield would generate.** A hand-modified EnvShield hook, or a
+  hand-written hook that happened to contain the same marker comment, was
+  treated as safely owned on that basis alone. `hook install --yes` could
+  therefore silently overwrite it with no warning. Overwrite decisions now
+  require an exact match against the hook content EnvShield would generate
+  right now; anything else is treated the same as a genuinely foreign hook
+  (protected, with a warning in non-interactive mode).
+- **`hook remove` used the same marker-only check to decide what to
+  delete**, with the same risk on the deletion path — a modified or
+  coincidentally-marked hook could be silently removed. It now applies the
+  identical exact-content check before deleting a hook.
+
+### Known limitation
+An EnvShield-generated hook that has gone stale relative to a
+since-changed `envshield.yml` (for example, after registering a new
+service) will no longer be recognized as an exact match, so it will not be
+silently regenerated or removed — it is left in place, and must be
+refreshed manually (`hook install --yes --force`, or delete and
+reinstall). This is a deliberate, conservative tradeoff: an automatic
+stale-hook refresh is not implemented in this release.
+
 ## [4.7.0] - 2026-09-03
 
 A feature and correctness release. Adds multi-source schema completeness for
