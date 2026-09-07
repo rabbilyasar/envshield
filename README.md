@@ -368,6 +368,24 @@ A supporting check alongside the contract, not the product itself. `secret = tru
 
 ---
 
+## Removing EnvShield
+
+```bash
+envshield uninstall
+```
+
+Removes EnvShield's Git hook integration while preserving your project configuration — it does not delete `envshield.yml`, any `env.schema.toml`, `.env.example`, any registered local configuration file (`.env`, a Python config module, etc.), `.gitignore`, or any code `envshield generate` has produced, regardless of whether EnvShield originally created any of it. Those are your project's own configuration contract and application config, not disposable installation artifacts.
+
+The only thing `uninstall` ever deletes is a Git hook whose content exactly matches what EnvShield would generate right now — the same ownership rule `hook remove` already uses. A hand-modified hook, a foreign hook (even one that happens to contain EnvShield's marker comment), or an EnvShield hook that's gone stale relative to your current `envshield.yml` (e.g. after registering a new service) is left in place and reported, never deleted or silently regenerated.
+
+```bash
+envshield uninstall --yes    # skip the confirmation prompt
+```
+
+`--yes` only skips the prompt — it never overrides the ownership check; a modified, foreign, or stale hook is preserved with `--yes` exactly as it is interactively. There is no `--force` and no `--purge`: `uninstall` is intentionally not a "delete everything EnvShield ever created" command. To remove EnvShield's configuration from a project entirely, delete `envshield.yml` and the schema files yourself once you're sure you no longer need them.
+
+---
+
 ## Known limitations
 
 EnvShield is built around the patterns real projects actually use. A few narrower cases aren't handled yet — none of them let a secret leak or let a genuinely missing required variable pass as clean:

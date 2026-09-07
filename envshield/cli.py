@@ -1855,16 +1855,136 @@ def hook_remove(
         console.print("[yellow]Cancelled.[/yellow]")
         raise typer.Exit()
     try:
-        removed = scanner.remove_hooks()
+        results = scanner.remove_hooks()
     except EnvShieldException as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(code=1)
 
+    removed = [r["name"] for r in results if r["status"] == "removed"]
     if not removed:
         console.print("[yellow]No EnvShield-installed hooks found to remove.[/yellow]")
         return
     for hook_name in removed:
         console.print(f"[bold green]✓[/bold green] Removed {hook_name} hook.")
+
+
+@app.command()
+def uninstall(
+    yes: bool = typer.Option(
+        False, "--yes", "-y", help="Skip the confirmation prompt."
+    ),
+):
+    """
+    Removes EnvShield's Git hook integration from this project.
+
+    Only ever deletes a hook file whose content exactly matches what
+    EnvShield would generate right now -- the same ownership standard
+    'hook remove' already uses. A hand-modified hook, a foreign hook, or
+    an EnvShield hook that's gone stale relative to your current
+    envshield.yml (e.g. after registering a new service) is left alone
+    and reported, never deleted.
+
+    Never touches project configuration -- envshield.yml, any
+    env.schema.toml, .env.example, or any registered local configuration
+    file are always preserved and reported, never removed. This is not a
+    "delete everything EnvShield ever created" command.
+    """
+    if not _confirm_hook_action(
+        "EnvShield will remove Git hooks that are verified as EnvShield-owned.\n"
+        "Project configuration and schema files will be preserved.\n\n"
+        "Continue?",
+        yes,
+    ):
+        console.print("[yellow]Cancelled.[/yellow]")
+        raise typer.Exit()
+
+    console.print("\n[bold]EnvShield uninstall[/bold]\n")
+
+    try:
+        hook_results = scanner.remove_hooks()
+    except EnvShieldException:
+        # No Git repository -- there are no hooks to remove, which isn't
+        # an error condition for a project-level uninstall the way it is
+        # for 'hook remove' (a command that only ever makes sense inside
+        # one). Continue on to reporting project configuration.
+        hook_results = []
+
+    # Reused, not re-derived: 'remove_hooks()' already resolves this same
+    # directory (respecting a configured 'core.hooksPath', e.g. Husky) to
+    # decide where to look/delete -- the report must name that same real
+    # location, never a hardcoded '.git/hooks/' that could be wrong.
+    # 'get_hooks_dir()' always returns an absolute path; displaying it
+    # relative to the current directory (when possible) is purely
+    # cosmetic -- it keeps the common case reading exactly as it always
+    # has, and avoids Rich hard-wrapping a long absolute path mid-string.
+    hooks_dir = git_utils.get_hooks_dir()
+    if hooks_dir:
+        try:
+            hooks_dir = os.path.relpath(hooks_dir, os.getcwd())
+        except ValueError:
+            pass
+    else:
+        hooks_dir = os.path.join(".git", "hooks")
+
+    removed_names = [r["name"] for r in hook_results if r["status"] == "removed"]
+    preserved_hooks = [r for r in hook_results if r["status"] == "preserved"]
+
+    if removed_names:
+        console.print("[bold]Removed:[/bold]")
+        for hook_name in removed_names:
+            console.print(
+                f"  [bold green]✓[/bold green] {os.path.join(hooks_dir, hook_name)}"
+            )
+        console.print()
+    else:
+        console.print(
+            "[yellow]Nothing to remove -- no safely-owned EnvShield hooks were found.[/yellow]\n"
+        )
+
+    # Everything below is report-only -- uninstall never deletes or
+    # modifies any of it, regardless of whether EnvShield originally
+    # created it (envshield.yml, a schema, .env.example) or only ever
+    # populated it (a registered local_file, which may hold real secret
+    # values and is never "EnvShield's own" to reclaim).
+    preserved_lines = []
+    for r in preserved_hooks:
+        preserved_lines.append(
+            (
+                os.path.join(hooks_dir, r["name"]),
+                "hook contents do not exactly match what EnvShield would "
+                "generate now -- hand-modified, foreign, or stale relative "
+                "to your current config",
+            )
+        )
+
+    if os.path.exists(config_manager.CONFIG_FILE_NAME):
+        preserved_lines.append(
+            (config_manager.CONFIG_FILE_NAME, "project configuration")
+        )
+
+    for service_name in config_manager.get_services():
+        schema_path = config_manager.get_service_schema_path(service_name)
+        if schema_path and os.path.exists(schema_path):
+            preserved_lines.append((schema_path, "project configuration"))
+
+        paths = config_manager.get_env_paths(service_name)
+        if os.path.exists(paths["example_file"]):
+            preserved_lines.append((paths["example_file"], "preserved"))
+        if os.path.exists(paths["local_file"]):
+            preserved_lines.append((paths["local_file"], "application configuration"))
+
+    if preserved_lines:
+        console.print("[bold]Preserved:[/bold]")
+        for path, reason in preserved_lines:
+            console.print(f"  • {path} -- {reason}")
+        console.print()
+
+    if removed_names:
+        console.print(
+            "[bold green]EnvShield Git hook integration removed safely.[/bold green]"
+        )
+    if preserved_lines:
+        console.print("Project configuration was preserved.")
 
 
 @app.command(name="import")

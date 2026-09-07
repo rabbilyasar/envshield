@@ -890,7 +890,7 @@ def scan_result(
 ENVSHIELD_HOOK_MARKER = "# Hook installed by EnvShield"
 
 
-def remove_hooks() -> List[str]:
+def remove_hooks() -> List[Dict[str, str]]:
     """
     Removes only a hook file EnvShield can prove is its own, unmodified
     output -- an exact content match against what EnvShield would generate
@@ -903,7 +903,14 @@ def remove_hooks() -> List[str]:
     genuinely foreign (Husky, a hand-written script) or an EnvShield hook
     a user has since extended.
 
-    Returns the names of the hooks actually removed.
+    Returns one {"name": ..., "status": ...} entry per hook type EnvShield
+    manages (pre-commit, post-merge), regardless of outcome -- "removed"
+    (deleted, exact match), "preserved" (a file exists but its content
+    doesn't exactly match current generated output -- hand-modified,
+    foreign, or stale relative to the current config), or "missing" (no
+    file at that path). This is the single source of truth for hook
+    ownership; 'hook remove' filters for "removed", 'uninstall' also
+    reports "preserved" -- neither re-derives the ownership check itself.
     """
     git_root = git_utils.get_git_root()
     if not git_root:
@@ -914,18 +921,20 @@ def remove_hooks() -> List[str]:
         "pre-commit": _generate_pre_commit_hook_content,
         "post-merge": _generate_post_merge_hook_content,
     }
-    removed = []
+    results = []
     for hook_name, generate_content in generators.items():
         hook_path = os.path.join(hooks_dir, hook_name)
         if not os.path.exists(hook_path):
+            results.append({"name": hook_name, "status": "missing"})
             continue
         with open(hook_path, "r") as f:
             content = f.read()
         if content != generate_content():
+            results.append({"name": hook_name, "status": "preserved"})
             continue
         os.remove(hook_path)
-        removed.append(hook_name)
-    return removed
+        results.append({"name": hook_name, "status": "removed"})
+    return results
 
 
 def _describe_existing_hook(content: str, is_safely_regeneratable: bool) -> str:
