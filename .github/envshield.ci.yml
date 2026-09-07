@@ -9,6 +9,12 @@ secret_scanning:
     # README.md's own documented example output (sample scan results,
     # illustrative fake credentials) -- not a real secret.
     - "./README.md"
+    # BACKLOG.md quotes illustrative secret-shaped/connection-string-shaped
+    # example text as part of documenting real findings (a synthetic test
+    # value explicitly named to say it isn't real, a connection-string
+    # template, an example URL used to illustrate validator behavior) --
+    # same category as README.md above, not a real leak.
+    - "./BACKLOG.md"
     # .gif/ holds the shell scripts used to record the README's demo
     # GIFs, seeded with obviously-fake Stripe test keys for the recording.
     - "./.gif/*"

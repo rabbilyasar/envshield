@@ -1,11 +1,16 @@
 name: Publish to PyPI
 
 # Triggered by `git push --tags` after a `bump2version` release (see
-# CONTRIBUTING.md). The version-bump commit itself already went through
-# ci.yml's full test matrix on push to main; this runs one more sanity check
-# on the exact tagged commit before it ever reaches PyPI, then builds and
-# publishes via PyPI's trusted-publisher (OIDC) flow -- no API token stored
-# in CI secrets at all.
+# CONTRIBUTING.md). A tag push is a separate, independent trigger event
+# from ci.yml's own `push: branches: [main]` trigger -- there is no
+# ordering guarantee between the two, and no reliable way to look up
+# "did ci.yml already pass for this exact commit" without introducing
+# workflow_run polling against the Checks API. So this job is
+# self-contained: it re-runs the same checks, on the same Python
+# versions, that ci.yml's test-and-lint job runs, directly against the
+# exact tagged commit, before it ever reaches PyPI. Keep this matrix and
+# step list in sync with ci.yml's test-and-lint job -- this is the
+# repository's actual release gate, not merely a sanity check.
 on:
   push:
     tags:
@@ -14,22 +19,34 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
+      - name: Lint and format with Ruff
+        run: |
+          ruff check .
+          ruff format --check .
+
       - name: Run unit tests with pytest
         run: pytest
+
+      - name: Scan codebase with EnvShield
+        run: |
+          envshield scan . --config .github/envshield.ci.yml
 
   publish:
     needs: test
