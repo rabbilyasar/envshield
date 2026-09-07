@@ -122,6 +122,14 @@ class HooksManager:
     def _do_install_hooks(self, force: bool = False) -> None:
         """Actually install the hooks (called after user confirms).
 
+        Only installs whichever hook(s) are actually missing -- an
+        already-present hook must not be touched (and re-prompted for its
+        own separate overwrite confirmation) merely because the OTHER hook
+        needed installing. `prompt_install_hooks`'s own "Install git
+        hooks? (...)" prompt already tells the user which hook(s) are
+        about to be installed; installing an unrelated, already-present
+        one here would silently do more than that prompt described.
+
         Args:
             force: If True, overwrite existing hooks.
         """
@@ -129,8 +137,11 @@ class HooksManager:
             # Import here to avoid circular imports
             from . import scanner
 
-            scanner.install_pre_commit_hook(force=force, non_interactive=False)
-            scanner.install_post_merge_hook(force=force, non_interactive=False)
+            pre_commit, post_merge = self.are_hooks_installed()
+            if not pre_commit:
+                scanner.install_pre_commit_hook(force=force, non_interactive=False)
+            if not post_merge:
+                scanner.install_post_merge_hook(force=force, non_interactive=False)
         except EnvShieldException as e:
             console.print(f"[bold yellow]⚠️  Warning:[/] {e}")
 

@@ -7,6 +7,7 @@ from typer.testing import CliRunner
 from envshield.cli import app
 from envshield.config import manager as config_manager
 from envshield.config.manager import CONFIG_FILE_NAME, SCHEMA_FILE_NAME
+from envshield.core import scanner
 from envshield.core.scanner import MAX_SCANNABLE_SIZE_BYTES
 
 runner = CliRunner()
@@ -44,6 +45,87 @@ def test_init_command_in_git_repo(tmp_path, mocker):
             assert ".env.local" in content
             assert ".envshield/" in content
         assert os.path.exists(".git/hooks/pre-commit")
+
+
+def test_init_installs_both_hooks_when_neither_exists(tmp_path, mocker):
+    """Both hooks missing -> both get installed."""
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.system("git init")
+        mocker.patch("envshield.core.hooks_manager._is_interactive", return_value=True)
+        mocker.patch("questionary.confirm").return_value.ask.return_value = True
+        spy_pre = mocker.spy(scanner, "install_pre_commit_hook")
+        spy_post = mocker.spy(scanner, "install_post_merge_hook")
+
+        result = runner.invoke(app, ["init"])
+
+        assert result.exit_code == 0, result.stdout
+        assert spy_pre.call_count == 1
+        assert spy_post.call_count == 1
+        assert os.path.exists(".git/hooks/pre-commit")
+        assert os.path.exists(".git/hooks/post-merge")
+
+
+def test_init_only_installs_the_missing_hook_when_pre_commit_already_exists(
+    tmp_path, mocker
+):
+    """
+    Fix 1 (the reported double-prompt): pre-commit already present,
+    post-merge missing -- init's implicit hook offer must install only
+    post-merge. The already-present pre-commit hook must not be touched,
+    and must not trigger its own separate overwrite prompt/call.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.system("git init")
+        os.makedirs(".git/hooks", exist_ok=True)
+        pre_commit_content = (
+            "#!/bin/sh\n\n# Hook installed by EnvShield\nold content should stay\n"
+        )
+        with open(".git/hooks/pre-commit", "w") as f:
+            f.write(pre_commit_content)
+        os.chmod(".git/hooks/pre-commit", 0o755)
+
+        mocker.patch("envshield.core.hooks_manager._is_interactive", return_value=True)
+        mocker.patch("questionary.confirm").return_value.ask.return_value = True
+        spy_pre = mocker.spy(scanner, "install_pre_commit_hook")
+        spy_post = mocker.spy(scanner, "install_post_merge_hook")
+
+        result = runner.invoke(app, ["init"])
+
+        assert result.exit_code == 0, result.stdout
+        assert spy_pre.call_count == 0
+        assert spy_post.call_count == 1
+        assert os.path.exists(".git/hooks/post-merge")
+        with open(".git/hooks/pre-commit") as f:
+            assert f.read() == pre_commit_content
+
+
+def test_init_only_installs_the_missing_hook_when_post_merge_already_exists(
+    tmp_path, mocker
+):
+    """Symmetric case: post-merge already present, pre-commit missing."""
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.system("git init")
+        os.makedirs(".git/hooks", exist_ok=True)
+        post_merge_content = (
+            "#!/bin/sh\n\n# Hook installed by EnvShield\nold content should stay\n"
+        )
+        with open(".git/hooks/post-merge", "w") as f:
+            f.write(post_merge_content)
+        os.chmod(".git/hooks/post-merge", 0o755)
+
+        mocker.patch("envshield.core.hooks_manager._is_interactive", return_value=True)
+        mocker.patch("questionary.confirm").return_value.ask.return_value = True
+        spy_pre = mocker.spy(scanner, "install_pre_commit_hook")
+        spy_post = mocker.spy(scanner, "install_post_merge_hook")
+
+        result = runner.invoke(app, ["init"])
+
+        assert result.exit_code == 0, result.stdout
+        assert spy_pre.call_count == 1
+        assert spy_post.call_count == 0
+        assert os.path.exists(".git/hooks/pre-commit")
+        with open(".git/hooks/post-merge") as f:
+            assert f.read() == post_merge_content
 
 
 def test_init_auto_registers_a_root_level_compose_file(tmp_path, mocker):

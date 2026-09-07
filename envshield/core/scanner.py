@@ -892,11 +892,16 @@ ENVSHIELD_HOOK_MARKER = "# Hook installed by EnvShield"
 
 def remove_hooks() -> List[str]:
     """
-    Removes any EnvShield-installed Git hook (pre-commit, post-merge),
-    identified by the same '# Hook installed by EnvShield' marker `install`
-    already checks before offering to overwrite -- a hook that isn't
-    EnvShield's is left alone rather than deleted out from under whatever
-    else manages it (Husky, a hand-written script, etc.).
+    Removes only a hook file EnvShield can prove is its own, unmodified
+    output -- an exact content match against what EnvShield would generate
+    right now, the same ownership standard install_pre_commit_hook/
+    install_post_merge_hook already use (see their own comment: the marker
+    comment alone is not proof of ownership -- a user can modify a
+    generated hook, or hand-write one containing the same comment, while
+    keeping the marker text intact). A hook that isn't provably
+    EnvShield's own unmodified output is left alone -- whether it's
+    genuinely foreign (Husky, a hand-written script) or an EnvShield hook
+    a user has since extended.
 
     Returns the names of the hooks actually removed.
     """
@@ -905,24 +910,41 @@ def remove_hooks() -> List[str]:
         raise EnvShieldException("Not inside a Git repository.")
 
     hooks_dir = git_utils.get_hooks_dir()
+    generators = {
+        "pre-commit": _generate_pre_commit_hook_content,
+        "post-merge": _generate_post_merge_hook_content,
+    }
     removed = []
-    for hook_name in ("pre-commit", "post-merge"):
+    for hook_name, generate_content in generators.items():
         hook_path = os.path.join(hooks_dir, hook_name)
         if not os.path.exists(hook_path):
             continue
         with open(hook_path, "r") as f:
             content = f.read()
-        if ENVSHIELD_HOOK_MARKER not in content:
+        if content != generate_content():
             continue
         os.remove(hook_path)
         removed.append(hook_name)
     return removed
 
 
-def _describe_existing_hook(content: str) -> str:
-    """Best-effort description of an existing hook file, for the overwrite warning."""
-    if ENVSHIELD_HOOK_MARKER in content:
+def _describe_existing_hook(content: str, is_safely_regeneratable: bool) -> str:
+    """
+    Best-effort description of an existing hook file, for the overwrite
+    warning. `is_safely_regeneratable` is an exact-content match against
+    what EnvShield would generate right now -- the marker comment alone is
+    not proof of that (see the call site's own comment): a user can modify
+    a generated hook, or hand-write one, while keeping the marker text
+    intact.
+    """
+    if is_safely_regeneratable:
         return "previously installed by EnvShield -- safe to regenerate"
+    if ENVSHIELD_HOOK_MARKER in content:
+        return (
+            "previously installed by EnvShield, but its contents no longer match "
+            "what EnvShield would generate now (hand-edited, or stale relative to "
+            "your current config) -- overwriting could discard those changes"
+        )
     if "husky.sh" in content or ".husky" in content:
         return "managed by Husky"
     non_comment_lines = [
@@ -1056,10 +1078,18 @@ def install_pre_commit_hook(force: bool = False, non_interactive: bool = False):
             with open(pre_commit_path, "r") as f:
                 existing_content = f.read()
 
-            # Regenerating EnvShield's own hook is always safe -- non-interactive
-            # mode only needs to hold back from a genuinely foreign one, not
-            # bail out on every re-run just because the file already exists.
-            if non_interactive and ENVSHIELD_HOOK_MARKER not in existing_content:
+            # A marker comment alone is not proof this file is EnvShield's own,
+            # untouched output -- a user can modify a generated hook (or
+            # hand-write one containing the same comment) while keeping the
+            # marker text intact. Only an exact match against what EnvShield
+            # would generate right now is provably safe to replace without
+            # asking; non-interactive mode's fast path is scoped to exactly
+            # that case -- anything else (including a marker-bearing file
+            # that no longer matches) falls through to the same protected
+            # confirmation/warning path as a genuinely foreign hook.
+            is_safely_regeneratable = existing_content == hook_script_content
+
+            if non_interactive and not is_safely_regeneratable:
                 console.print(
                     "[bold yellow]⚠️  Warning:[/] A pre-commit hook already exists. EnvShield was not installed automatically."
                 )
@@ -1070,7 +1100,7 @@ def install_pre_commit_hook(force: bool = False, non_interactive: bool = False):
 
             if not force and not non_interactive:
                 overwrite = questionary.confirm(
-                    f"A pre-commit hook already exists ({_describe_existing_hook(existing_content)}). Do you want to overwrite it?",
+                    f"A pre-commit hook already exists ({_describe_existing_hook(existing_content, is_safely_regeneratable)}). Do you want to overwrite it?",
                     default=False,
                 ).ask()
                 if not overwrite:
@@ -1179,10 +1209,13 @@ def install_post_merge_hook(force: bool = False, non_interactive: bool = False):
             with open(post_merge_path, "r") as f:
                 existing_content = f.read()
 
-            # Regenerating EnvShield's own hook is always safe -- non-interactive
-            # mode only needs to hold back from a genuinely foreign one, not
-            # bail out on every re-run just because the file already exists.
-            if non_interactive and ENVSHIELD_HOOK_MARKER not in existing_content:
+            # See install_pre_commit_hook's identical comment: a marker
+            # comment alone is not proof this file is EnvShield's own,
+            # untouched output. Only an exact match against what EnvShield
+            # would generate right now is treated as provably safe.
+            is_safely_regeneratable = existing_content == hook_script_content
+
+            if non_interactive and not is_safely_regeneratable:
                 console.print(
                     "[bold yellow]⚠️  Warning:[/] A post-merge hook already exists. EnvShield was not installed automatically."
                 )
@@ -1193,7 +1226,7 @@ def install_post_merge_hook(force: bool = False, non_interactive: bool = False):
 
             if not force and not non_interactive:
                 overwrite = questionary.confirm(
-                    f"A post-merge hook already exists ({_describe_existing_hook(existing_content)}). Do you want to overwrite it?",
+                    f"A post-merge hook already exists ({_describe_existing_hook(existing_content, is_safely_regeneratable)}). Do you want to overwrite it?",
                     default=False,
                 ).ask()
                 if not overwrite:
