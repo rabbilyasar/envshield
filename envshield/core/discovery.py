@@ -109,18 +109,9 @@ class _OsBindings:
     bare_environ: bool = False
 
 
-def _collect_os_bindings(tree: ast.Module) -> _OsBindings:
-    """
-    Only `tree.body` (top-level statements), not a full ast.walk -- a
-    conditional/deferred 'from os import getenv' inside a function is rare
-    enough that scanning for it isn't worth doubling this pass's cost on
-    every file (measured: ast.walk over a ~2,200-line file costs roughly as
-    much as parsing it in the first place). Matches this module's own
-    _python.py sibling, which is top-level-assignment-only for the same
-    reason -- a deliberate scope boundary, not an oversight.
-    """
+def _scan_os_import_nodes(nodes) -> _OsBindings:
     bindings = _OsBindings()
-    for node in tree.body:
+    for node in nodes:
         if not (
             isinstance(node, ast.ImportFrom) and node.module == "os" and node.level == 0
         ):
@@ -133,6 +124,34 @@ def _collect_os_bindings(tree: ast.Module) -> _OsBindings:
             elif alias.name == "environ":
                 bindings.bare_environ = True
     return bindings
+
+
+def _collect_os_bindings(tree: ast.Module, content: str) -> _OsBindings:
+    """
+    `tree.body` (top-level statements) first -- cheap, and covers the
+    overwhelmingly common case. A real-world false negative found against
+    Zeus (a genuine security-relevant read, `getenv("BYPASS_MFA")` behind a
+    function-local `from os import getenv`) showed the module-level-only
+    scan this used to be limited to isn't actually rare enough to skip --
+    the same conclusion BL-113's evidence already reached for Flask's
+    `current_app` bindings (see _FlaskBindings/_collect_flask_bindings),
+    which this now mirrors: a full ast.walk only runs when the top-level
+    scan found nothing AND a cheap `"from os import" in content` prefilter
+    confirms it's even possible, so a file with no such import anywhere
+    (the common case for a module already covered by the top-level scan,
+    or one that only ever does `import os`) never pays the extra
+    traversal.
+    """
+    bindings = _scan_os_import_nodes(tree.body)
+    if bindings.bare_getenv and bindings.bare_environ:
+        return bindings  # nothing left a full walk could add
+    if "from os import" not in content:
+        return bindings
+    full = _scan_os_import_nodes(ast.walk(tree))
+    return _OsBindings(
+        bare_getenv=bindings.bare_getenv or full.bare_getenv,
+        bare_environ=bindings.bare_environ or full.bare_environ,
+    )
 
 
 def _is_os_environ(node: ast.expr, bindings: _OsBindings) -> bool:
@@ -345,7 +364,7 @@ def discover_python_usages(
     except (SyntaxError, RecursionError, ValueError):
         return []
 
-    bindings = _collect_os_bindings(tree)
+    bindings = _collect_os_bindings(tree, content)
     flask_bindings = (
         _collect_flask_bindings(tree) if "current_app" in content else _FlaskBindings()
     )
@@ -614,7 +633,7 @@ def discover_python_env_vars(
     except (SyntaxError, RecursionError, ValueError):
         return []
 
-    bindings = _collect_os_bindings(tree)
+    bindings = _collect_os_bindings(tree, content)
     visitor = _EnvVarWithDefaultsVisitor(file_path, bindings)
     try:
         visitor.visit(tree)

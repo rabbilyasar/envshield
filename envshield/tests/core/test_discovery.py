@@ -117,14 +117,15 @@ class TestOutOfScopeByDesign:
     def test_getenv_aliased_import_is_not_reported(self):
         assert _usages("import os as o\nx = o.getenv('X')\n") == []
 
-    def test_bare_import_inside_a_function_is_not_reported(self):
+    def test_aliased_import_inside_a_function_is_still_not_reported(self):
         """
-        _collect_os_bindings only scans top-level statements (performance:
-        see its own docstring) -- a 'from os import getenv' nested inside
-        a function body is a real but rare enough case that this is a
-        deliberate scope boundary, not an oversight.
+        Unlike the bare-import case (see TestFunctionLocalOsImport below),
+        an aliased 'from os import getenv as ge' stays out of scope
+        regardless of where it appears -- _OsBindings only ever tracks the
+        unaliased form, matching test_getenv_aliased_import_is_not_reported
+        above.
         """
-        content = "def f():\n    from os import getenv\n    return getenv('X')\n"
+        content = "def f():\n    from os import getenv as ge\n    return ge('X')\n"
         assert _usages(content) == []
 
 
@@ -184,6 +185,81 @@ class TestBareOsImportRecognition:
         too -- the two recognition paths are additive, not exclusive."""
         content = (
             "import os\nfrom os import getenv\na = os.getenv('A')\nb = getenv('B')\n"
+        )
+        result = _usages(content)
+        assert {u.variable for u in result} == {"A", "B"}
+
+
+class TestFunctionLocalOsImport:
+    """
+    A 'from os import getenv'/'from os import environ' nested inside a
+    function body (not just at module top-level) is now recognized too.
+    Found via a real Zeus codebase: a genuine, security-relevant read
+    (`getenv("BYPASS_MFA")`) behind a function-local `from os import
+    getenv`, in a file with no top-level os import at all -- completely
+    invisible to 'undeclared'/'explain'/'scan' before this fix, silently
+    the same false-negative shape as BL-109's original module-level fix,
+    just one scope narrower. This directly disproves the "rare enough to
+    skip" assumption TestOutOfScopeByDesign's own removed test used to
+    assert -- the same kind of real-world evidence that already justified
+    a full ast.walk for Flask's _collect_flask_bindings (BL-113), now
+    applied to _collect_os_bindings via the same cheap-prefilter-then-walk
+    shape (a full walk only runs when the top-level scan found nothing AND
+    the literal text "from os import" appears anywhere in the file).
+    """
+
+    def test_function_local_bare_getenv_is_recognized(self):
+        content = "def f():\n    from os import getenv\n    return getenv('X')\n"
+        usage = _one(content)
+        assert usage.variable == "X"
+        assert usage.access_type == "os.getenv"
+
+    def test_function_local_bare_environ_get_is_recognized(self):
+        content = "def f():\n    from os import environ\n    return environ.get('X')\n"
+        usage = _one(content)
+        assert usage.variable == "X"
+
+    def test_function_local_import_nested_in_an_if_branch_is_recognized(self):
+        """Not just a direct function-body statement -- BYPASS_MFA's real
+        Zeus call site has the import as the first statement of a function,
+        but the walk-based fallback must not be limited to only that exact
+        shape (e.g. an import inside a conditional)."""
+        content = (
+            "def f(flag):\n"
+            "    if flag:\n"
+            "        from os import getenv\n"
+            "        return getenv('X')\n"
+            "    return None\n"
+        )
+        usage = _one(content)
+        assert usage.variable == "X"
+
+    def test_a_file_with_no_from_os_import_text_at_all_pays_no_extra_walk(self):
+        """The cheap prefilter (`"from os import" in content`) means a file
+        that only ever does `import os` never falls into the walk-based
+        path -- asserting the *behavior* here (still correctly empty),
+        since the cost saving itself isn't observable from the result."""
+        content = "import os\nx = 1\n"
+        assert _usages(content) == []
+
+    def test_module_level_import_short_circuits_without_needing_the_walk(self):
+        """A module-level bare import (already handled by the cheap
+        top-level scan) must still work unchanged now that a second,
+        walk-based path also exists alongside it."""
+        content = "from os import getenv\nx = getenv('X')\n"
+        usage = _one(content)
+        assert usage.variable == "X"
+
+    def test_module_level_getenv_plus_function_local_environ_are_both_found(self):
+        """A mixed file -- one binding established at module level, the
+        other only inside a function -- must not let the top-level scan's
+        result short-circuit discovery of the second, function-local one."""
+        content = (
+            "from os import getenv\n"
+            "a = getenv('A')\n"
+            "def f():\n"
+            "    from os import environ\n"
+            "    return environ.get('B')\n"
         )
         result = _usages(content)
         assert {u.variable for u in result} == {"A", "B"}
