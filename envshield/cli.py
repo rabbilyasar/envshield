@@ -1747,6 +1747,12 @@ def scan(
         "--json",
         help="Print machine-readable JSON instead of tables; suppresses all other output.",
     ),
+    enforce: bool = typer.Option(
+        False,
+        "--enforce",
+        help="Enable enforcement mode with interactive override for high-confidence findings. "
+             "Intended for Git hooks - distinguishes commit enforcement from normal scanning.",
+    ),
 ):
     """Scans files for hardcoded secrets and reports every currently-undeclared environment-variable read."""
     try:
@@ -1757,6 +1763,12 @@ def scan(
             service_manager.resolve_service(service, invocation_dir=INVOCATION_DIR)
 
         if json_output:
+            # M7: --json and --enforce are mutually exclusive
+            # JSON output is for machine consumers; enforcement is for interactive humans
+            if enforce:
+                console.print("[bold red]Error:[/bold red] --json and --enforce cannot be used together.")
+                raise typer.Exit(code=1)
+
             result = scanner.scan_result(
                 paths=paths,
                 staged_only=staged,
@@ -1779,6 +1791,7 @@ def scan(
                 config_path=config,
                 exclude_patterns=exclude,
                 service_name=service,
+                enforce_mode=enforce,
             )
     except EnvShieldException as e:
         if json_output:

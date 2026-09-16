@@ -770,11 +770,11 @@ def _classify_and_maybe_suppress(
     detector_name: str,
     file_path: str,
     line_num: int,
-) -> Optional[str]:
+):
     """
-    Classifies a match using the context classifier. Returns a suppression
-    reason string if the match should be suppressed (LIKELY_CODE), or None
-    if it should remain a finding (LIKELY_SECRET or AMBIGUOUS).
+    Classifies a match using the context classifier. Returns a tuple of
+    (should_suppress, classification_result) where classification_result
+    is the full ClassificationResult object (or None if classifier not applied).
 
     The classifier is lazily imported to avoid initialization cost when it's
     not needed.
@@ -789,8 +789,9 @@ def _classify_and_maybe_suppress(
         line_num: Line number (1-indexed)
 
     Returns:
-        str: Suppression reason if LIKELY_CODE (e.g., "function keyword argument")
-        None: If LIKELY_SECRET or AMBIGUOUS (retain as finding)
+        Tuple[bool, Optional[ClassificationResult]]:
+            - should_suppress: True if LIKELY_CODE (suppress), False otherwise
+            - classification_result: Full ClassificationResult object or None
     """
     # Lazy import to avoid overhead when classifier isn't used
     from ..classifier import context_classifier
@@ -815,13 +816,8 @@ def _classify_and_maybe_suppress(
     result = classifier.classify(line, classifier_start, classifier_end)
 
     # Only suppress LIKELY_CODE (high-confidence FP)
-    if result.classification == context_classifier.Classification.LIKELY_CODE:
-        return (
-            f"{result.reason} (confidence: {result.confidence}, rule: {result.rule_name})"
-        )
-
-    # LIKELY_SECRET and AMBIGUOUS remain findings
-    return None
+    should_suppress = result.classification == context_classifier.Classification.LIKELY_CODE
+    return should_suppress, result
 
 
 def _scan_single_file(
@@ -881,33 +877,44 @@ def _scan_single_file(
                         break
 
                     # Milestone 4: Context classifier suppression for Generic API Key
+                    # Milestone 7: Expose classification on findings for enforcement layer
                     # Applies AFTER BL-129 (line-local takes precedence), Python only
                     # (tokenizer designed for source code, not .env files), and only
                     # suppresses LIKELY_CODE classifications (high-confidence FPs like
                     # function keyword arguments, type annotations, destructuring).
-                    # LIKELY_SECRET and AMBIGUOUS remain findings.
+                    # LIKELY_SECRET and AMBIGUOUS remain findings (with classification attached).
+                    classification_result = None
                     if secret_name == "Generic API Key" and file_path.endswith(".py"):
-                        suppression_result = _classify_and_maybe_suppress(
+                        should_suppress, classification_result = _classify_and_maybe_suppress(
                             line, match.start(), match.end(), match, secret_name, file_path, line_num
                         )
-                        if suppression_result:
+                        if should_suppress:
                             logger.debug(
                                 f"Suppressed {secret_name} at {_display_path(file_path)}:{line_num}: "
-                                f"{suppression_result}"
+                                f"{classification_result.reason} (confidence: {classification_result.confidence}, "
+                                f"rule: {classification_result.rule_name})"
                             )
                             break
 
-                    secret_findings.append(
-                        {
-                            "file_path": _display_path(file_path),
-                            "line_num": line_num,
-                            "secret_type": secret_name,
-                            # Only the matched span's length, never the raw
-                            # line or any part of the matched value itself --
-                            # see _redact_match.
-                            "redacted_preview": _redact_match(match.group(0)),
-                        }
-                    )
+                    # Create finding dict with classification metadata if available
+                    finding = {
+                        "file_path": _display_path(file_path),
+                        "line_num": line_num,
+                        "secret_type": secret_name,
+                        # Only the matched span's length, never the raw
+                        # line or any part of the matched value itself --
+                        # see _redact_match.
+                        "redacted_preview": _redact_match(match.group(0)),
+                    }
+
+                    # Attach classification if classifier was applied (M7 Phase 1)
+                    if classification_result is not None:
+                        # Classification is either LIKELY_SECRET or AMBIGUOUS at this point
+                        # (LIKELY_CODE was suppressed above)
+                        finding["classification"] = classification_result.classification.value
+                        finding["classification_confidence"] = classification_result.confidence
+
+                    secret_findings.append(finding)
                     break
 
             # Only tried when nothing above already matched -- a longer
@@ -1299,6 +1306,7 @@ def run_scan(
     config_path: Optional[str],
     exclude_patterns: Optional[List[str]],
     service_name: Optional[str] = None,
+    enforce_mode: bool = False,
 ):
     """
     The main function to orchestrate the scanning process.
@@ -1306,6 +1314,10 @@ def run_scan(
     If `service_name` is provided, scans for variables against that service's schema.
     Otherwise, on a multi-service project, each file is checked against
     whichever service's schema its directory belongs to.
+
+    M7: If `enforce_mode` is True, uses the enforcement layer to decide whether
+    to allow the operation (Git-hook mode with interactive override for high-confidence
+    findings). Normal scan mode (enforce_mode=False) preserves existing behavior.
     """
     all_secret_findings, all_undeclared_findings, skipped_large_files = _scan_files(
         paths, staged_only, config_path, exclude_patterns, service_name
@@ -1318,6 +1330,58 @@ def run_scan(
         for skipped_path in skipped_large_files:
             console.print(f"    [dim]{skipped_path}[/dim]")
 
+    # M7: Enforcement mode (Git hook with interactive override)
+    if enforce_mode:
+        from . import enforcement
+
+        # Incomplete coverage is fatal in enforcement mode (same as staged_only)
+        if skipped_large_files:
+            console.print(
+                "\n[bold red]Commit aborted. Coverage incomplete (files > 1MB skipped).[/bold red]"
+            )
+            raise typer.Exit(code=1)
+
+        # Use enforcement layer to decide whether to allow operation
+        interactive = enforcement._is_interactive()
+        allowed = enforcement.enforce_findings(
+            all_secret_findings,
+            all_undeclared_findings,
+            interactive=interactive,
+        )
+
+        if allowed:
+            # No findings or user explicitly overrode
+            console.print(
+                "\n[bold green]✓ Commit allowed.[/bold green]"
+            )
+            return
+        else:
+            # Blocked by enforcement policy
+            # Display findings using normal tables for context
+            if all_undeclared_findings:
+                console.print(
+                    f"\n[bold yellow]⚠️  WARNING: Found {len(all_undeclared_findings)} undeclared variable(s)![/bold yellow]"
+                )
+                undeclared_table = Table(
+                    title="Undeclared Variable Usage", border_style="yellow"
+                )
+                undeclared_table.add_column("File", style="cyan")
+                undeclared_table.add_column("Line", style="yellow")
+                undeclared_table.add_column("Variable Name", style="white")
+                for finding in all_undeclared_findings:
+                    undeclared_table.add_row(
+                        finding["file_path"],
+                        str(finding["line_num"]),
+                        finding["variable_name"],
+                    )
+                console.print(undeclared_table)
+
+            console.print(
+                "\n[bold red]Commit aborted. Please fix the issues above before committing.[/bold red]"
+            )
+            raise typer.Exit(code=1)
+
+    # Normal scan mode (existing behavior)
     found_issues = False
     if all_secret_findings:
         found_issues = True
@@ -1541,7 +1605,8 @@ def _generate_pre_commit_hook_content() -> str:
         "#!/bin/sh\n\n"
         "# Hook installed by EnvShield\n"
         "# Scans staged files for hardcoded secrets AND undeclared environment variables.\n"
-        "envshield scan --staged\n"
+        "# M7: --enforce enables interactive override for high-confidence secret findings.\n"
+        "envshield scan --staged --enforce\n"
         "STATUS=$?\n"
     )
 
