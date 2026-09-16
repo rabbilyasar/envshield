@@ -19,9 +19,10 @@ from .tokenizer import extract_context
 
 class Classification(Enum):
     """Three-level classification for secret candidates."""
+
     LIKELY_SECRET = "likely_secret"  # High confidence: looks like a secret value
-    LIKELY_CODE = "likely_code"       # High confidence: syntactic code pattern
-    AMBIGUOUS = "ambiguous"           # Uncertain: could be either
+    LIKELY_CODE = "likely_code"  # High confidence: syntactic code pattern
+    AMBIGUOUS = "ambiguous"  # Uncertain: could be either
 
 
 @dataclass
@@ -36,6 +37,7 @@ class ClassificationResult:
         rule_name: Name of the rule that matched (for debugging/testing)
         context_summary: Key context fields (never includes secret values)
     """
+
     classification: Classification
     confidence: str
     reason: str
@@ -80,10 +82,7 @@ class ContextClassifier:
     """
 
     def classify(
-        self,
-        line: str,
-        match_start: int,
-        match_end: int
+        self, line: str, match_start: int, match_end: int
     ) -> ClassificationResult:
         """
         Classify a regex match candidate based on syntactic context.
@@ -115,7 +114,7 @@ class ContextClassifier:
                 confidence="HIGH",
                 reason="string literal value",
                 rule_name="string_literal",
-                context_summary={"is_string_literal": True}
+                context_summary={"is_string_literal": True},
             )
 
         # Rule 2: Type annotation → LIKELY_CODE
@@ -127,8 +126,8 @@ class ContextClassifier:
                 rule_name="type_annotation",
                 context_summary={
                     "is_type_annotation": True,
-                    "preceding_operator": context.preceding_operator
-                }
+                    "preceding_operator": context.preceding_operator,
+                },
             )
 
         # Rule 3: Function keyword argument (identifier) → LIKELY_CODE
@@ -136,8 +135,8 @@ class ContextClassifier:
         if (
             context.inside_function_call
             and not context.is_string_literal
-            and context.preceding_operator == '='
-            and context.following_char in (',', ')')
+            and context.preceding_operator == "="
+            and context.following_char in (",", ")")
         ):
             return ClassificationResult(
                 classification=Classification.LIKELY_CODE,
@@ -148,8 +147,8 @@ class ContextClassifier:
                     "inside_function_call": True,
                     "preceding_operator": "=",
                     "following_char": context.following_char,
-                    "is_string_literal": False
-                }
+                    "is_string_literal": False,
+                },
             )
 
         # Rule 4: Multi-line keyword argument heuristic → LIKELY_CODE
@@ -158,8 +157,8 @@ class ContextClassifier:
         # where opening paren is on previous line
         if (
             not context.is_string_literal
-            and context.preceding_operator == '='
-            and context.following_char in (',', ')')
+            and context.preceding_operator == "="
+            and context.following_char in (",", ")")
         ):
             return ClassificationResult(
                 classification=Classification.LIKELY_CODE,
@@ -169,8 +168,8 @@ class ContextClassifier:
                 context_summary={
                     "preceding_operator": "=",
                     "following_char": context.following_char,
-                    "is_string_literal": False
-                }
+                    "is_string_literal": False,
+                },
             )
 
         # Rule 5: Destructuring → LIKELY_CODE
@@ -181,10 +180,7 @@ class ContextClassifier:
                 confidence="HIGH",
                 reason="destructuring assignment",
                 rule_name="destructuring",
-                context_summary={
-                    "inside_braces": True,
-                    "is_string_literal": False
-                }
+                context_summary={"inside_braces": True, "is_string_literal": False},
             )
 
         # Rule 6: REMOVED - Identifier reference overlaps with BL-129
@@ -226,8 +222,8 @@ class ContextClassifier:
                 "following_char": context.following_char,
                 "inside_function_call": context.inside_function_call,
                 "inside_braces": context.inside_braces,
-                "is_type_annotation": context.is_type_annotation
-            }
+                "is_type_annotation": context.is_type_annotation,
+            },
         )
 
     def is_likely_secret(self, line: str, match_start: int, match_end: int) -> bool:
@@ -242,7 +238,10 @@ class ContextClassifier:
         Returns:
             True if classification is LIKELY_SECRET, False otherwise
         """
-        return self.classify(line, match_start, match_end).classification == Classification.LIKELY_SECRET
+        return (
+            self.classify(line, match_start, match_end).classification
+            == Classification.LIKELY_SECRET
+        )
 
     def is_likely_code(self, line: str, match_start: int, match_end: int) -> bool:
         """
@@ -256,7 +255,10 @@ class ContextClassifier:
         Returns:
             True if classification is LIKELY_CODE, False otherwise
         """
-        return self.classify(line, match_start, match_end).classification == Classification.LIKELY_CODE
+        return (
+            self.classify(line, match_start, match_end).classification
+            == Classification.LIKELY_CODE
+        )
 
     def is_ambiguous(self, line: str, match_start: int, match_end: int) -> bool:
         """
@@ -270,11 +272,13 @@ class ContextClassifier:
         Returns:
             True if classification is AMBIGUOUS, False otherwise
         """
-        return self.classify(line, match_start, match_end).classification == Classification.AMBIGUOUS
+        return (
+            self.classify(line, match_start, match_end).classification
+            == Classification.AMBIGUOUS
+        )
 
     def classify_batch(
-        self,
-        candidates: list[Tuple[str, int, int]]
+        self, candidates: list[Tuple[str, int, int]]
     ) -> list[ClassificationResult]:
         """
         Classify multiple candidates in batch.
@@ -307,5 +311,3 @@ def classify_match(line: str, match_start: int, match_end: int) -> Classificatio
     """
     classifier = ContextClassifier()
     return classifier.classify(line, match_start, match_end)
-
-
