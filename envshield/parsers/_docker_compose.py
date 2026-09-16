@@ -65,9 +65,87 @@ class DockerComposeParser(BaseParser):
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"File not found: {file_path}")
 
+        doc = self._load_yaml_document(file_path)
+        services = doc.get("services") if isinstance(doc, dict) else None
+        if not isinstance(services, dict) or not services:
+            return {} if get_values else set()
+
+        container = self._resolve_container(services, file_path)
+        service_def = services.get(container) or {}
+        base_dir = os.path.dirname(os.path.abspath(file_path))
+        variables = self._extract_service_environment(service_def, base_dir)
+
+        return variables if get_values else set(variables.keys())
+
+    def get_vars_for_layers(
+        self, file_paths: list[str], get_values: bool = False
+    ) -> set[str] | dict[str, str]:
+        """
+        BL-025: merges an ordered list of Compose files (a base file plus
+        zero or more override layers -- exactly what Compose itself applies
+        by default for 'docker-compose.yml' + 'docker-compose.override.yml')
+        into ONE logical environment representation, validated as a single
+        manifest rather than per-file with reconciliation afterward.
+
+        Only the `environment:`/`env_file:` semantics this parser already
+        understands are merged -- volumes, networks, ports, build, etc. are
+        never inspected, by design (this is not a generic Compose merge
+        engine). The merge itself is Compose's own documented rule for
+        these fields: a later file's entry for a given variable replaces an
+        earlier one; a variable untouched by a later file keeps whatever
+        value an earlier file gave it. Because get_vars already reduces
+        each single file's own `environment:` + `env_file:` down to one
+        flat {var: value} map (env_file already loses to an explicit
+        `environment:` entry within that same file, per docker-compose's
+        own precedence), merging layers is exactly an ordered dict.update()
+        across those already-resolved per-file maps -- no separate list-
+        vs-mapping merge logic is needed, since both syntaxes already
+        collapse to the same flat shape before layers are ever combined.
+
+        The service/container name is resolved once, from the first layer
+        that actually declares any services (ordinarily the base file) --
+        using the exact same resolution algorithm get_vars itself uses, so
+        an ambiguous or missing container is reported identically to the
+        single-file case. A *later* layer that simply doesn't mention that
+        service contributes nothing and is not an error: an override file
+        legitimately only touching a subset of services is normal Compose
+        usage, not a malformed manifest.
+        """
+        if not file_paths:
+            raise EnvShieldException(
+                "get_vars_for_layers requires at least one Compose file."
+            )
+
+        missing = [fp for fp in file_paths if not os.path.exists(fp)]
+        if missing:
+            raise FileNotFoundError(
+                "Compose layer file(s) not found: " + ", ".join(missing)
+            )
+
+        merged: dict[str, str] = {}
+        resolved_container: str | None = self.container
+
+        for file_path in file_paths:
+            doc = self._load_yaml_document(file_path)
+            services = doc.get("services") if isinstance(doc, dict) else None
+            if not isinstance(services, dict) or not services:
+                continue
+
+            if resolved_container is None:
+                resolved_container = self._resolve_container(services, file_path)
+            elif resolved_container not in services:
+                continue
+
+            service_def = services.get(resolved_container) or {}
+            base_dir = os.path.dirname(os.path.abspath(file_path))
+            merged.update(self._extract_service_environment(service_def, base_dir))
+
+        return merged if get_values else set(merged.keys())
+
+    def _load_yaml_document(self, file_path: str) -> dict:
         with open(file_path, "r") as f:
             try:
-                doc = yaml.safe_load(f) or {}
+                return yaml.safe_load(f) or {}
             except yaml.YAMLError as e:
                 raise EnvShieldException(
                     f"Could not parse '{file_path}': {safe_yaml_error_message(e)}. "
@@ -75,29 +153,28 @@ class DockerComposeParser(BaseParser):
                     "('---'-separated), only a single document is supported."
                 )
 
-        services = doc.get("services") if isinstance(doc, dict) else None
-        if not isinstance(services, dict) or not services:
-            return {} if get_values else set()
-
+    def _resolve_container(self, services: dict, file_path: str) -> str:
         container = self.container
         if container is None:
             if len(services) == 1:
-                container = next(iter(services))
+                return next(iter(services))
             elif self.prefer and self.prefer in services:
-                container = self.prefer
+                return self.prefer
             else:
                 raise EnvShieldException(
                     f"This docker-compose file declares multiple services ({', '.join(sorted(services))}) -- pass --container to pick one."
                 )
         elif container not in services:
             raise EnvShieldException(
-                f"Service '{container}' not found in this docker-compose file. Available: {', '.join(sorted(services))}"
+                f"Service '{container}' not found in this docker-compose file. Available: {', '.join(sorted(services))} ({file_path})"
             )
+        return container
 
-        service_def = services.get(container) or {}
+    def _extract_service_environment(
+        self, service_def: dict, base_dir: str
+    ) -> dict[str, str]:
         variables: dict[str, str] = {}
 
-        base_dir = os.path.dirname(os.path.abspath(file_path))
         env_files = service_def.get("env_file")
         if env_files:
             if isinstance(env_files, str):
@@ -134,7 +211,7 @@ class DockerComposeParser(BaseParser):
                 else:
                     variables[entry.strip()] = self.UNRESOLVED_VALUE
 
-        return variables if get_values else set(variables.keys())
+        return variables
 
     def _resolve_interpolation(self, value: str) -> tuple[str | None, str]:
         """

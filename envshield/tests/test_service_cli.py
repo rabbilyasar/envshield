@@ -250,7 +250,13 @@ def test_service_discover_auto_registers_a_found_compose_file(tmp_path):
 
         assert result.exit_code == 0
         manifests = config_manager.get_deployment_manifests("api")
-        assert manifests == [{"path": "docker-compose.yml", "container": "api"}]
+        assert manifests == [
+            {
+                "path": "docker-compose.yml",
+                "paths": ["docker-compose.yml"],
+                "container": "api",
+            }
+        ]
         assert "docker-compose.yml" in result.stdout
 
 
@@ -264,7 +270,13 @@ def test_service_add_auto_detects_compose_file_in_service_directory(tmp_path):
 
         assert result.exit_code == 0
         manifests = config_manager.get_deployment_manifests("api")
-        assert manifests == [{"path": "api/docker-compose.yml", "container": "api"}]
+        assert manifests == [
+            {
+                "path": "api/docker-compose.yml",
+                "paths": ["api/docker-compose.yml"],
+                "container": "api",
+            }
+        ]
 
 
 def test_service_add_does_not_auto_attach_a_manifest_that_does_not_name_it(tmp_path):
@@ -308,7 +320,13 @@ def test_service_add_explicit_deployment_manifest_and_container(tmp_path):
 
         assert result.exit_code == 0
         manifests = config_manager.get_deployment_manifests("api")
-        assert manifests == [{"path": "docker-compose.yml", "container": "backend"}]
+        assert manifests == [
+            {
+                "path": "docker-compose.yml",
+                "paths": ["docker-compose.yml"],
+                "container": "backend",
+            }
+        ]
 
 
 def test_commands_find_envshield_yml_from_a_subdirectory(tmp_path):

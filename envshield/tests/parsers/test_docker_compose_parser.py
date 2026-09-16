@@ -668,3 +668,212 @@ class TestInterpolationComparesAgainstHostVariableName:
         variables = DockerComposeParser().get_vars(str(f), get_values=True)
 
         assert variables["PG_PASS"] == "from-default"
+
+
+class TestMultiFileLayering:
+    """
+    BL-025: an ordered list of Compose files (a base file plus zero or more
+    override layers) merged into ONE logical environment representation,
+    validated as a single manifest -- not per-file with reconciliation
+    afterward. Only environment:/env_file: semantics are merged; every
+    other Compose field (volumes, networks, ports, ...) is never inspected.
+    """
+
+    def test_single_file_via_get_vars_for_layers_matches_get_vars(self, tmp_path):
+        """The most important backward-compatibility case: file: vs files: [file]."""
+        f = tmp_path / "docker-compose.yml"
+        f.write_text("services:\n  api:\n    environment:\n      - FOO=bar\n")
+
+        single = DockerComposeParser().get_vars(str(f), get_values=True)
+        layered = DockerComposeParser().get_vars_for_layers([str(f)], get_values=True)
+
+        assert single == layered == {"FOO": "bar"}
+
+    def test_override_replaces_existing_value(self, tmp_path):
+        base = tmp_path / "docker-compose.yml"
+        base.write_text("services:\n  api:\n    environment:\n      FOO: base\n")
+        override = tmp_path / "docker-compose.override.yml"
+        override.write_text(
+            "services:\n  api:\n    environment:\n      FOO: override\n"
+        )
+
+        variables = DockerComposeParser().get_vars_for_layers(
+            [str(base), str(override)], get_values=True
+        )
+
+        assert variables == {"FOO": "override"}
+
+    def test_override_adds_new_variable_without_dropping_base(self, tmp_path):
+        base = tmp_path / "docker-compose.yml"
+        base.write_text(
+            "services:\n  api:\n    environment:\n      FOO: base\n      BAR: base\n"
+        )
+        override = tmp_path / "docker-compose.override.yml"
+        override.write_text(
+            "services:\n  api:\n    environment:\n      BAR: override\n      BAZ: override\n"
+        )
+
+        variables = DockerComposeParser().get_vars_for_layers(
+            [str(base), str(override)], get_values=True
+        )
+
+        assert variables == {"FOO": "base", "BAR": "override", "BAZ": "override"}
+
+    def test_base_only_variable_survives_an_override_that_does_not_mention_it(
+        self, tmp_path
+    ):
+        base = tmp_path / "docker-compose.yml"
+        base.write_text("services:\n  api:\n    environment:\n      FOO: base\n")
+        override = tmp_path / "docker-compose.override.yml"
+        override.write_text(
+            "services:\n  api:\n    environment:\n      BAR: override\n"
+        )
+
+        variables = DockerComposeParser().get_vars_for_layers(
+            [str(base), str(override)], get_values=True
+        )
+
+        assert variables["FOO"] == "base"
+        assert variables["BAR"] == "override"
+
+    def test_environment_list_syntax_across_layers(self, tmp_path):
+        """The exact scenario from the milestone spec, list form."""
+        base = tmp_path / "docker-compose.yml"
+        base.write_text(
+            "services:\n  api:\n    environment:\n      - FOO=base\n      - BAR=base\n"
+        )
+        override = tmp_path / "docker-compose.override.yml"
+        override.write_text(
+            "services:\n  api:\n    environment:\n      - BAR=override\n      - BAZ=override\n"
+        )
+
+        variables = DockerComposeParser().get_vars_for_layers(
+            [str(base), str(override)], get_values=True
+        )
+
+        assert variables == {"FOO": "base", "BAR": "override", "BAZ": "override"}
+
+    def test_environment_mapping_syntax_across_layers(self, tmp_path):
+        """The exact scenario from the milestone spec, mapping form."""
+        base = tmp_path / "docker-compose.yml"
+        base.write_text(
+            "services:\n  api:\n    environment:\n      FOO: base\n      BAR: base\n"
+        )
+        override = tmp_path / "docker-compose.override.yml"
+        override.write_text(
+            "services:\n  api:\n    environment:\n      BAR: override\n      BAZ: override\n"
+        )
+
+        variables = DockerComposeParser().get_vars_for_layers(
+            [str(base), str(override)], get_values=True
+        )
+
+        assert variables == {"FOO": "base", "BAR": "override", "BAZ": "override"}
+
+    def test_three_layers_preserve_declared_ordering(self, tmp_path):
+        base = tmp_path / "a.yml"
+        base.write_text("services:\n  api:\n    environment:\n      FOO: a\n")
+        middle = tmp_path / "b.yml"
+        middle.write_text("services:\n  api:\n    environment:\n      FOO: b\n")
+        last = tmp_path / "c.yml"
+        last.write_text("services:\n  api:\n    environment:\n      FOO: c\n")
+
+        variables = DockerComposeParser().get_vars_for_layers(
+            [str(base), str(middle), str(last)], get_values=True
+        )
+        # Reversed order must give the opposite (earlier-wins-last) result,
+        # proving the merge actually respects declared order rather than,
+        # say, alphabetical or dict-insertion coincidence.
+        reversed_variables = DockerComposeParser().get_vars_for_layers(
+            [str(last), str(middle), str(base)], get_values=True
+        )
+
+        assert variables == {"FOO": "c"}
+        assert reversed_variables == {"FOO": "a"}
+
+    def test_missing_override_file_produces_a_clear_error(self, tmp_path):
+        base = tmp_path / "docker-compose.yml"
+        base.write_text("services:\n  api:\n    environment:\n      FOO: base\n")
+        missing = tmp_path / "docker-compose.override.yml"
+
+        with pytest.raises(FileNotFoundError, match="override.yml"):
+            DockerComposeParser().get_vars_for_layers(
+                [str(base), str(missing)], get_values=True
+            )
+
+    def test_empty_file_list_is_rejected(self):
+        with pytest.raises(EnvShieldException):
+            DockerComposeParser().get_vars_for_layers([], get_values=True)
+
+    def test_override_layer_that_does_not_define_the_service_contributes_nothing(
+        self, tmp_path
+    ):
+        """
+        A later layer legitimately touching only a subset of services is
+        normal Compose usage, not an error -- only the base (first) layer's
+        container resolution is strict.
+        """
+        base = tmp_path / "docker-compose.yml"
+        base.write_text(
+            "services:\n"
+            "  api:\n    environment:\n      FOO: base\n"
+            "  worker:\n    environment:\n      FOO: base\n"
+        )
+        override = tmp_path / "docker-compose.override.yml"
+        override.write_text(
+            "services:\n  worker:\n    environment:\n      FOO: override\n"
+        )
+
+        variables = DockerComposeParser(container="api").get_vars_for_layers(
+            [str(base), str(override)], get_values=True
+        )
+
+        assert variables == {"FOO": "base"}
+
+    def test_bl025_regression_base_declares_a_b_override_declares_c(self, tmp_path):
+        """
+        The exact regression this milestone exists to fix: A and B must
+        never be reported missing just because the override doesn't
+        mention them -- the merged result must show A, B, and C together.
+        """
+        base = tmp_path / "docker-compose.yml"
+        base.write_text(
+            "services:\n  api:\n    environment:\n      - A=base-a\n      - B=base-b\n"
+        )
+        override = tmp_path / "docker-compose.override.yml"
+        override.write_text(
+            "services:\n  api:\n    environment:\n      - C=override-c\n"
+        )
+
+        variables = DockerComposeParser().get_vars_for_layers(
+            [str(base), str(override)], get_values=False
+        )
+
+        assert variables == {"A", "B", "C"}
+
+    def test_ambiguous_container_in_base_layer_still_raises(self, tmp_path):
+        base = tmp_path / "docker-compose.yml"
+        base.write_text("services:\n  api:\n    image: x\n  worker:\n    image: y\n")
+        override = tmp_path / "docker-compose.override.yml"
+        override.write_text(
+            "services:\n  api:\n    environment:\n      FOO: override\n"
+        )
+
+        with pytest.raises(EnvShieldException, match="multiple services"):
+            DockerComposeParser().get_vars_for_layers([str(base), str(override)])
+
+    def test_env_file_reference_in_an_override_layer_is_resolved(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".env.override").write_text("FROM_OVERRIDE_ENV_FILE=value\n")
+        base = tmp_path / "docker-compose.yml"
+        base.write_text("services:\n  api:\n    environment:\n      FOO: base\n")
+        override = tmp_path / "docker-compose.override.yml"
+        override.write_text("services:\n  api:\n    env_file:\n      - .env.override\n")
+
+        variables = DockerComposeParser().get_vars_for_layers(
+            [str(base), str(override)], get_values=True
+        )
+
+        assert variables == {"FOO": "base", "FROM_OVERRIDE_ENV_FILE": "value"}

@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from ..config import manager as config_manager
-from ..parsers.factory import get_parser
+from ..parsers.factory import get_manifest_parser_and_vars
 from . import discovery, schema_types
 from .exceptions import EnvShieldException, VariableNotFoundError
 
@@ -147,7 +147,17 @@ def _manifest_references(
     references: List[ManifestReference] = []
     for manifest in manifests:
         path, container = manifest["path"], manifest.get("container")
-        parser = get_parser(path, container=container)
+        try:
+            parser, declared_vars = get_manifest_parser_and_vars(
+                manifest["paths"], container=container, get_values=False
+            )
+        except (FileNotFoundError, OSError, ValueError, EnvShieldException) as e:
+            references.append(
+                ManifestReference(
+                    path=path, container=container, status="error", detail=str(e)
+                )
+            )
+            continue
         if not parser:
             references.append(
                 ManifestReference(
@@ -155,15 +165,6 @@ def _manifest_references(
                     container=container,
                     status="error",
                     detail=f"No parser available for '{path}'.",
-                )
-            )
-            continue
-        try:
-            declared_vars = parser.get_vars(path, get_values=False)
-        except (FileNotFoundError, OSError, ValueError, EnvShieldException) as e:
-            references.append(
-                ManifestReference(
-                    path=path, container=container, status="error", detail=str(e)
                 )
             )
             continue

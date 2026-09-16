@@ -4,7 +4,9 @@
 # '.yml'/'.yaml' extension with everything else).
 
 import os
+from typing import Dict, List, Optional, Set, Tuple, Union
 
+from ..core.exceptions import EnvShieldException
 from ._base import BaseParser
 from ._deployment import detect_deployment_format
 from ._docker_compose import DockerComposeParser
@@ -50,3 +52,44 @@ def get_parser(
     # In the future, we can add more parsers here (e.g., for .json, .toml)
 
     return None
+
+
+def get_manifest_parser_and_vars(
+    paths: List[str],
+    container: Optional[str] = None,
+    prefer: Optional[str] = None,
+    get_values: bool = True,
+) -> Tuple[Optional[BaseParser], Optional[Union[Dict[str, str], Set[str]]]]:
+    """
+    Resolves and parses ONE logical deployment manifest from its ordered
+    layer file(s) -- the single place 'check'/'doctor'/'explain' all get a
+    manifest's variables from, so BL-025's Compose base+override merging
+    never needs a second implementation.
+
+    A single path behaves exactly like `get_parser(path, ...).get_vars(path,
+    ...)` -- unchanged from before BL-025. More than one path is meaningful
+    only for Docker Compose (an ordered base + override layer list); any
+    other manifest format raises, since 'files:' is explicitly Compose-only
+    -- see envshield.yml's own manifest registration rules.
+
+    Returns (None, None) if no parser could be found for a single path
+    (mirroring get_parser's own None contract). Raises FileNotFoundError,
+    ValueError, or EnvShieldException exactly as get_parser()/.get_vars()
+    already do -- callers catch the same exception types as before.
+    """
+    if len(paths) == 1:
+        parser = get_parser(paths[0], container=container, prefer=prefer)
+        if parser is None:
+            return None, None
+        return parser, parser.get_vars(paths[0], get_values=get_values)
+
+    fmt = detect_deployment_format(paths[0])
+    if fmt != "docker-compose":
+        raise EnvShieldException(
+            "A manifest registered with multiple 'files:' is only supported "
+            f"for Docker Compose base+override layering -- '{paths[0]}' is "
+            "not a docker-compose file."
+        )
+    parser = DockerComposeParser(container=container, prefer=prefer)
+    values = parser.get_vars_for_layers(paths, get_values=get_values)
+    return parser, values

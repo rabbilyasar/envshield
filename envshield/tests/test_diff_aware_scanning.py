@@ -135,7 +135,7 @@ class TestScanSingleFileWithDiffAware:
         content = (
             "DB_PASS = 'old_fake_password_123'\n"  # line 1 - pre-existing fake
             "API_KEY = 'old_fake_api_key_12345'\n"  # line 2 - pre-existing fake
-            "REAL_SECRET = 'real_secret_key_with_long_content_here'\n"  # line 3 - newly-added real secret
+            "REAL_SECRET = 'real_secret_key_w1th_long_c0ntent_h3re'\n"  # line 3 - newly-added real secret
         )
         schema_vars = set()
 

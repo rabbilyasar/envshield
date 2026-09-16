@@ -39,6 +39,19 @@ SECRET_KEY_KEYWORDS = [
     "key",
     "auth",
     "credential",
+    # Compound forms with no underscore separator: e.g. TRAVELPAY_APIKEY
+    # (a real, live variable found on a real Zeus codebase) never splits
+    # into an "api"/"key" token pair, so the single "key" keyword never
+    # matches it -- a genuine miss on a naming convention common enough
+    # in third-party API docs (many services literally call the field
+    # "apikey") that it isn't Zeus-specific. Each addition here is a
+    # single, unambiguous whole word -- not a suffix/substring rule --
+    # so it can't reintroduce the MONKEY_PATCH/AUTHOR_NAME false
+    # positives token-based matching exists to avoid.
+    "apikey",
+    "accesskey",
+    "secretkey",
+    "authtoken",
 ]
 
 # Naming conventions several frontend frameworks use to mark an env var as

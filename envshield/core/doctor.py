@@ -9,7 +9,7 @@ import typer
 from rich.console import Console
 
 from ..config import manager as config_manager
-from ..parsers.factory import get_parser
+from ..parsers.factory import get_manifest_parser_and_vars, get_parser
 from . import scanner, schema_manager, service_discovery, setup_manager
 from .exceptions import EnvShieldException
 
@@ -125,10 +125,11 @@ def _check_deployment_manifest(service_name: str):
     messages = []
     for manifest in manifests:
         try:
-            parser = get_parser(
-                manifest["path"],
+            parser, local_values = get_manifest_parser_and_vars(
+                manifest["paths"],
                 container=manifest.get("container"),
                 prefer=service_name,
+                get_values=True,
             )
             if not parser:
                 all_clean = False
@@ -136,7 +137,6 @@ def _check_deployment_manifest(service_name: str):
                     f"Cannot parse deployment manifest '{manifest['path']}'."
                 )
                 continue
-            local_values = parser.get_vars(manifest["path"], get_values=True)
 
             diff = schema_manager.diff_against_schema(
                 schema, local_values, has_unresolved_source=parser.has_unresolved_source
@@ -195,10 +195,11 @@ def _check_manifest_source_health(service_name: str):
     messages = []
     for manifest in manifests:
         try:
-            parser = get_parser(
-                manifest["path"],
+            parser, _ = get_manifest_parser_and_vars(
+                manifest["paths"],
                 container=manifest.get("container"),
                 prefer=service_name,
+                get_values=True,
             )
             if not parser:
                 all_ok = False
@@ -206,7 +207,6 @@ def _check_manifest_source_health(service_name: str):
                     f"Cannot parse deployment manifest '{manifest['path']}'."
                 )
                 continue
-            parser.get_vars(manifest["path"], get_values=True)
             messages.append(f"'{manifest['path']}' exists and parses.")
         except (EnvShieldException, FileNotFoundError, ValueError) as e:
             all_ok = False

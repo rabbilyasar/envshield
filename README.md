@@ -249,7 +249,25 @@ jobs:
           envshield undeclared "$BASE" HEAD
 ```
 
-Both commands exit non-zero on a real finding — nothing beyond the exit code is required to gate a PR. Add `--json` if you want to post a custom summary instead.
+Both commands exit non-zero on a real finding, and also on an error that prevented evaluation (a bad revision, a schema that failed to parse) — never a silent "clean" for something it couldn't actually check. Add `--json` if you want to post a custom summary instead.
+
+### SARIF output (`undeclared --sarif`)
+
+`envshield undeclared` also supports `--sarif` — a standard [SARIF 2.1.0](https://docs.oasis-open.org/sarif/sarif/v2.1.0/) log, for GitHub Code Scanning or any other SARIF-consuming CI tool, so a missing declaration is annotated on its exact file and line rather than only appearing in a CI log:
+
+```yaml
+      - run: |
+          BASE=$(git merge-base "origin/${{ github.base_ref }}" HEAD)
+          envshield undeclared "$BASE" HEAD --sarif > envshield.sarif
+        continue-on-error: true   # upload the report even when it found something
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: envshield.sarif
+```
+
+`--sarif` only exists for `undeclared`, deliberately: each finding there has a real file and line to point at. `schema diff` findings describe the *contract* (a variable added, removed, or changed) rather than a source location, so forcing them into SARIF would mean inventing a line number that isn't real — use its `--json`/exit-code output instead, or annotate it yourself (e.g. a `jq` step over the JSON, emitting `::error::` workflow commands).
+
+An error that prevents evaluating a service (a bad revision, a schema that fails to parse) is never turned into a fabricated SARIF result — it's reported as a SARIF `invocation` with `executionSuccessful: false`, so a consumer can't mistake "couldn't check" for "checked and clean."
 
 ---
 
@@ -351,6 +369,34 @@ A few things worth knowing:
 
 ---
 
+## Docker Compose base + override layers (`files:`)
+
+A manifest registration normally points at one file:
+
+```yaml
+manifests:
+  - file: docker-compose.yml
+    containers:
+      api: api
+```
+
+A real Compose project commonly splits its configuration across a base file plus an override that Compose applies automatically (`docker-compose.yml` + `docker-compose.override.yml`, or any other `-f a -f b` combination). Registering only the base misses whatever the override adds; registering the override alone reports the base's own variables as falsely missing, since an override file is deliberately just a delta. `files:` registers the whole ordered layer set as **one** logical manifest instead:
+
+```yaml
+manifests:
+  - files:
+      - docker-compose.yml
+      - docker-compose.override.yml
+    containers:
+      api: api
+```
+
+Order matters — later files override earlier ones, exactly like `docker compose -f docker-compose.yml -f docker-compose.override.yml` itself. `check`/`doctor`/`explain` all validate the merged result as a single source, under one combined label (`"docker-compose.yml + docker-compose.override.yml"`).
+
+This is Compose-specific merge behavior for the fields EnvShield already understands (`environment:`, `env_file:`) — **not** a general YAML merge engine. Volumes, networks, ports, build, and every other Compose field are never inspected or merged. `files:` is unrelated to `completeness: union` above: union combines *presence across different kinds of source* (a local file and a manifest); `files:` merges *values across ordered layers of one Compose source*. A manifest entry can declare `file:` or `files:`, never both.
+
+---
+
 ## Supported languages / discovery
 
 Source-code discovery (what powers `undeclared` and `explain`'s "used in source" section) is AST-based for **Python** (`os.environ.get`, `os.getenv`, `os.environ[...]`) and pattern-based for **JavaScript/TypeScript** (`process.env.X`, `process.env["X"]`, `import.meta.env.X`, including single-level destructuring). No other language is discovered yet — the schema and validation commands work with any stack, but `undeclared`/`explain` can only see what's read from these two.
@@ -363,7 +409,7 @@ Source-code discovery (what powers `undeclared` and `explain`'s "used in source"
 
 A supporting check alongside the contract, not the product itself. `secret = true` on a field tells EnvShield (and `setup`, and code generation) that it's sensitive — the schema records that fact, never the actual value. On top of that:
 
-- **`envshield scan`** looks for hardcoded secrets by pattern (Stripe, AWS, GitHub tokens, and more), and for env-var reads the schema doesn't declare, in one pass. Values are always redacted in output — a Stripe *publishable* key (`pk_...`) is never flagged, since detection matches the secret-key pattern (`sk_...`) by shape, not the variable's name.
+- **`envshield scan`** looks for hardcoded secrets by pattern (Stripe, AWS, GitHub tokens, and more), and for env-var reads the schema doesn't declare, in one pass. Values are always redacted in output — a Stripe *publishable* key (`pk_...`) is never flagged, since detection matches the secret-key pattern (`sk_...`) by shape, not the variable's name. Python candidates are context-aware: code-shaped patterns like `key=CONSTANT` or `api_key: str` may be suppressed when they're clearly not secret values, while secret-shaped string literals remain detectable regardless of context.
 - **`envshield hook install`** wires `scan --staged` into a pre-commit hook, so a real secret is caught before it's committed, not after.
 
 ---

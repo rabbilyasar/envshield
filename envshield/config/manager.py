@@ -9,6 +9,7 @@ from envshield.core import schema_types
 from envshield.core.exceptions import (
     ConfigNotFoundError,
     ConfigParseError,
+    InvalidManifestDefinitionError,
     SchemaNotFoundError,
     SchemaParseError,
     SecretDefaultConflictError,
@@ -541,15 +542,50 @@ def remove_service(name: str) -> None:
         yaml.dump(config, f, sort_keys=False, indent=2)
 
 
-def add_manifest(file: str, containers: Dict[str, str]) -> None:
+def add_manifest(
+    file: Optional[str] = None,
+    containers: Optional[Dict[str, str]] = None,
+    files: Optional[List[str]] = None,
+) -> None:
     """
     Registers (or extends) one deployment manifest, mapping its container
     names to already-registered service names. Calling this again for the
-    same file merges in whatever new container mappings are given, rather
-    than replacing the entry outright -- the same "safe to run repeatedly"
-    property add_service has.
+    same file(s) merges in whatever new container mappings are given,
+    rather than replacing the entry outright -- the same "safe to run
+    repeatedly" property add_service has.
+
+    Exactly one of `file` (a single manifest) or `files` (BL-025: an
+    ordered list of Docker Compose base+override layers -- earlier entries
+    are base layers, later ones override them) must be given.
     """
-    file = _ensure_within_project(file, "deployment manifest path")
+    containers = containers or {}
+    if (file is None) == (files is None):
+        raise InvalidManifestDefinitionError(
+            "add_manifest requires exactly one of 'file' or 'files', not "
+            "both and not neither."
+        )
+
+    if files is not None:
+        if not isinstance(files, list) or not files:
+            raise InvalidManifestDefinitionError(
+                "'files' must be a non-empty list of Compose layer file paths."
+            )
+        resolved = [
+            _ensure_within_project(f, "deployment manifest path") for f in files
+        ]
+        match_key, match_value, entry_fields = (
+            "files",
+            resolved,
+            {"files": resolved},
+        )
+    else:
+        resolved_file = _ensure_within_project(file, "deployment manifest path")
+        match_key, match_value, entry_fields = (
+            "file",
+            resolved_file,
+            {"file": resolved_file},
+        )
+
     config = load_config()
     manifests = config.get("manifests")
     if not isinstance(manifests, list):
@@ -557,7 +593,7 @@ def add_manifest(file: str, containers: Dict[str, str]) -> None:
     config["manifests"] = manifests
 
     for entry in manifests:
-        if entry.get("file") == file:
+        if entry.get(match_key) == match_value:
             existing = entry.get("containers")
             entry["containers"] = {
                 **(existing if isinstance(existing, dict) else {}),
@@ -565,16 +601,68 @@ def add_manifest(file: str, containers: Dict[str, str]) -> None:
             }
             break
     else:
-        manifests.append({"file": file, "containers": dict(containers)})
+        manifests.append({**entry_fields, "containers": dict(containers)})
 
     with open(CONFIG_FILE_NAME, "w") as f:
         yaml.dump(config, f, sort_keys=False, indent=2)
 
 
+def _resolve_manifest_entry_paths(entry: Dict[str, Any]) -> Optional[List[str]]:
+    """
+    Normalizes one 'manifests:' entry's 'file'/'files' key into an ordered
+    list of validated, within-project paths -- 'file' becomes a single-
+    element list, 'files' (BL-025) is used as declared. Returns None for an
+    entry with neither key (nothing to validate, nothing to register --
+    matches the pre-BL-025 behavior of silently skipping such an entry).
+
+    Raises InvalidManifestDefinitionError for a malformed entry: both keys
+    given at once, or 'files' present but not a non-empty list -- a clear,
+    fail-fast error rather than silently picking one key or the other.
+    """
+    has_file = bool(entry.get("file"))
+    has_files = "files" in entry and entry.get("files") is not None
+    if has_file and has_files:
+        raise InvalidManifestDefinitionError(
+            "A 'manifests:' entry cannot declare both 'file' and 'files' -- "
+            "use 'file' for a single manifest, or 'files' for an ordered "
+            "list of Docker Compose base+override layers (BL-025), not both."
+        )
+    if has_files:
+        files = entry["files"]
+        if not isinstance(files, list) or not files:
+            raise InvalidManifestDefinitionError(
+                "A 'manifests:' entry's 'files' must be a non-empty list of file paths."
+            )
+        return [_ensure_within_project(f, f"deployment manifest '{f}'") for f in files]
+    if has_file:
+        file = entry["file"]
+        return [_ensure_within_project(file, f"deployment manifest '{file}'")]
+    return None
+
+
+def _manifest_display_path(paths: List[str]) -> str:
+    """
+    A single, human-readable label for a (possibly multi-file) manifest --
+    used anywhere a message names "the manifest" as one thing (e.g. "'X' is
+    in sync with schema"), so a base+override pair reads as the one logical
+    manifest BL-025 makes it, never as if either file alone were expected to
+    be self-sufficient.
+    """
+    return paths[0] if len(paths) == 1 else " + ".join(paths)
+
+
 def get_deployment_manifests(service_name: str) -> List[Dict[str, Any]]:
     """
     Returns every registered deployment manifest that maps one of its
-    containers to `service_name`, as [{"path": ..., "container": ...}, ...].
+    containers to `service_name`, as
+    [{"path": ..., "paths": [...], "container": ...}, ...].
+
+    "paths" is always a list (one element for a single-file manifest,
+    ordered base+override layers for BL-025's "files:" form) -- the one
+    representation every caller (check/doctor/explain) parses through, via
+    parsers.factory.get_manifest_parser_and_vars. "path" is a single,
+    human-readable label (see _manifest_display_path) kept for existing
+    display/error-message call sites that only ever expected one string.
 
     A service can legitimately show up in more than one manifest (a local
     docker-compose.yml and a production Kubernetes manifest, say), so this
@@ -588,14 +676,21 @@ def get_deployment_manifests(service_name: str) -> List[Dict[str, Any]]:
 
     results = []
     for entry in manifests:
-        file = entry.get("file")
         containers = entry.get("containers")
-        if not file or not isinstance(containers, dict):
+        if not isinstance(containers, dict):
+            continue
+        paths = _resolve_manifest_entry_paths(entry)
+        if paths is None:
             continue
         for container_name, mapped_service in containers.items():
             if mapped_service == service_name:
-                path = _ensure_within_project(file, f"deployment manifest '{file}'")
-                results.append({"path": path, "container": container_name})
+                results.append(
+                    {
+                        "path": _manifest_display_path(paths),
+                        "paths": paths,
+                        "container": container_name,
+                    }
+                )
     return results
 
 

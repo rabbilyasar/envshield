@@ -141,6 +141,96 @@ def test_scan_ignores_dependency_and_vcs_dirs_by_default(tmp_path):
         assert "No issues found" in result.stdout
 
 
+class TestVendorPathExclusion:
+    """
+    BL-127: real-world scanning found FPs only in third-party vendored code
+    (a minified Private Key stub, a minified plugin bundle, a vendored
+    TypeScript .d.ts's type-signature parameters) with zero confirmed real
+    credentials ever found under a vendor/ path. 'vendor' was added to
+    DEFAULT_EXCLUDED_DIRS -- same mechanism as node_modules/.venv, not a
+    new exclusion system.
+    """
+
+    def test_top_level_vendor_dir_is_skipped(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            os.makedirs("vendor")
+            with open("vendor/jsencrypt.min.js", "w") as f:
+                f.write("-----BEGIN RSA PRIVATE KEY-----\n")
+
+            result = runner.invoke(app, ["scan"])
+
+            assert result.exit_code == 0, result.stdout
+            assert "No issues found" in result.stdout
+
+    def test_nested_vendor_dir_is_skipped(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            os.makedirs("hermes/app/static/vendor/tinymce")
+            with open("hermes/app/static/vendor/tinymce/plugin.min.js", "w") as f:
+                f.write("const key = 'sk_live_123456789abcdefghijklmnopqrstuv';\n")
+
+            result = runner.invoke(app, ["scan"])
+
+            assert result.exit_code == 0, result.stdout
+            assert "No issues found" in result.stdout
+
+    def test_same_secret_material_outside_vendor_is_still_scanned(self, tmp_path):
+        """Confirms exclusion is path-based, not content-based."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            with open("app.js", "w") as f:
+                f.write("const key = 'sk_live_123456789abcdefghijklmnopqrstuv';\n")
+
+            result = runner.invoke(app, ["scan"])
+
+            assert result.exit_code == 1
+            assert "DANGER: Found 1 potential secret(s)!" in result.stdout
+
+    def test_vendor_as_substring_is_not_excluded(self, tmp_path):
+        """
+        'my_vendor' and 'vendored' must not match -- only a path component
+        that is exactly 'vendor' is pruned.
+        """
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            os.makedirs("my_vendor")
+            with open("my_vendor/config.js", "w") as f:
+                f.write("const key = 'sk_live_123456789abcdefghijklmnopqrstuv';\n")
+            os.makedirs("vendored")
+            with open("vendored/other.js", "w") as f:
+                f.write("const token = 'ghp_123456789012345678901234567890123456';\n")
+
+            result = runner.invoke(app, ["scan"])
+
+            assert result.exit_code == 1
+            assert "DANGER: Found 2 potential secret(s)!" in result.stdout
+
+    def test_user_configured_exclusion_still_works_alongside_vendor_default(
+        self, tmp_path
+    ):
+        """
+        The pre-existing envshield.yml exclude_files mechanism is untouched.
+        Scans an explicit path rather than the default '.' -- see BL-128:
+        _filter_files's glob matching against a '.'-prefixed path (produced
+        by os.walk(".")) has a pre-existing, unrelated normalization gap
+        that a bare 'scan' with no path argument would otherwise hit.
+        """
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            with open("envshield.yml", "w") as f:
+                f.write("secret_scanning:\n  exclude_files:\n    - 'legacy/*.js'\n")
+            os.makedirs("legacy")
+            with open("legacy/old.js", "w") as f:
+                f.write("const key = 'sk_live_123456789abcdefghijklmnopqrstuv';\n")
+
+            result = runner.invoke(app, ["scan", "legacy"])
+
+            assert result.exit_code == 0, result.stdout
+            assert "No issues found" in result.stdout
+
+    def test_generic_api_key_and_provider_patterns_unaffected_outside_vendor(self):
+        """Direct pattern-level check: nothing about SECRET_PATTERNS itself changed."""
+        line = 'AWS_ACCESS_KEY_ID = "AKIA3X9QK2LP7MB4"'
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert matched
+
+
 def test_scan_skips_a_gitignored_env_file(tmp_path):
     """
     Real friction: a plain `envshield scan` flagged the developer's own
@@ -1447,6 +1537,104 @@ class TestDatabaseConnectionStringPatternCoversPostgresql:
         assert not matched
 
 
+class TestDatabaseConnectionStringIgnoresFStringPlaceholders:
+    """
+    Regression, found on real Zeus/issuebear/issuebear-management codebases
+    (22 confirmed instances): SQLAlchemy's "dialect+driver://" scheme syntax
+    (e.g. "mysql+pymysql://", "mariadb+pymysql://") was never modeled, so the
+    pattern only ever matched these forms by accident -- "mysql" happens to
+    match as a substring of "pymysql" immediately before "://". That same
+    accidental substring match fires just as easily when the "credentials"
+    are actually unresolved Python f-string placeholders, producing a false
+    positive on ordinary code like
+    f"mariadb+pymysql://{db_user}:{db_pass}@{db_host}/{db_name}".
+    """
+
+    def test_mariadb_pymysql_fstring_placeholders_is_not_a_secret(self):
+        line = 'app.config["SQLALCHEMY_DATABASE_URI"] = f"mariadb+pymysql://{db_user}:{db_pass}@{db_host}/{db_name}"'
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert not matched
+
+    def test_mysql_pymysql_fstring_placeholders_is_not_a_secret(self):
+        line = 'f"mysql+pymysql://{db_user}:{db_pass}@{db_host}/{db_name}"'
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert not matched
+
+    def test_generic_fstring_user_and_password_placeholders_is_not_a_secret(self):
+        line = 'url = f"postgresql://{user}:{password}@{host}:{port}/{name}"'
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert not matched
+
+    def test_whitespace_inside_fstring_expression_braces_is_still_not_a_secret(self):
+        """f"{ db_pass }" (spaces inside the braces) is valid Python and must be treated the same."""
+        line = 'f"postgresql://{ db_user }:{ db_pass }@{ db_host }/db"'
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert not matched
+
+    def test_mysql_pymysql_with_literal_credentials_is_still_detected(self):
+        """The dialect+driver scheme form itself must remain detectable when credentials are real."""
+        line = "mysql+pymysql://appuser:sup3rsecret@db.internal.prod:3306/appdb"
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert matched
+
+    def test_mariadb_pymysql_with_literal_credentials_is_still_detected(self):
+        line = "mariadb+pymysql://appuser:sup3rsecret@db.internal.prod:3306/appdb"
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert matched
+
+    def test_postgresql_psycopg2_with_literal_credentials_is_detected(self):
+        """Dialect+driver support is general, not special-cased to mysql/mariadb."""
+        line = "postgresql+psycopg2://appuser:sup3rsecret@db.internal.prod:5432/appdb"
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert matched
+
+    def test_mongodb_srv_with_literal_credentials_still_detected(self):
+        """Guards against the dialect+driver change breaking mongodb's existing '+srv' handling."""
+        line = "mongodb+srv://appuser:sup3rsecret@cluster0.mongodb.net/appdb"
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert matched
+
+    def test_placeholder_username_with_literal_password_is_still_detected(self):
+        """
+        A templated username next to a genuinely hardcoded password must still be
+        flagged -- the actual secret (the password) is real, so the templated
+        username must not suppress detection.
+        """
+        line = 'f"postgresql://{db_user}:hardcodedpass123@host/db"'
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert matched
+
+    def test_literal_username_with_placeholder_password_is_not_detected(self):
+        """
+        The mirror image of the case above: a literal (non-secret) username next
+        to a templated password has no real secret present and must not match.
+        """
+        line = 'f"postgresql://appuser:{db_pass}@host/db"'
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert not matched
+
+    def test_bare_pymysql_scheme_with_no_dialect_prefix_does_not_match(self):
+        """'pymysql://' alone is not a real SQLAlchemy scheme; nothing legitimate uses it."""
+        line = "pymysql://user:pass@host/db"
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert not matched
+
+    def test_end_to_end_scan_does_not_flag_fstring_database_uri_template(self):
+        content = (
+            "def make_engine(db_user, db_pass, db_host, db_name):\n"
+            '    uri = f"mariadb+pymysql://{db_user}:{db_pass}@{db_host}/{db_name}"\n'
+            "    return create_engine(uri)\n"
+        )
+        secrets, _ = scanner._scan_single_file("db.py", set(), content=content)
+        assert secrets == []
+
+    def test_end_to_end_scan_still_flags_literal_hardcoded_connection_string(self):
+        content = 'DATABASE_URL = "mysql+pymysql://appuser:sup3rsecret@db.internal.prod:3306/appdb"\n'
+        secrets, _ = scanner._scan_single_file("settings.py", set(), content=content)
+        assert len(secrets) == 1
+        assert secrets[0]["secret_type"] == "Database Connection String"
+
+
 class TestDsnStyleUrlWithEmbeddedApiKeyIsCaught:
     """
     Regression: a single-token DSN-style URL (a Sentry DSN's real shape --
@@ -1475,3 +1663,1028 @@ class TestDsnStyleUrlWithEmbeddedApiKeyIsCaught:
         value = "https://o123456.ingest.sentry.io/7890123"
         matched = any(re.search(p["pattern"], value) for p in scanner.SECRET_PATTERNS)
         assert not matched
+
+
+class TestGenericApiKeyPatternIgnoresOrdinaryPythonSyntax:
+    """
+    Regression, found on a real site codebase: the "Generic API Key"
+    pattern's keyword group had no boundary at all, so it matched as a
+    mid-word substring ("auth" inside "authorization"), and its unquoted-
+    value branch had no check that the matched span wasn't actually a
+    function call -- so an ordinary Python type annotation and an ordinary
+    "compute a cache key" function call both false-positived as secrets.
+    Every one of site' 40 findings traced to exactly these two shapes.
+    """
+
+    def test_type_annotation_is_not_a_secret(self):
+        line = "    work_authorization: WorkAuthorization"
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert not matched
+
+    def test_constructor_call_is_not_a_secret(self):
+        line = (
+            '        work_authorization=WorkAuthorization(value="not_stated", '
+            'confidence="not_stated"),'
+        )
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert not matched
+
+    def test_cache_key_function_call_assignment_is_not_a_secret(self):
+        line = (
+            "    cache_key = compute_fit_cache_key(facts_json, "
+            "profile_fingerprint(profile))"
+        )
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert not matched
+
+    def test_dedup_key_function_call_assignment_is_not_a_secret(self):
+        line = "    dedup_key = compute_dedup_key(job)"
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert not matched
+
+    def test_extraction_cache_key_function_call_assignment_is_not_a_secret(self):
+        """The third distinct call site site' scan flagged, same shape."""
+        line = (
+            '    cache_key = compute_extraction_cache_key(job_row["title"], '
+            'job_row["location_raw"], job_row["description_text"])'
+        )
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert not matched
+
+    def test_full_scan_of_the_site_shaped_file_reports_zero_findings(self):
+        """
+        End-to-end, not just the raw pattern: the same shapes run through
+        the actual file-scanning path, not only re.search in isolation.
+        """
+        content = (
+            "class JobFacts(BaseModel):\n"
+            "    work_authorization: WorkAuthorization\n"
+            "\n"
+            "def extract_job(conn, client, job_row):\n"
+            "    cache_key = compute_extraction_cache_key(\n"
+            '        job_row["title"], job_row["location_raw"]\n'
+            "    )\n"
+            "    dedup_key = compute_dedup_key(job_row)\n"
+        )
+        secrets, _ = scanner._scan_single_file(
+            "job_facts.py", schema_vars=set(), content=content
+        )
+        assert secrets == []
+
+    def test_legitimate_generic_assignments_still_match(self):
+        """The fix must not weaken real, quoted or unquoted, generic secrets."""
+        lines = [
+            'API_KEY = "abcdefghijklmnop1234"',
+            "API_TOKEN=abcdefghijklmnop1234",
+            'AUTH_TOKEN = "abcdefghijklmnop1234"',
+            'PASSWORD = "abcdefghijklmnop1234"',
+            'SECRET = "abcdefghijklmnop1234"',
+            'CREDENTIAL = "abcdefghijklmnop1234"',
+        ]
+        for line in lines:
+            matched = any(
+                re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS
+            )
+            assert matched, f"expected a match for: {line!r}"
+
+    def test_provider_specific_patterns_are_unaffected(self):
+        """Only the Generic API Key pattern changed; provider formats didn't."""
+        lines = [
+            "AKIAABCDEFGHIJKLMNOP",  # AWS Access Key ID
+            "ghp_" + "a" * 36,  # GitHub PAT (classic)
+            "sk_live_" + "a" * 24,  # Stripe secret key
+        ]
+        for line in lines:
+            matched = any(
+                re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS
+            )
+            assert matched, f"expected a match for: {line!r}"
+
+    def test_compound_no_underscore_keywords_still_match(self):
+        """
+        The scanner must keep recognizing the same no-underscore compounds
+        importer.py's SECRET_KEY_KEYWORDS already special-cases (APIKEY,
+        ACCESSKEY, SECRETKEY, AUTHTOKEN) -- adding a keyword boundary must
+        not regress this, only reject a keyword continuing into unrelated
+        letters like "authorization" or "monkey".
+        """
+        lines = [
+            'AWS_APIKEY = "abcdefghijklmnop1234"',
+            'AWS_ACCESSKEY = "abcdefghijklmnop1234"',
+            'STRIPE_SECRETKEY = "abcdefghijklmnop1234"',
+            'GITHUB_AUTHTOKEN = "abcdefghijklmnop1234"',
+        ]
+        for line in lines:
+            matched = any(
+                re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS
+            )
+            assert matched, f"expected a match for: {line!r}"
+
+    def test_compound_word_false_positives_are_not_flagged(self):
+        """
+        Regression: a keyword must not match as a substring of an unrelated
+        word -- "auth" inside "author"/"authorization", "key" inside
+        "monkey"/"keyboard" -- even with a plausible long RHS value.
+        Mirrors importer.py's existing MONKEY_PATCH/AUTHOR_NAME coverage,
+        now enforced at the scanner layer too.
+        """
+        lines = [
+            "MONKEY_PATCH_ENABLED: bool = True",
+            'AUTHOR_NAME = "Jane Doe Long Display Name Value"',
+            'KEYBOARD_LAYOUT = "some_long_layout_identifier_value"',
+        ]
+        for line in lines:
+            matched = any(
+                re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS
+            )
+            assert not matched, f"expected no match for: {line!r}"
+
+
+class TestGenericApiKeyPatternIgnoresCodeReferenceShapes:
+    """
+    Milestone 2 regression: broader real-world validation (phineas, Zeus)
+    found the same underlying class Milestone 1 fixed for a bare function
+    call (`x = foo(...)`) recurring through three more syntactic shapes --
+    an enclosing call's own closing paren, a subscript, and a TypeScript
+    generic parameter list -- each an equally strong signal that the
+    matched text is code, not a literal. A fourth candidate, '.', is
+    deliberately handled more narrowly: excluded only when it continues
+    into another identifier (attribute access), not when it plausibly ends
+    a sentence in prose.
+    """
+
+    def test_enclosing_call_closing_paren_is_not_a_secret(self):
+        """token=value where ')' closes an ALREADY-OPEN enclosing call."""
+        lines = [
+            "        s.loads(token, max_age=max_age_in_seconds)",
+            "call_something(token=some_identifier_value)",
+            "call_something(  token = some_identifier_value  )",
+        ]
+        for line in lines:
+            matched = any(
+                re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS
+            )
+            assert not matched, f"expected no match for: {line!r}"
+
+    def test_subscript_access_is_not_a_secret(self):
+        lines = [
+            '    api_key = settings["postmark_api_key"]',
+            "api_key = settings['postmark_api_key']",
+            "api_key=settings[postmark_api_key_name]",
+        ]
+        for line in lines:
+            matched = any(
+                re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS
+            )
+            assert not matched, f"expected no match for: {line!r}"
+
+    def test_attribute_access_is_not_a_secret(self):
+        lines = [
+            "    api_key = settings.API_KEY",
+            "api_key=settings.API_KEY",
+            "value = self._get(key=key, vtype=SessionValueType.BLOB)",
+        ]
+        for line in lines:
+            matched = any(
+                re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS
+            )
+            assert not matched, f"expected no match for: {line!r}"
+
+    def test_typescript_generic_type_parameter_is_not_a_secret(self):
+        """The real validation finding: a vendored .d.ts typings file."""
+        lines = [
+            "    api: DialogInstanceApi<T>",
+            "declare type Handler<T> = (api: DialogInstanceApi<T>) => void;",
+            "api: DialogInstanceApi<T, U>",
+        ]
+        for line in lines:
+            matched = any(
+                re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS
+            )
+            assert not matched, f"expected no match for: {line!r}"
+
+    def test_full_scan_of_the_phineas_shaped_file_reports_zero_findings(self):
+        """End-to-end, not just the raw pattern -- mirrors real phineas code."""
+        content = (
+            "def send(postmark_settings):\n"
+            '    server_token = postmark_settings["postmark_api_key"]\n'
+            "\n"
+            "def get_blob(self, key: str):\n"
+            "    value = self._get(key=key, vtype=SessionValueType.BLOB)\n"
+            "\n"
+            "def verify(token, salt):\n"
+            "    s = URLSafeTimedSerializer(secret_key, salt=salt)\n"
+            "    s.loads(token, max_age=max_age_in_seconds)\n"
+        )
+        secrets, _ = scanner._scan_single_file(
+            "session.py", schema_vars=set(), content=content
+        )
+        assert secrets == []
+
+    def test_a_bare_secret_ending_a_sentence_still_matches(self):
+        """
+        A real, unquoted secret can legitimately precede a literal '.' --
+        an ordinary sentence-ending period in prose -- and must not be
+        suppressed just because '.' is now excluded when it continues into
+        an identifier. Only the continuing case (attribute access) is
+        excluded, not this one.
+        """
+        lines = [
+            "API_KEY=abcdefghijklmnop1234uvwx.",
+            "The API_KEY=abcdefghijklmnop1234uvwx. Please rotate it soon.",
+        ]
+        for line in lines:
+            matched = any(
+                re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS
+            )
+            assert matched, f"expected a match for: {line!r}"
+
+    def test_a_bare_secret_immediately_continuing_into_an_identifier_is_suppressed(
+        self,
+    ):
+        """The counterpart to the above: '.' followed by more letters IS attribute-access-shaped."""
+        line = "API_KEY=abcdefghijklmnop1234uvwx.something"
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert not matched
+
+    def test_legitimate_generic_assignments_still_match(self):
+        """The fix must not weaken real, quoted or unquoted, generic secrets."""
+        lines = [
+            'API_KEY = "abcdefghijklmnop1234"',
+            "API_TOKEN=abcdefghijklmnop1234",
+            'AUTH_TOKEN = "abcdefghijklmnop1234"',
+            'PASSWORD = "abcdefghijklmnop1234"',
+            "DATABASE_PASSWORD=SuperSecretProdPassw0rd",
+        ]
+        for line in lines:
+            matched = any(
+                re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS
+            )
+            assert matched, f"expected a match for: {line!r}"
+
+    def test_provider_specific_patterns_are_unaffected(self):
+        lines = [
+            "AKIAABCDEFGHIJKLMNOP",  # AWS Access Key ID
+            "ghp_" + "a" * 36,  # GitHub PAT (classic)
+            "sk_live_" + "a" * 24,  # Stripe secret key
+        ]
+        for line in lines:
+            matched = any(
+                re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS
+            )
+            assert matched, f"expected a match for: {line!r}"
+
+
+class TestGenericApiKeyQuotedMinimumLoweredToEight:
+    """
+    Milestone 4 recall fix, real-world validation (Zeus, Issuebear, Issuebear
+    Management): the quoted branch's 16-char minimum missed real, hardcoded
+    short passwords -- confirmed via literal MYSQL_PASSWORD/MYSQL_ROOT_PASSWORD
+    values (8 and 13 chars) in committed docker-compose files, identically in
+    three separate repositories. Lowered to 8, the smallest minimum that
+    catches both confirmed cases. The unquoted branch is deliberately
+    untouched -- see TestGenericApiKeyUnquotedMinimumUnaffectedByQuotedFix.
+    """
+
+    def test_eight_char_quoted_password_is_now_detected(self):
+        line = 'MYSQL_PASSWORD: "8charpw1"'
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert matched
+
+    def test_thirteen_char_quoted_password_is_now_detected(self):
+        line = 'MYSQL_ROOT_PASSWORD: "root13charpw"'
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert matched
+
+    def test_representative_quoted_lengths_between_new_and_old_minimum(self):
+        """9, 12, and 15 characters -- all below the old 16-char floor."""
+        lines = [
+            'API_KEY = "aZ3x9Qk2p"',
+            'TOKEN = "aZ3x9Qk2Lp7m"',
+            'SECRET = "aZ3x9Qk2Lp7mB4v"',
+        ]
+        for line in lines:
+            matched = any(
+                re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS
+            )
+            assert matched, f"expected a match for: {line!r}"
+
+    def test_existing_long_quoted_credentials_still_match(self):
+        """Guards against a fix that narrows instead of only lowering the floor."""
+        line = 'API_KEY = "sk_live_51H8xJ2aZ9Qk2LpN7mB4vC6"'
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert matched
+
+    def test_seven_char_quoted_value_below_new_minimum_does_not_match(self):
+        line = 'PASSWORD = "abc123z"'
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert not matched
+
+    def test_short_ordinary_word_does_not_newly_match(self):
+        line = 'AUTH_ENABLED = "local"'
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert not matched
+
+    def test_short_lowercase_configuration_name_does_not_newly_match(self):
+        """8 characters, within the new floor, but identifier-shaped -- see the _KEY filter below."""
+        line = 'STATE_KEY = "oauth_st"'
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert not matched
+
+    def test_short_uppercase_configuration_name_does_not_newly_match(self):
+        line = 'TOKEN_TYPE = "BEARER_X"'
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert not matched
+
+
+class TestGenericApiKeyUnquotedMinimumUnaffectedByQuotedFix:
+    """
+    The unquoted branch's 16-char minimum and existing exclusions (Milestones
+    1-2) must be completely unaffected by lowering the quoted branch's
+    minimum -- the two branches are independent alternatives in the same
+    non-capturing group.
+    """
+
+    def test_short_unquoted_value_still_does_not_match(self):
+        line = "MYSQL_PASSWORD=8charpw1"
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert not matched
+
+    def test_type_annotation_still_not_a_secret(self):
+        line = "    work_authorization: WorkAuthorization"
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert not matched
+
+    def test_function_call_rhs_still_not_a_secret(self):
+        line = "cache_key = compute_fit_cache_key(x, y)"
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert not matched
+
+    def test_bare_identifier_kwarg_still_not_a_secret(self):
+        """Same shape as the existing Milestone 2 regression: value ends in ')', not ','."""
+        line = "        s.loads(token, max_age=max_age_in_seconds)"
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert not matched
+
+    def test_typescript_generic_still_not_a_secret(self):
+        line = "declare type Handler = (api: DialogInstanceApi<T>) => void;"
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert not matched
+
+    def test_existing_long_unquoted_credential_still_matches(self):
+        line = "API_TOKEN=abcdefghijklmnop1234"
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert matched
+
+
+class TestGenericApiKeyExcludesConfigurationLookupKeyNames:
+    """
+    Milestone 4 precision fix, real-world validation (Zeus): 12 confirmed
+    false positives from a '*_KEY'-named constant or keyword argument whose
+    quoted value is itself a configuration/lookup NAME, not a credential
+    (`SESSION_STATE_KEY = "xero_oauth_state"`,
+    `get_config(key="tourradar_username")`). Every one of those 12 values was
+    pure ASCII letters/underscores with consistent casing (all-lower or
+    all-UPPER) and contained no digit; every real secret checked alongside
+    them contained at least one digit, with no exceptions. The filter
+    therefore excludes a quoted value ONLY when it is entirely
+    lowercase-letters-and-underscores or entirely UPPERCASE-LETTERS-AND-
+    UNDERSCORES end to end -- a value with even one digit, mixed case, or any
+    other character is unaffected.
+    """
+
+    def test_lowercase_lookup_key_name_is_not_a_secret(self):
+        line = 'SESSION_STATE_KEY = "xero_oauth_state"'
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert not matched
+
+    def test_uppercase_lookup_key_name_is_not_a_secret(self):
+        line = 'COLUMN_DB_CURRENCY_NAME_KEY = "SOME_CONFIG_NAME_STR"'
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert not matched
+
+    def test_get_config_keyword_argument_snake_case_name_is_not_a_secret(self):
+        line = 'get_config(key="tourradar_username")'
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert not matched
+
+    def test_get_config_keyword_argument_upper_case_name_is_not_a_secret(self):
+        line = 'get_config(key="TOURRADAR_PASSWORD")'
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert not matched
+
+    def test_single_word_lowercase_name_with_no_underscore_is_not_a_secret(self):
+        line = 'SESSION_STATE_KEY = "oauthstate"'
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert not matched
+
+    def test_real_secret_containing_a_digit_still_matches(self):
+        """The one-digit distinction is the entire filter -- confirm it still lets real secrets through."""
+        line = 'API_ADMIN_TOKEN = "aZ9x3Qk2Lp7mB4vC6dE1fG8hJ0kL5nP2rS7tU9wX1yZ3aB5c"'
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert matched
+
+    def test_real_secret_with_digits_and_underscores_still_matches(self):
+        line = 'APP_SECRET = "aZ3x9_Qk2Lp7_mB4vC6"'
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert matched
+
+    def test_aws_style_key_with_digits_still_matches(self):
+        line = 'AWS_ACCESS_KEY_ID = "AKIA3X9QK2LP7MB4"'
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert matched
+
+    def test_mixed_case_no_digit_value_is_not_excluded(self):
+        """
+        Deliberately narrower than "no digits" alone: a mixed-case, no-digit
+        string is NOT one of the two specific all-one-case shapes the filter
+        targets, so it is left unaffected (matches, as before this fix).
+        """
+        line = 'API_KEY = "aZxQkLpmBvCdEfGhJk"'
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert matched
+
+    def test_end_to_end_scan_does_not_flag_lookup_key_name(self):
+        content = 'def f():\n    value = get_config(key="tourradar_username", partner_id=partner_id).value\n'
+        secrets, _ = scanner._scan_single_file("tour.py", set(), content=content)
+        assert secrets == []
+
+    def test_end_to_end_scan_still_flags_real_secret_assignment(self):
+        content = (
+            'API_ADMIN_TOKEN = "aZ9x3Qk2Lp7mB4vC6dE1fG8hJ0kL5nP2rS7tU9wX1yZ3aB5c"\n'
+        )
+        secrets, _ = scanner._scan_single_file("config.py", set(), content=content)
+        assert len(secrets) == 1
+        assert secrets[0]["secret_type"] == "Generic API Key"
+
+
+class TestDockerComposeEnvironmentListShortCredentials:
+    """
+    Milestone 5 recall fix, real-world validation (Zeus, Issuebear, Issuebear
+    Management, identically): Docker Compose's own list-style 'environment:'
+    syntax (`- MYSQL_PASSWORD=password`) writes literal credentials unquoted,
+    so they never reach Generic API Key's quoted branch, and the unquoted
+    branch's 16-char floor misses real, short (8/13-char) hardcoded
+    passwords. Broadening the generic unquoted floor was rejected -- a real
+    counter-example (a CodeBuild buildspec's 'parameter-store:' mapping,
+    where the value is an SSM path, not a credential) would become a false
+    positive under a general rule. This is narrowly scoped instead: only
+    Docker-Compose-named files, only a complete `- KEY=value` line, only
+    when KEY contains the same credential keyword Generic API Key already
+    requires.
+    """
+
+    def test_mysql_password_confirmed_real_world_miss_is_now_detected(self):
+        line = "            - MYSQL_PASSWORD=password\n"
+        secrets, _ = scanner._scan_single_file(
+            "docker-compose.yml", set(), content=line
+        )
+        assert len(secrets) == 1
+        assert secrets[0]["secret_type"] == "Docker Compose Environment Credential"
+
+    def test_mysql_root_password_confirmed_real_world_miss_is_now_detected(self):
+        line = "            - MYSQL_ROOT_PASSWORD=root_password\n"
+        secrets, _ = scanner._scan_single_file(
+            "docker-compose.override.yml", set(), content=line
+        )
+        assert len(secrets) == 1
+        assert secrets[0]["secret_type"] == "Docker Compose Environment Credential"
+
+    def test_short_api_key_value_is_detected(self):
+        line = "- API_KEY=short123\n"
+        secrets, _ = scanner._scan_single_file(
+            "docker-compose.yml", set(), content=line
+        )
+        assert len(secrets) == 1
+
+    def test_value_lengths_between_four_and_fifteen_are_detected(self):
+        lines = [
+            "- API_KEY=ab12\n",  # 4 chars, the floor
+            "- API_KEY=abcdefghijklm12\n",  # 15 chars
+        ]
+        for line in lines:
+            secrets, _ = scanner._scan_single_file(
+                "docker-compose.yml", set(), content=line
+            )
+            assert len(secrets) == 1, f"expected a match for: {line!r}"
+
+    def test_quoted_whole_entry_is_not_matched_by_this_rule(self):
+        """A quoted entire entry is a different, deliberately-out-of-scope shape."""
+        line = '            - "MYSQL_PASSWORD=password"\n'
+        secrets, _ = scanner._scan_single_file(
+            "docker-compose.yml", set(), content=line
+        )
+        assert secrets == []
+
+    def test_env_var_reference_placeholder_is_not_matched(self):
+        line = "            - MYSQL_PASSWORD=${MYSQL_PASSWORD}\n"
+        secrets, _ = scanner._scan_single_file(
+            "docker-compose.yml", set(), content=line
+        )
+        assert secrets == []
+
+    def test_yaml_mapping_style_colon_is_not_matched(self):
+        """Only the dash-prefixed list form is in scope, not 'KEY: value'."""
+        line = "MYSQL_PASSWORD: password\n"
+        secrets, _ = scanner._scan_single_file(
+            "docker-compose.yml", set(), content=line
+        )
+        assert secrets == []
+
+    def test_non_credential_environment_entries_are_not_matched(self):
+        """
+        The exact same environment blocks that contain the real misses also
+        contain these two -- neither is a credential, and must not become new
+        noise from a keyword-free rule.
+        """
+        lines = [
+            "            - MYSQL_USER=local\n",
+            "            - REDIS_REPLICATION_MODE=master\n",
+        ]
+        for line in lines:
+            secrets, _ = scanner._scan_single_file(
+                "docker-compose.yml", set(), content=line
+            )
+            assert secrets == [], f"expected no match for: {line!r}"
+
+    def test_docker_label_entry_is_not_matched(self):
+        """A quoted Compose label uses the same list-item syntax but is not in scope."""
+        line = '            - "traefik.enable=true"\n'
+        secrets, _ = scanner._scan_single_file(
+            "docker-compose.yml", set(), content=line
+        )
+        assert secrets == []
+
+    def test_ordinary_python_source_equivalent_is_unaffected(self):
+        """The same KEY=value text, as ordinary Python source, is untouched by this rule."""
+        line = 'API_KEY = "short123"\n'
+        secrets, _ = scanner._scan_single_file("settings.py", set(), content=line)
+        # Still detected -- but via Generic API Key (quoted branch), not this rule.
+        assert len(secrets) == 1
+        assert secrets[0]["secret_type"] == "Generic API Key"
+
+    def test_lowercase_variable_name_is_not_matched(self):
+        line = "            - mysql_password=password\n"
+        secrets, _ = scanner._scan_single_file(
+            "docker-compose.yml", set(), content=line
+        )
+        assert secrets == []
+
+    def test_rule_only_applies_to_docker_compose_named_files(self):
+        """The identical line in a non-Compose YAML file must not match this rule."""
+        line = "            - MYSQL_PASSWORD=password\n"
+        secrets, _ = scanner._scan_single_file(
+            "buildspec-issuebear.yml", set(), content=line
+        )
+        assert secrets == []
+
+    def test_buildspec_parameter_store_path_is_not_matched(self):
+        """
+        The real counter-example that ruled out a general YAML/short-value
+        rule: a CodeBuild buildspec's 'parameter-store:' mapping's value is an
+        SSM parameter path, not a credential.
+        """
+        line = "    GEMFURY_TOKEN: /issuebearapp/gemfury_token\n"
+        secrets, _ = scanner._scan_single_file(
+            "buildspec-issuebear.yml", set(), content=line
+        )
+        assert secrets == []
+
+    def test_longer_compose_credential_still_caught_by_generic_api_key(self):
+        """A value long enough for the existing unquoted floor must still be attributed there, not double-counted."""
+        line = (
+            "            - GARAGE_DEFAULT_SECRET_KEY=aVeryLongRealisticGarageKey1234\n"
+        )
+        secrets, _ = scanner._scan_single_file(
+            "docker-compose.override.yml", set(), content=line
+        )
+        assert len(secrets) == 1
+        assert secrets[0]["secret_type"] == "Generic API Key"
+
+    def test_value_below_four_char_floor_is_not_matched(self):
+        line = "- API_KEY=ab1\n"
+        secrets, _ = scanner._scan_single_file(
+            "docker-compose.yml", set(), content=line
+        )
+        assert secrets == []
+
+    def test_end_to_end_scan_matches_the_real_zeus_shape(self):
+        content = (
+            "    mysql:\n"
+            "        environment:\n"
+            "            - MYSQL_USER=local\n"
+            "            - MYSQL_PASSWORD=password\n"
+            "            - MYSQL_DATABASE=\n"
+            "            - MYSQL_ROOT_PASSWORD=root_password\n"
+        )
+        secrets, _ = scanner._scan_single_file(
+            "docker-compose.yml", set(), content=content
+        )
+        assert len(secrets) == 2
+        assert {s["line_num"] for s in secrets} == {4, 6}
+        assert all(
+            s["secret_type"] == "Docker Compose Environment Credential" for s in secrets
+        )
+
+
+class TestGenericApiKeyExcludesWordSegmentedIdentifierValues:
+    """
+    Milestone 6 precision fix, real-world validation (Zeus, all 5): a
+    quoted value that is digit-free and clearly word-segmented --
+    camelCase/PascalCase or hyphen-separated words -- is a configuration
+    name/UI constant/non-secret salt argument, not a credential. This is
+    additive to the existing all-one-case rule (`SESSION_STATE_KEY =
+    "xero_oauth_state"` still excluded, unchanged): it targets the same
+    "identifier, not token" distinction for values that also happen to mix
+    case or use hyphens. Every real secret in the corpus (17 checked)
+    contains at least one digit -- since the new lookaheads require the
+    ENTIRE value to be letters-only and cleanly segmented, none can match a
+    value containing a digit, regardless of casing.
+    """
+
+    # --- the 5 confirmed false positives, reconstructed with the same
+    # segment-length shape as the real values (never real secret content) ---
+
+    def test_camelcase_config_lookup_value_is_not_a_secret(self):
+        """Same shape as common.py:21 -- a dict-key config name, 2 segments of 4-5 letters."""
+        line = 'REPORT_KEY = "abcdEfghi"'
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert not matched
+
+    def test_camelcase_ui_constant_value_is_not_a_secret(self):
+        """Same shape as backpack.js:1 -- a UI/layout constant, 2 segments of 8+5 letters."""
+        line = 'const layoutKey = "abcdefghEfghi";'
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert not matched
+
+    def test_kebab_case_config_name_value_is_not_a_secret(self):
+        """Same shape as quote_export.py:42 -- a cookie/session name, hyphen-separated."""
+        line = 'SESSION_KEY = "session-cookie"'
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert not matched
+
+    def test_non_secret_salt_argument_hyphenated_is_not_a_secret(self):
+        """Same shape as form.py:2359/validate.py:995 -- itsdangerous serializer salt, not a secret."""
+        lines = [
+            's = Serializer(x, salt="user-login")',
+            's = Serializer(x, salt="email-confirm")',
+        ]
+        for line in lines:
+            matched = any(
+                re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS
+            )
+            assert not matched, f"expected no match for: {line!r}"
+
+    # --- existing BL-124 all-one-case cases, unaffected by this addition ---
+
+    def test_existing_lowercase_lookup_key_name_still_not_a_secret(self):
+        line = 'SESSION_STATE_KEY = "xero_oauth_state"'
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert not matched
+
+    def test_existing_get_config_keyword_lookup_still_not_a_secret(self):
+        line = 'get_config(key="TOURRADAR_PASSWORD")'
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert not matched
+
+    # --- true-positive protection: realistic credential shapes that must
+    # NOT be suppressed, proving the filter targets word-segmented
+    # identifiers specifically, not mixed-case or hyphenation in general ---
+
+    def test_digit_bearing_mixed_case_credential_still_matches(self):
+        line = 'API_KEY = "aZ3x9Qk2Lp7mB4vC6"'
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert matched
+
+    def test_punctuation_bearing_credential_still_matches(self):
+        line = 'SECRET_KEY = "aZ3x9Qk2Lp==mB4vC6"'
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert matched
+
+    def test_high_entropy_mixed_case_credential_still_matches(self):
+        """Synthetic, but shaped like a real Google API key -- 20+ internal case transitions."""
+        line = 'GOOGLE_API_KEY = "AIzaSyD8xJ2aZ9Qk2LpN7mB4vC6dE1fG8hJ0k"'
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert matched
+
+    def test_hyphenated_credential_with_a_digit_still_matches(self):
+        """A hyphen alone does not exclude -- only hyphen-separated words with NO digit."""
+        line = 'SERVICE_KEY = "svc-key-9f2a1"'
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert matched
+
+    def test_api_key_style_value_still_matches(self):
+        line = 'API_KEY = "sk_live_51H8xJ2aZ9Qk2LpN7mB4v"'
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert matched
+
+    def test_secret_key_style_value_still_matches(self):
+        line = 'SECRET_KEY = "aZ3x9Qk2Lp7mB4vC6dE1fG8h"'
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert matched
+
+    def test_service_key_style_value_still_matches(self):
+        line = 'SERVICE_KEY = "aZ9x3Qk2Lp7mB4vC6"'
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert matched
+
+    def test_short_credential_in_range_still_matches(self):
+        line = 'API_KEY = "aZ3x9Qk2p"'
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert matched
+
+    def test_aws_style_key_with_digits_still_matches(self):
+        line = 'AWS_ACCESS_KEY_ID = "AKIA3X9QK2LP7MB4"'
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert matched
+
+    def test_compose_credential_unaffected_by_this_quoted_branch_change(self):
+        """Docker Compose's unquoted branch is a separate code path -- confirm it's untouched."""
+        line = "            - MYSQL_PASSWORD=password\n"
+        secrets, _ = scanner._scan_single_file(
+            "docker-compose.yml", set(), content=line
+        )
+        assert len(secrets) == 1
+        assert secrets[0]["secret_type"] == "Docker Compose Environment Credential"
+
+    def test_adversarial_single_letter_segment_mixed_case_still_matches(self):
+        """
+        The exact case that exposed a first-draft grammar bug: alternating
+        single-letter case flips (no real word boundary) must not be treated
+        as camelCase, or a real high-entropy secret with this shape would be
+        suppressed.
+        """
+        line = 'API_KEY = "aZxQkLpmBvCdEfGhJk"'
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert matched
+
+    def test_end_to_end_scan_suppresses_camelcase_lookup_and_keeps_real_secret(self):
+        content = (
+            'REPORT_KEY = "abcdEfghi"\n'
+            'API_ADMIN_TOKEN = "aZ9x3Qk2Lp7mB4vC6dE1fG8hJ0kL5nP2rS7tU9wX1yZ3aB5c"\n'
+        )
+        secrets, _ = scanner._scan_single_file("config.py", set(), content=content)
+        assert len(secrets) == 1
+        assert secrets[0]["line_num"] == 2
+
+
+class TestGenericApiKeyFileLocalBareIdentifierSuppression:
+    """
+    BL-129 (Milestone B): Generic API Key's unquoted branch, on a bare
+    identifier value, is suppressed only when THIS file's own enclosing
+    function positively shows the identifier is a non-literal reference --
+    never on shape, naming convention, or absence of evidence.
+    """
+
+    # --- suppress: positive local evidence ---
+
+    def test_local_assignment_from_function_call_is_suppressed(self):
+        content = (
+            "def f():\n"
+            "    cache_key = compute_fit_cache_key()\n"
+            "    do_thing(key=cache_key)\n"
+        )
+        secrets, _ = scanner._scan_single_file("app.py", set(), content=content)
+        assert secrets == []
+
+    def test_local_assignment_from_attribute_access_is_suppressed(self):
+        content = (
+            "def f():\n"
+            "    original_password = mfa_user.password\n"
+            "    mfa_user.password = original_password\n"
+        )
+        secrets, _ = scanner._scan_single_file("app.py", set(), content=content)
+        assert secrets == []
+
+    def test_local_assignment_from_subscript_is_suppressed(self):
+        content = "def f():\n    token = settings['token']\n    call(x=token)\n"
+        secrets, _ = scanner._scan_single_file("app.py", set(), content=content)
+        assert secrets == []
+
+    def test_local_assignment_from_another_identifier_is_suppressed(self):
+        content = (
+            "def f():\n"
+            "    existing_client = get_client()\n"
+            "    api = existing_client\n"
+            "    call(x=api)\n"
+        )
+        secrets, _ = scanner._scan_single_file("app.py", set(), content=content)
+        assert secrets == []
+
+    def test_enclosing_function_parameter_is_suppressed(self):
+        content = (
+            "def test_flask_doc_prefix(test_client_and_api, prefix):\n"
+            "    client, api = test_client_and_api\n"
+        )
+        secrets, _ = scanner._scan_single_file("test_x.py", set(), content=content)
+        assert secrets == []
+
+    # --- remain detectable: no positive evidence, or evidence is itself a literal ---
+
+    def test_quoted_literal_assignment_remains_detectable(self):
+        content = "def f():\n    api = 'sk_live_123456789abcdefghijklmnopqrstuv'\n"
+        secrets, _ = scanner._scan_single_file("app.py", set(), content=content)
+        assert len(secrets) == 1
+        assert secrets[0]["secret_type"] == "Generic API Key"
+
+    def test_identifier_with_no_local_definition_remains_detectable(self):
+        content = "def f():\n    token = external_value_placeholder\n"
+        secrets, _ = scanner._scan_single_file("app.py", set(), content=content)
+        assert len(secrets) == 1
+
+    def test_imported_identifier_with_no_local_definition_remains_detectable(self):
+        content = (
+            "from somewhere import imported_value_placeholder\n"
+            "def f():\n"
+            "    api = imported_value_placeholder\n"
+        )
+        secrets, _ = scanner._scan_single_file("app.py", set(), content=content)
+        assert len(secrets) == 1
+
+    def test_quoted_real_looking_secret_remains_detectable(self):
+        content = 'API_SECRET_KEY = "aZ9x3Qk2Lp7mB4vC6dE1fG8hJ0kL5nP2rS7tU9wX1"\n'
+        secrets, _ = scanner._scan_single_file("app.py", set(), content=content)
+        assert len(secrets) == 1
+
+    def test_provider_specific_detector_unchanged(self):
+        line = 'AWS_ACCESS_KEY_ID = "AKIA3X9QK2LP7MB4"'
+        matched = any(re.search(p["pattern"], line) for p in scanner.SECRET_PATTERNS)
+        assert matched
+
+    def test_compose_detector_unchanged(self):
+        content = "            - MYSQL_PASSWORD=password\n"
+        secrets, _ = scanner._scan_single_file(
+            "docker-compose.yml", set(), content=content
+        )
+        assert len(secrets) == 1
+        assert secrets[0]["secret_type"] == "Docker Compose Environment Credential"
+
+    def test_unrelated_identifier_same_spelling_different_scope_not_suppressed(self):
+        """
+        A same-named identifier defined non-literally in an UNRELATED,
+        non-enclosing function must not supply evidence for a candidate in
+        a different function -- evidence must come only from the
+        candidate's own enclosing scope.
+        """
+        content = (
+            "def other_func():\n"
+            "    helper_name_identifier = get_thing()\n"
+            "\n"
+            "def target_func():\n"
+            "    token = helper_name_identifier\n"
+        )
+        secrets, _ = scanner._scan_single_file("app.py", set(), content=content)
+        assert len(secrets) == 1
+
+    # --- adversarial safety boundary ---
+
+    def test_identifier_whose_only_local_definition_is_itself_a_literal_not_suppressed(
+        self,
+    ):
+        """
+        The scanner must NOT treat `password` as safe merely because it is
+        locally defined -- its only local definition IS a quoted literal,
+        so referencing it elsewhere must still be flagged.
+        """
+        content = (
+            "def f():\n"
+            "    password = 'a-real-looking-secret-value-12345'\n"
+            "    api = password\n"
+        )
+        secrets, _ = scanner._scan_single_file("app.py", set(), content=content)
+        assert len(secrets) == 1
+
+    def test_external_value_with_no_local_definition_remains_detectable(self):
+        content = "def f():\n    api = external_value_with_no_definition_anywhere\n"
+        secrets, _ = scanner._scan_single_file("app.py", set(), content=content)
+        assert len(secrets) == 1
+
+    def test_module_level_bare_identifier_with_no_enclosing_function_not_suppressed(
+        self,
+    ):
+        """No enclosing function at all -- no scope to draw evidence from."""
+        content = "some_existing_module_variable = get_value()\napi = some_existing_module_variable\n"
+        secrets, _ = scanner._scan_single_file("app.py", set(), content=content)
+        assert len(secrets) == 1
+
+    def test_suppression_does_not_apply_outside_python_files(self):
+        """
+        Scope restriction: Python Class A/C cases only. Same shape as the
+        function-call-assignment case that IS suppressed in a .py file --
+        in a .js file, it must remain detected.
+        """
+        content = (
+            "function f() {\n"
+            "  const existingLongIdentifierValue = getIt();\n"
+            "  doThing({ apikey: existingLongIdentifierValue });\n"
+            "}\n"
+        )
+        secrets, _ = scanner._scan_single_file("app.js", set(), content=content)
+        assert len(secrets) == 1
+
+    # --- exact regressions for the investigated Class A/C findings ---
+    # Reconstructed with matching structural shape, never using real secret
+    # or proprietary content -- consistent with this project's established
+    # test-authoring practice for prior scanner milestones.
+
+    def test_regression_password_reassigned_from_local_variable(self):
+        """test_mfa_trusted_device.py:82 shape."""
+        content = (
+            "def test_mfa_flow():\n"
+            "    original_password = mfa_user.password\n"
+            "    mfa_user.password = original_password\n"
+        )
+        secrets, _ = scanner._scan_single_file("test_mfa.py", set(), content=content)
+        assert secrets == []
+
+    def test_regression_session_key_kwarg_from_local_variable(self):
+        """personal_data.py:1016 shape."""
+        content = (
+            "def render_page():\n"
+            "    safe_session_key = session_key or client_search_data.session_id\n"
+            "    return render_template(\n"
+            "        'page.html.j2',\n"
+            "        session_key=safe_session_key,\n"
+            "    )\n"
+        )
+        secrets, _ = scanner._scan_single_file("views.py", set(), content=content)
+        assert secrets == []
+
+    def test_regression_url_for_kwarg_from_attribute_access(self):
+        """email.py:64 shape (owning_partner_id)."""
+        content = (
+            "def send_reset_email():\n"
+            "    owning_partner_id = user_detail.partner.owning_partner_id\n"
+            "    action_url = url_for(\n"
+            "        'login.resetpassword', unique_key=unique_key, partnerid=owning_partner_id\n"
+            "    )\n"
+        )
+        secrets, _ = scanner._scan_single_file("email.py", set(), content=content)
+        assert secrets == []
+
+    def test_regression_unique_payment_code_from_request_args(self):
+        """unique_payment.py:101 shape."""
+        content = (
+            "def multipay():\n"
+            "    unique_payment_code = request.args.get('unique_key')\n"
+            "    return url_for(\n"
+            "        'athena.tour_journey.unique_payment.unique_payment_multipay',\n"
+            "        unique_key=unique_payment_code,\n"
+            "    )\n"
+        )
+        secrets, _ = scanner._scan_single_file(
+            "unique_payment.py", set(), content=content
+        )
+        assert secrets == []
+
+    def test_regression_tourradar_password_from_config_lookup(self):
+        """tour.py:755/964 shape."""
+        content = (
+            "def upload():\n"
+            "    tourradar_password = str(hermes_admin.get_config(key='tourradar_password').value)\n"
+            "    exporter.upload_to_api(\n"
+            "        username=tourradar_username,\n"
+            "        password=tourradar_password,\n"
+            "    )\n"
+        )
+        secrets, _ = scanner._scan_single_file("tour.py", set(), content=content)
+        assert secrets == []
+
+    def test_regression_ticket_feedback_secret_key_from_local_call(self):
+        """notification_builder.py:108 shape."""
+        content = (
+            "class NotificationBuilder:\n"
+            "    def build(self):\n"
+            "        ticket_feedback_secret_key = generate_unique_key('ticket_feedback')\n"
+            "        url = url_for(\n"
+            "            'customer.ticketfeedback', unique_key=ticket_feedback_secret_key\n"
+            "        )\n"
+        )
+        secrets, _ = scanner._scan_single_file(
+            "notification_builder.py", set(), content=content
+        )
+        assert secrets == []
+
+    def test_regression_login_session_salt_from_config_get(self):
+        """user.py:616 shape."""
+        content = (
+            "def resolve_session():\n"
+            "    login_session_salt = app.config.get('LOGIN_SESSION_SALT', 'login-session')\n"
+            "    login_session_id = app.serializer.loads(\n"
+            "        login_session_token, salt=login_session_salt, max_age=None\n"
+            "    )\n"
+        )
+        secrets, _ = scanner._scan_single_file("user.py", set(), content=content)
+        assert secrets == []
+
+    def test_regression_pytest_fixture_tuple_unpack(self):
+        """test_plugin_flask_blueprint.py:237 / dry_plugin_flask.py:86 shape."""
+        content = (
+            "def test_flask_doc_prefix(test_client_and_api, prefix):\n"
+            "    client, api = test_client_and_api\n"
+            "    resp = client.get(prefix + '/apidoc/openapi.json')\n"
+        )
+        secrets, _ = scanner._scan_single_file(
+            "test_plugin_flask_blueprint.py", set(), content=content
+        )
+        assert secrets == []

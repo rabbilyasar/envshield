@@ -113,3 +113,18 @@ class UnsafePathError(EnvShieldException):
     def __init__(self, label: str, path: str, project_root: str):
         self.message = f"Refusing to use {label} '{path}': it resolves outside the project directory ({project_root}). Check envshield.yml for a malicious or mistaken path."
         super().__init__(self.message)
+
+
+class InvalidManifestDefinitionError(EnvShieldException):
+    """
+    Raised when a `manifests:` entry in envshield.yml is malformed --
+    neither `file` nor `files` given, both given at once, or `files` given
+    as something other than a non-empty list (BL-025's base+override
+    Compose layering). This is a registration-shape error, distinct from
+    UnsafePathError (a path that resolves outside the project) or a
+    parser-level error (a layer file that's missing or fails to parse).
+    """
+
+    def __init__(self, message: str):
+        self.message = message
+        super().__init__(self.message)

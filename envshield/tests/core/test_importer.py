@@ -293,6 +293,40 @@ def test_classify_variable_flags_the_pass_abbreviation():
     assert is_secret is False
 
 
+def test_classify_variable_flags_no_underscore_compound_keywords():
+    """
+    Regression, found on a real Zeus codebase: TRAVELPAY_APIKEY was
+    classified non-secret because "apikey" (no underscore before "key")
+    never splits into a token equal to "key" -- token-based matching is
+    exact-token, not suffix/substring, so it missed this compound form
+    entirely. Each addition is a single unambiguous whole word, so this
+    can't reintroduce the MONKEY_PATCH/AUTHOR_NAME substring false
+    positives -- reconfirmed below, not just assumed unaffected.
+    """
+    is_secret, _ = importer._classify_variable("TRAVELPAY_APIKEY", "abcdef")
+    assert is_secret is True
+
+    is_secret, _ = importer._classify_variable("AWS_ACCESSKEY", "abcdef")
+    assert is_secret is True
+
+    is_secret, _ = importer._classify_variable("STRIPE_SECRETKEY", "abcdef")
+    assert is_secret is True
+
+    is_secret, _ = importer._classify_variable("GITHUB_AUTHTOKEN", "abcdef")
+    assert is_secret is True
+
+    # The underscored spellings must still work -- this fix is additive.
+    is_secret, _ = importer._classify_variable("API_KEY", "abcdef")
+    assert is_secret is True
+
+    # Adding these compounds must not reintroduce a substring false positive.
+    is_secret, _ = importer._classify_variable("MONKEY_PATCH_ENABLED", "true")
+    assert is_secret is False
+
+    is_secret, _ = importer._classify_variable("AUTHOR_NAME", "Jane Doe")
+    assert is_secret is False
+
+
 def test_importer_classifies_correctly(mocker):
     """Tests the importer's smart classification logic."""
     variables = {
@@ -557,6 +591,38 @@ def test_generate_schema_from_file_noninteractive_keeps_existing_declaration_for
     schema = toml.loads(schema_content)
 
     assert schema["DATABASE_URL"]["defaultValue"] == "thisisdatabasse"
+
+
+def test_generate_schema_from_file_interactive_as_local_values_classifies_all_assignments(
+    tmp_path, mocker
+):
+    """
+    '--as-local-values' interactive mode must classify every top-level
+    assignment, not just whatever a real os.environ read would have
+    surfaced -- proving the interactive prompt loop runs against the
+    assignment-extracted variable set (PythonParser), not the discovery
+    engine's, when as_local_values=True.
+    """
+    config = tmp_path / "config.py"
+    config.write_text(
+        "import os\nDB_HOST = ''\nUSE_LOCAL_DB = os.environ.get('USE_LOCAL_DB')\n"
+    )
+
+    # Two variables classified interactively (DB_HOST, USE_LOCAL_DB), each
+    # asked "Mark as a secret?" then "Use '<value>' as the default?".
+    mocker.patch("questionary.confirm").return_value.ask.side_effect = [
+        False,
+        False,
+        False,
+        False,
+    ]
+
+    schema_content = importer.generate_schema_from_file(
+        str(config), interactive=True, as_local_values=True
+    )
+    schema = toml.loads(schema_content)
+
+    assert set(schema.keys()) == {"DB_HOST", "USE_LOCAL_DB"}
 
 
 def test_merge_variables_from_other_sources_adds_only_new_keys(tmp_path):

@@ -6,6 +6,7 @@ import pytest
 from envshield.config import manager as config_manager
 from envshield.core.exceptions import (
     ConfigParseError,
+    InvalidManifestDefinitionError,
     SchemaNotFoundError,
     SchemaParseError,
     SecretDefaultConflictError,
@@ -688,7 +689,13 @@ def test_get_deployment_manifests_for_a_service(tmp_path, monkeypatch):
 
     manifests = config_manager.get_deployment_manifests("api")
 
-    assert manifests == [{"path": "docker-compose.yml", "container": "api"}]
+    assert manifests == [
+        {
+            "path": "docker-compose.yml",
+            "paths": ["docker-compose.yml"],
+            "container": "api",
+        }
+    ]
 
 
 def test_get_deployment_manifests_supports_a_service_named_in_more_than_one_manifest(
@@ -720,6 +727,121 @@ def test_get_deployment_manifests_rejects_manifest_path_escaping_project(
 
     with pytest.raises(UnsafePathError):
         config_manager.get_deployment_manifests("api")
+
+
+class TestManifestBaseOverrideRegistration:
+    """
+    BL-025: a manifest registration entry may declare 'files' (an ordered
+    list of Compose base+override layers) instead of a single 'file'.
+    Backward compatibility for existing 'file:' registrations is the most
+    important property here.
+    """
+
+    def test_add_manifest_with_files_registers_ordered_layers(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "docker-compose.yml").write_text(
+            "services:\n  api:\n    environment:\n      FOO: base\n"
+        )
+        (tmp_path / "docker-compose.override.yml").write_text(
+            "services:\n  api:\n    environment:\n      BAR: override\n"
+        )
+        config_manager.add_service("api", "api/env.schema.toml")
+
+        config_manager.add_manifest(
+            files=["docker-compose.yml", "docker-compose.override.yml"],
+            containers={"api": "api"},
+        )
+
+        manifests = config_manager.get_deployment_manifests("api")
+        assert manifests == [
+            {
+                "path": "docker-compose.yml + docker-compose.override.yml",
+                "paths": ["docker-compose.yml", "docker-compose.override.yml"],
+                "container": "api",
+            }
+        ]
+
+    def test_add_manifest_requires_exactly_one_of_file_or_files(self):
+        with pytest.raises(InvalidManifestDefinitionError):
+            config_manager.add_manifest(containers={"api": "api"})
+
+    def test_add_manifest_rejects_both_file_and_files(self):
+        with pytest.raises(InvalidManifestDefinitionError):
+            config_manager.add_manifest(
+                file="docker-compose.yml",
+                files=["docker-compose.yml", "docker-compose.override.yml"],
+                containers={"api": "api"},
+            )
+
+    def test_add_manifest_rejects_empty_files_list(self):
+        with pytest.raises(InvalidManifestDefinitionError):
+            config_manager.add_manifest(files=[], containers={"api": "api"})
+
+    def test_get_deployment_manifests_rejects_entry_with_both_file_and_files(
+        self, tmp_path, monkeypatch
+    ):
+        """A hand-edited envshield.yml declaring both keys is a clear, fail-fast error."""
+        monkeypatch.chdir(tmp_path)
+        config_manager.add_service("api", "api/env.schema.toml")
+        with open("envshield.yml", "a") as f:
+            f.write(
+                "manifests:\n"
+                "  - file: docker-compose.yml\n"
+                "    files: [docker-compose.yml, docker-compose.override.yml]\n"
+                "    containers:\n"
+                "      api: api\n"
+            )
+
+        with pytest.raises(InvalidManifestDefinitionError):
+            config_manager.get_deployment_manifests("api")
+
+    def test_get_deployment_manifests_rejects_empty_files_list_in_yaml(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        config_manager.add_service("api", "api/env.schema.toml")
+        with open("envshield.yml", "a") as f:
+            f.write("manifests:\n  - files: []\n    containers:\n      api: api\n")
+
+        with pytest.raises(InvalidManifestDefinitionError):
+            config_manager.get_deployment_manifests("api")
+
+    def test_existing_single_file_registration_is_unaffected(
+        self, tmp_path, monkeypatch
+    ):
+        """The most important backward-compatibility case: plain 'file:' still works exactly as before."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "docker-compose.yml").write_text(
+            "services:\n  api:\n    image: x\n"
+        )
+        config_manager.add_service("api", "api/env.schema.toml")
+        config_manager.add_manifest("docker-compose.yml", {"api": "api"})
+
+        manifests = config_manager.get_deployment_manifests("api")
+
+        assert manifests == [
+            {
+                "path": "docker-compose.yml",
+                "paths": ["docker-compose.yml"],
+                "container": "api",
+            }
+        ]
+
+    def test_files_paths_escaping_project_are_rejected(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        config_manager.add_service("api", "api/env.schema.toml")
+        with open("envshield.yml", "a") as f:
+            f.write(
+                "manifests:\n"
+                "  - files: [docker-compose.yml, ../../../../etc/passwd]\n"
+                "    containers:\n"
+                "      api: api\n"
+            )
+
+        with pytest.raises(UnsafePathError):
+            config_manager.get_deployment_manifests("api")
 
 
 def test_remove_service_deregisters_and_drops_its_manifest_mappings(

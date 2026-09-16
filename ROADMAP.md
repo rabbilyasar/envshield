@@ -58,7 +58,13 @@ order:
    they're found.
 3. **CI / PR Integration** — surface a configuration-contract change or a
    newly undeclared variable directly on a pull request, not just from the
-   CLI.
+   CLI. First slice implemented (`BL-131`): `undeclared --sarif` — a SARIF
+   2.1.0 log, for GitHub Code Scanning or another SARIF-consuming CI tool,
+   annotating a missing declaration on its exact file and line. Deliberately
+   narrow: `schema diff`'s findings describe the contract, not a source
+   location, so they stay on `--json`/exit-code (already documented in
+   README's "Git / CI workflow"); no GitHub API integration, hosted
+   dashboard, PR bot, or reusable Action exists yet.
 4. **AI-Agent Configuration Safety** — let a coding agent inspect, validate,
    and reason about a project's configuration contract without ever
    exposing a secret value to it.
@@ -67,8 +73,10 @@ order:
    creates the strongest "this is useful" moment, and what do real users
    actually ask for next.
 
-None of the above exist today. This is the order we currently expect to
-work through them, not a release schedule.
+None of the above exist today, except item 3's first slice noted above
+(fixed and tested in the working tree, not yet committed or released).
+This is the order we currently expect to work through them, not a release
+schedule.
 
 ---
 

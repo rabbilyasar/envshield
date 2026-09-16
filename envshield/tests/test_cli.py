@@ -2,6 +2,7 @@
 import json
 import os
 
+import toml
 from typer.testing import CliRunner
 
 from envshield.cli import app
@@ -146,7 +147,13 @@ def test_init_auto_registers_a_root_level_compose_file(tmp_path, mocker):
 
         assert result.exit_code == 0
         manifests = config_manager.get_deployment_manifests(service_name)
-        assert manifests == [{"path": "docker-compose.yml", "container": service_name}]
+        assert manifests == [
+            {
+                "path": "docker-compose.yml",
+                "paths": ["docker-compose.yml"],
+                "container": service_name,
+            }
+        ]
 
 
 def test_init_command_in_non_git_repo(tmp_path):
@@ -234,6 +241,223 @@ def test_check_suggestion_for_a_deployment_manifest_does_not_recommend_setup(tmp
         assert result.exit_code == 1
         assert "Run 'envshield setup'" not in result.stdout
         assert "only writes your local config file" in result.stdout
+
+
+def _write_base_and_override_compose(base_vars: str, override_vars: str):
+    with open("docker-compose.yml", "w") as f:
+        f.write(f"services:\n  app:\n    environment:\n{base_vars}")
+    with open("docker-compose.override.yml", "w") as f:
+        f.write(f"services:\n  app:\n    environment:\n{override_vars}")
+
+
+class TestBaseOverrideComposeManifest:
+    """
+    BL-025: 'check'/'doctor'/'explain' all validate a base+override Compose
+    registration as ONE logical manifest, using the exact same merged
+    representation (parsers.factory.get_manifest_parser_and_vars) -- never
+    each other's own copy of the merge.
+    """
+
+    def test_check_sees_override_only_variable_and_base_variable_together(
+        self, tmp_path
+    ):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            _write_root_service()
+            config_manager.add_manifest(
+                files=["docker-compose.yml", "docker-compose.override.yml"],
+                containers={"app": "app"},
+            )
+            with open(SCHEMA_FILE_NAME, "w") as f:
+                f.write(
+                    '[BASE_VAR]\ndescription="x"\n[OVERRIDE_ONLY_VAR]\ndescription="x"\n'
+                )
+            with open(".env", "w") as f:
+                f.write("BASE_VAR=x\nOVERRIDE_ONLY_VAR=x\n")
+            _write_base_and_override_compose(
+                base_vars="      - BASE_VAR=base-value\n",
+                override_vars="      - OVERRIDE_ONLY_VAR=override-value\n",
+            )
+
+            result = runner.invoke(app, ["check"])
+
+            assert result.exit_code == 0
+            assert "docker-compose.yml + docker-compose.override.yml" in result.stdout
+
+    def test_check_does_not_falsely_report_base_variable_missing_from_override(
+        self, tmp_path
+    ):
+        """
+        The exact BL-025 failure mode: registering the override as though
+        it were a standalone manifest used to report every base-declared
+        variable as missing, since the override intentionally contains
+        only a delta.
+        """
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            _write_root_service()
+            config_manager.add_manifest(
+                files=["docker-compose.yml", "docker-compose.override.yml"],
+                containers={"app": "app"},
+            )
+            with open(SCHEMA_FILE_NAME, "w") as f:
+                f.write(
+                    '[BASE_VAR]\ndescription="x"\n[UNRELATED_OVERRIDE_VAR]\ndescription="x"\n'
+                )
+            with open(".env", "w") as f:
+                f.write("BASE_VAR=x\nUNRELATED_OVERRIDE_VAR=x\n")
+            _write_base_and_override_compose(
+                base_vars="      - BASE_VAR=base-value\n",
+                override_vars="      - UNRELATED_OVERRIDE_VAR=y\n",
+            )
+
+            result = runner.invoke(app, ["check"])
+
+            assert result.exit_code == 0
+            assert "Missing in Local" not in result.stdout
+
+    def test_check_json_reports_merged_manifest_under_one_result(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            _write_root_service()
+            config_manager.add_manifest(
+                files=["docker-compose.yml", "docker-compose.override.yml"],
+                containers={"app": "app"},
+            )
+            with open(SCHEMA_FILE_NAME, "w") as f:
+                f.write(
+                    '[BASE_VAR]\ndescription="x"\n[OVERRIDE_ONLY_VAR]\ndescription="x"\n'
+                )
+            with open(".env", "w") as f:
+                f.write("BASE_VAR=x\nOVERRIDE_ONLY_VAR=x\n")
+            _write_base_and_override_compose(
+                base_vars="      - BASE_VAR=base-value\n",
+                override_vars="      - OVERRIDE_ONLY_VAR=override-value\n",
+            )
+
+            result = runner.invoke(app, ["check", "--json"])
+
+            payload = json.loads(result.stdout)
+            assert payload["success"] is True
+            manifest_results = [
+                r for r in payload["results"] if "docker-compose" in r["file"]
+            ]
+            assert len(manifest_results) == 1
+            assert manifest_results[0]["clean"] is True
+            assert manifest_results[0]["missing"] == []
+
+    def test_doctor_reports_merged_manifest_as_one_check(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            _write_root_service()
+            config_manager.add_manifest(
+                files=["docker-compose.yml", "docker-compose.override.yml"],
+                containers={"app": "app"},
+            )
+            with open(SCHEMA_FILE_NAME, "w") as f:
+                f.write(
+                    '[BASE_VAR]\ndescription="x"\n[OVERRIDE_ONLY_VAR]\ndescription="x"\n'
+                )
+            with open(".env", "w") as f:
+                f.write("BASE_VAR=x\nOVERRIDE_ONLY_VAR=x\n")
+            _write_base_and_override_compose(
+                base_vars="      - BASE_VAR=base-value\n",
+                override_vars="      - OVERRIDE_ONLY_VAR=override-value\n",
+            )
+
+            result = runner.invoke(app, ["doctor"])
+
+            # doctor's overall exit code also reflects unrelated checks
+            # (git hooks, .env.example template sync) that have nothing to
+            # do with BL-025 -- what matters here is specifically that the
+            # Deployment Manifest check itself sees the merged result.
+            assert (
+                "✓ Deployment Manifest\n"
+                "  'docker-compose.yml + docker-compose.override.yml' is in sync"
+                in result.stdout
+            )
+
+    def test_doctor_json_uses_the_same_merged_result_as_check(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            _write_root_service()
+            config_manager.add_manifest(
+                files=["docker-compose.yml", "docker-compose.override.yml"],
+                containers={"app": "app"},
+            )
+            with open(SCHEMA_FILE_NAME, "w") as f:
+                f.write(
+                    '[BASE_VAR]\ndescription="x"\n[OVERRIDE_ONLY_VAR]\ndescription="x"\n'
+                )
+            with open(".env", "w") as f:
+                f.write("BASE_VAR=x\nOVERRIDE_ONLY_VAR=x\n")
+            _write_base_and_override_compose(
+                base_vars="      - BASE_VAR=base-value\n",
+                override_vars="      - OVERRIDE_ONLY_VAR=override-value\n",
+            )
+
+            result = runner.invoke(app, ["doctor", "--json"])
+
+            payload = json.loads(result.stdout)
+            checks = payload["results"][0]["checks"]
+            manifest_check = next(
+                c for c in checks if c["name"] == "Deployment Manifest"
+            )
+            assert manifest_check["passed"] is True
+            assert (
+                manifest_check["message"]
+                == "'docker-compose.yml + docker-compose.override.yml' is in sync with schema."
+            )
+
+    def test_explain_reports_override_only_variable_declared_via_merged_manifest(
+        self, tmp_path
+    ):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            _write_root_service()
+            config_manager.add_manifest(
+                files=["docker-compose.yml", "docker-compose.override.yml"],
+                containers={"app": "app"},
+            )
+            with open(SCHEMA_FILE_NAME, "w") as f:
+                f.write('[OVERRIDE_ONLY_VAR]\ndescription="x"\n')
+            with open(".env", "w") as f:
+                f.write("OVERRIDE_ONLY_VAR=x\n")
+            _write_base_and_override_compose(
+                base_vars="      - BASE_VAR=base-value\n",
+                override_vars="      - OVERRIDE_ONLY_VAR=override-value\n",
+            )
+
+            result = runner.invoke(app, ["explain", "OVERRIDE_ONLY_VAR", "--json"])
+
+            payload = json.loads(result.stdout)
+            manifest_refs = payload["manifest_references"]
+            assert len(manifest_refs) == 1
+            assert manifest_refs[0]["status"] == "declared"
+            assert (
+                manifest_refs[0]["path"]
+                == "docker-compose.yml + docker-compose.override.yml"
+            )
+
+    def test_missing_override_layer_gives_a_clear_error_not_a_silent_skip(
+        self, tmp_path
+    ):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            _write_root_service()
+            config_manager.add_manifest(
+                files=["docker-compose.yml", "docker-compose.override.yml"],
+                containers={"app": "app"},
+            )
+            with open(SCHEMA_FILE_NAME, "w") as f:
+                f.write('[BASE_VAR]\ndescription="x"\n')
+            with open(".env", "w") as f:
+                f.write("BASE_VAR=x\n")
+            with open("docker-compose.yml", "w") as f:
+                f.write("services:\n  app:\n    environment:\n      - BASE_VAR=x\n")
+            # docker-compose.override.yml deliberately not created.
+
+            result = runner.invoke(app, ["check", "--json"])
+
+            payload = json.loads(result.stdout)
+            manifest_result = next(
+                r for r in payload["results"] if "docker-compose" in r["file"]
+            )
+            assert manifest_result["clean"] is False
+            assert "docker-compose.override.yml" in manifest_result["error"]
 
 
 def test_doctor_reports_unresolved_for_a_kubernetes_manifest_with_an_external_env_from(
@@ -501,6 +725,138 @@ def test_import_command_on_python_settings_file(tmp_path):
             content = f.read()
             assert "SECRET_KEY" in content
             assert "DEBUG" in content
+
+
+def test_import_command_default_python_behavior_still_discovers_env_reads_only(
+    tmp_path,
+):
+    """
+    Regression: 'import' on a Python file with no --as-local-values must
+    keep discovering actual os.environ/os.getenv reads only -- a plain
+    literal constant sitting in the same file (no env read at all) must
+    not appear, exactly as before --as-local-values existed.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        with open("config.py", "w") as f:
+            f.write(
+                "import os\n"
+                "API_KEY = os.environ.get('REAL_API_KEY')\n"
+                "APP_NAME = 'My Cool App'\n"
+            )
+
+        result = runner.invoke(app, ["import", "config.py"])
+
+        assert result.exit_code == 0
+        with open(SCHEMA_FILE_NAME) as f:
+            content = f.read()
+        assert "REAL_API_KEY" in content
+        assert "APP_NAME" not in content
+
+
+def test_import_command_as_local_values_imports_top_level_assignments(tmp_path):
+    """
+    New flag: '--as-local-values' treats the same file as a local
+    configuration source -- every top-level assignment is imported,
+    including one never read via os.environ anywhere in the file.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        with open("config.py", "w") as f:
+            f.write(
+                "import os\n"
+                "API_KEY = os.environ.get('REAL_API_KEY')\n"
+                "APP_NAME = 'My Cool App'\n"
+            )
+
+        result = runner.invoke(app, ["import", "config.py", "--as-local-values"])
+
+        assert result.exit_code == 0
+        with open(SCHEMA_FILE_NAME) as f:
+            content = f.read()
+        assert "API_KEY" in content
+        assert "APP_NAME" in content
+        # The discovery-only variable name is specific to a real env read --
+        # importing as local values reads the assignment target instead.
+        assert "REAL_API_KEY" not in content
+
+
+def test_import_command_as_local_values_has_no_effect_on_a_dotenv_file(tmp_path):
+    """'--as-local-values' is Python-file-specific -- a dotenv import must be unaffected."""
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        with open(".env", "w") as f:
+            f.write("PAPERLESS_REDIS=redis://broker:6379\n")
+
+        without_flag = runner.invoke(app, ["import", ".env", "--output", "a.toml"])
+        with open("a.toml") as f:
+            without_flag_content = f.read()
+
+        with_flag = runner.invoke(
+            app, ["import", ".env", "--as-local-values", "--output", "b.toml"]
+        )
+        with open("b.toml") as f:
+            with_flag_content = f.read()
+
+        assert without_flag.exit_code == 0
+        assert with_flag.exit_code == 0
+        assert without_flag_content == with_flag_content
+
+
+def test_import_command_as_local_values_matches_service_add_import_local_file_path(
+    tmp_path,
+):
+    """
+    '--as-local-values' must be the same underlying mechanism 'service add
+    --import FILE --local-file FILE' already uses on a fresh schema -- not
+    a second, potentially-diverging implementation.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.makedirs("alpha/config")
+        with open("alpha/config/env_config.local.py", "w") as f:
+            f.write(
+                "import os\n"
+                "DB_HOST = ''\n"
+                "USE_LOCAL_DB = os.environ.get('USE_LOCAL_DB')\n"
+            )
+
+        via_flag = runner.invoke(
+            app,
+            [
+                "import",
+                "alpha/config/env_config.local.py",
+                "--as-local-values",
+                "--output",
+                "via_flag.toml",
+            ],
+        )
+        via_service_add = runner.invoke(
+            app,
+            [
+                "service",
+                "add",
+                "alpha",
+                "alpha",
+                "--local-file",
+                "alpha/config/env_config.local.py",
+                "--import",
+                "alpha/config/env_config.local.py",
+            ],
+        )
+
+        assert via_flag.exit_code == 0
+        assert via_service_add.exit_code == 0
+        with open("via_flag.toml") as f:
+            via_flag_schema = toml.loads(f.read())
+        with open("alpha/env.schema.toml") as f:
+            via_service_add_schema = toml.loads(f.read())
+
+        assert set(via_flag_schema.keys()) == set(via_service_add_schema.keys())
+        assert set(via_flag_schema.keys()) == {"DB_HOST", "USE_LOCAL_DB"}
+
+
+def test_import_help_lists_as_local_values_option():
+    result = runner.invoke(app, ["import", "--help"])
+
+    assert result.exit_code == 0
+    assert "--as-local-values" in result.stdout
 
 
 def test_import_command_warns_about_commented_out_variables(tmp_path):

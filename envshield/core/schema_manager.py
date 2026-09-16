@@ -11,7 +11,7 @@ from envshield.core import file_updater, schema_types
 from envshield.core.exceptions import EnvShieldException
 from envshield.parsers._base import BaseParser
 from envshield.parsers._deployment import looks_like_unrendered_helm_template
-from envshield.parsers.factory import get_parser
+from envshield.parsers.factory import get_manifest_parser_and_vars, get_parser
 
 console = Console()
 
@@ -463,23 +463,24 @@ def load_union_sources(
 
     for manifest in config_manager.get_deployment_manifests(service_name):
         manifest_container = manifest.get("container") or container
-        m_parser = get_parser(
-            manifest["path"], container=manifest_container, prefer=service_name
-        )
+        try:
+            m_parser, local_values = get_manifest_parser_and_vars(
+                manifest["paths"],
+                container=manifest_container,
+                prefer=service_name,
+                get_values=True,
+            )
+        except (EnvShieldException, FileNotFoundError, ValueError) as e:
+            errors.append(f"{manifest['path']}: {e}")
+            continue
         if not m_parser:
             errors.append(
                 f"{manifest['path']}: {_no_parser_found_message(manifest['path'])}"
             )
             continue
-        try:
-            local_values = m_parser.get_vars(manifest["path"], get_values=True)
-            sources.append(
-                UnionSource(
-                    manifest["path"], local_values, m_parser.has_unresolved_source
-                )
-            )
-        except (EnvShieldException, FileNotFoundError, ValueError) as e:
-            errors.append(f"{manifest['path']}: {e}")
+        sources.append(
+            UnionSource(manifest["path"], local_values, m_parser.has_unresolved_source)
+        )
 
     return sources, errors
 
@@ -532,6 +533,7 @@ def check_schema(
     file_path: str,
     service_name: str,
     container: Optional[str] = None,
+    paths: Optional[List[str]] = None,
 ) -> bool:
     """
     Validates a local environment file against that service's
@@ -543,6 +545,13 @@ def check_schema(
     than one; if omitted, `service_name` is tried as a same-named fallback
     before giving up and asking for it explicitly (see the parsers' `prefer`).
 
+    `paths`, when given, is the ordered list of layer files `file_path`
+    displays as one logical manifest (BL-025's Compose base+override
+    layering) -- resolved and merged via
+    parsers.factory.get_manifest_parser_and_vars instead of parsing
+    `file_path` alone. Omitted (the default), `file_path` is parsed by
+    itself, exactly as before BL-025.
+
     Returns:
         True if the local file is in sync with the schema, False otherwise
         (including when the file or a usable parser can't be found).
@@ -553,19 +562,23 @@ def check_schema(
 
     # Load the schema and the local .env file
     schema = config_manager.load_schema(service_name=service_name)
-    parser = get_parser(file_path, container=container, prefer=service_name)
-
-    if not parser:
-        console.print(f"[red]Error:[/red] {_no_parser_found_message(file_path)}")
-        return False
 
     try:
-        local_values = parser.get_vars(file_path, get_values=True)
-    except FileNotFoundError:
-        console.print(f"[red]Error:[/red] File not found: '{file_path}'.")
+        parser, local_values = get_manifest_parser_and_vars(
+            paths if paths is not None else [file_path],
+            container=container,
+            prefer=service_name,
+            get_values=True,
+        )
+    except FileNotFoundError as e:
+        console.print(f"[red]Error:[/red] {e}")
         return False
     except (ValueError, EnvShieldException) as e:
         console.print(f"[red]Error:[/red] {e}")
+        return False
+
+    if not parser:
+        console.print(f"[red]Error:[/red] {_no_parser_found_message(file_path)}")
         return False
 
     diff = diff_against_schema(
@@ -635,6 +648,7 @@ def check_result(
     file_path: str,
     service_name: str,
     container: Optional[str] = None,
+    paths: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """
     Same validation as check_schema, but returns a plain, JSON-serializable
@@ -642,10 +656,20 @@ def check_result(
     function rather than a flag on check_schema, so the existing
     Rich-rendering path (and its return-value contract) is never at risk of
     a behavior change from this one.
+
+    `paths` has the same meaning as in check_schema (BL-025's ordered
+    Compose base+override layers) -- omitted, `file_path` is parsed alone,
+    exactly as before BL-025. The returned dict's "file" key is always
+    `file_path` either way, so its JSON shape is unchanged.
     """
     try:
         schema = config_manager.load_schema(service_name=service_name)
-        parser = get_parser(file_path, container=container, prefer=service_name)
+        parser, local_values = get_manifest_parser_and_vars(
+            paths if paths is not None else [file_path],
+            container=container,
+            prefer=service_name,
+            get_values=True,
+        )
         if not parser:
             return {
                 "file": file_path,
@@ -653,13 +677,12 @@ def check_result(
                 "clean": False,
                 "error": _no_parser_found_message(file_path),
             }
-        local_values = parser.get_vars(file_path, get_values=True)
-    except FileNotFoundError:
+    except FileNotFoundError as e:
         return {
             "file": file_path,
             "service": service_name,
             "clean": False,
-            "error": f"File not found: '{file_path}'.",
+            "error": str(e),
         }
     except (ValueError, EnvShieldException) as e:
         return {

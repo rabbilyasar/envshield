@@ -509,3 +509,138 @@ class TestAdditionalSourceRootsEndToEnd:
             assert payload["has_missing_declarations"] is True
             variables = {c["variable"] for c in payload["changes"]}
             assert "SHARED_FLAG" in variables
+
+
+class TestSarifOutput:
+    """CI/PR integration: '--sarif' is a pure presentation mapping over the
+    same DependencyChangeReport --json already renders -- these tests
+    exercise the SARIF-specific shape (rule id, location, level,
+    'executionSuccessful') on top of scenarios TestJsonOutput and
+    TestMultiServiceFileOwnership already prove at the domain level."""
+
+    def test_clean_result_has_no_sarif_results_and_exits_zero(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            _single_service_repo()
+
+            result = runner.invoke(app, ["undeclared", "--sarif"])
+
+            assert result.exit_code == 0
+            doc = json.loads(result.stdout)
+            assert doc["version"] == "2.1.0"
+            assert doc["runs"][0]["results"] == []
+            assert "invocations" not in doc["runs"][0]
+
+    def test_missing_declaration_becomes_a_sarif_result_with_rule_and_location(
+        self, tmp_path
+    ):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            _single_service_repo()
+            _write("app.py", "import os\nx = 1\ny = os.environ.get('NEW_VAR')\n")
+
+            result = runner.invoke(app, ["undeclared", "--sarif"])
+
+            assert result.exit_code == 1
+            doc = json.loads(result.stdout)
+            results = doc["runs"][0]["results"]
+            assert len(results) == 1
+            finding = results[0]
+            assert finding["ruleId"] == "undeclared-variable"
+            assert finding["level"] == "error"
+            assert "NEW_VAR" in finding["message"]["text"]
+            location = finding["locations"][0]["physicalLocation"]
+            assert location["artifactLocation"]["uri"] == "app.py"
+            assert location["region"]["startLine"] == 3
+            assert finding["properties"]["variable"] == "NEW_VAR"
+            assert finding["properties"]["service"] == "api"
+            # Exactly one stable rule, declared once on the tool driver.
+            rules = doc["runs"][0]["tool"]["driver"]["rules"]
+            assert [r["id"] for r in rules] == ["undeclared-variable"]
+
+    def test_an_already_declared_new_usage_produces_no_sarif_result(self, tmp_path):
+        """SARIF is for actionable findings -- a new usage that's already
+        declared is not one, even though '--json' still reports it (see
+        TestDefaultComparisonIsHeadVsWorkingTree's equivalent JSON case)."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            _init_repo()
+            _write("envshield.yml", "services:\n  api:\n    schema: env.schema.toml\n")
+            _write("env.schema.toml", '[DB_HOST]\ndefaultValue = "x"\n')
+            _commit("init")
+            _write("app.py", "import os\nx = os.environ.get('DB_HOST')\n")
+
+            result = runner.invoke(app, ["undeclared", "--sarif"])
+
+            assert result.exit_code == 0
+            doc = json.loads(result.stdout)
+            assert doc["runs"][0]["results"] == []
+
+    def test_bad_revision_is_a_tool_execution_notification_not_a_result(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            _single_service_repo()
+
+            result = runner.invoke(
+                app, ["undeclared", "not-a-real-revision", "HEAD", "--sarif"]
+            )
+
+            assert result.exit_code == 1
+            doc = json.loads(result.stdout)
+            run = doc["runs"][0]
+            assert run["results"] == []
+            assert run["invocations"][0]["executionSuccessful"] is False
+            notification = run["invocations"][0]["toolExecutionNotifications"][0]
+            assert "not-a-real-revision" in notification["message"]["text"]
+
+    def test_a_broken_service_is_a_notification_and_does_not_silence_a_healthy_ones_finding(
+        self, tmp_path
+    ):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            _init_repo()
+            _write(
+                "envshield.yml",
+                "services:\n"
+                "  api:\n    schema: services/api/env.schema.toml\n"
+                "  broken:\n    schema: services/broken/env.schema.toml\n",
+            )
+            _write("services/api/env.schema.toml", "")
+            _write("services/broken/env.schema.toml", "not valid toml [[[")
+            _commit("init")
+            _write(
+                "services/api/app.py",
+                "import os\nx = os.environ.get('API_ONLY')\n",
+            )
+
+            result = runner.invoke(app, ["undeclared", "--sarif"])
+
+            assert result.exit_code == 1
+            doc = json.loads(result.stdout)
+            run = doc["runs"][0]
+            variables = {r["properties"]["variable"] for r in run["results"]}
+            assert variables == {"API_ONLY"}
+            assert run["invocations"][0]["executionSuccessful"] is False
+            notification_text = run["invocations"][0]["toolExecutionNotifications"][0][
+                "message"
+            ]["text"]
+            assert "broken" in notification_text
+
+    def test_json_and_sarif_together_is_a_clean_error(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            _single_service_repo()
+
+            result = runner.invoke(app, ["undeclared", "--json", "--sarif"])
+
+            assert result.exit_code == 1
+            assert "not both" in result.stdout
+
+    def test_sarif_output_stays_pure_even_when_a_symlink_is_skipped(self, tmp_path):
+        """Mirrors TestSymlinkHardening's JSON equivalent: the console-only
+        symlink warning must never land in '--sarif' stdout either."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            _single_service_repo()
+            _write("real.py", "import os\nx = os.environ.get('NEW_VAR')\n")
+            os.symlink("real.py", "link.py")
+
+            result = runner.invoke(app, ["undeclared", "--sarif"])
+
+            assert result.exit_code == 1
+            doc = json.loads(result.stdout)  # raises if any stray text got mixed in
+            variables = {r["properties"]["variable"] for r in doc["runs"][0]["results"]}
+            assert variables == {"NEW_VAR"}

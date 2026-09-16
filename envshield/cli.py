@@ -531,6 +531,7 @@ def check(
                             manifest["path"],
                             service_name=target,
                             container=manifest_container,
+                            paths=manifest["paths"],
                         )
                         results.append(result)
                         if not is_union and not result["clean"]:
@@ -539,6 +540,7 @@ def check(
                         manifest["path"],
                         service_name=target,
                         container=manifest_container,
+                        paths=manifest["paths"],
                     ):
                         if not is_union:
                             had_error = True
@@ -1128,6 +1130,32 @@ def _render_dependency_change_table(
         )
 
 
+def _print_dependency_error(
+    message: str,
+    json_output: bool,
+    sarif_output: bool,
+    service_name: Optional[str] = None,
+) -> None:
+    """
+    The one place 'undeclared' renders an error for any of its three output
+    modes -- keeps '--sarif' reporting a failure the same standard way
+    '--json' already does (never silently), via SARIF's own
+    'toolExecutionNotifications'/'executionSuccessful' mechanism rather
+    than a bespoke field.
+    """
+    if sarif_output:
+        doc = dependency_diff.to_sarif(
+            [], tool_version=__version__, errors=[(service_name, message)]
+        )
+        print(json.dumps(doc, indent=2))
+    elif json_output:
+        print(
+            json.dumps({"has_missing_declarations": False, "error": message}, indent=2)
+        )
+    else:
+        console.print(f"[bold red]Error:[/bold red] {message}")
+
+
 @app.command(name="undeclared")
 def undeclared(
     rev_a: Optional[str] = typer.Argument(
@@ -1151,6 +1179,11 @@ def undeclared(
         "--json",
         help="Print machine-readable JSON instead of a table; suppresses all other output.",
     ),
+    sarif_output: bool = typer.Option(
+        False,
+        "--sarif",
+        help="Print a SARIF 2.1.0 log instead of a table or JSON -- for GitHub Code Scanning or another SARIF-consuming CI tool. Only a missing declaration becomes a SARIF result; a newly introduced usage that's already declared is not an actionable finding.",
+    ),
 ):
     """
     Reports environment-variable reads newly introduced since a given
@@ -1161,19 +1194,16 @@ def undeclared(
     files included) -- catching a newly introduced dependency before you
     commit it.
     """
+    if json_output and sarif_output:
+        console.print("[bold red]Error:[/bold red] pass --json or --sarif, not both.")
+        raise typer.Exit(code=1)
+
     if (rev_a is None) != (rev_b is None):
         message = (
             "pass both revisions, or neither -- 'envshield undeclared' "
             "alone compares HEAD against your current working tree."
         )
-        if json_output:
-            print(
-                json.dumps(
-                    {"has_missing_declarations": False, "error": message}, indent=2
-                )
-            )
-        else:
-            console.print(f"[bold red]Error:[/bold red] {message}")
+        _print_dependency_error(message, json_output, sarif_output)
         raise typer.Exit(code=1)
 
     if rev_a is None and rev_b is None:
@@ -1197,15 +1227,7 @@ def undeclared(
         for candidate in (revision_a, revision_b):
             if not git_utils.revision_exists(candidate):
                 message = f"revision '{candidate}' does not resolve to a commit."
-                if json_output:
-                    print(
-                        json.dumps(
-                            {"has_missing_declarations": False, "error": message},
-                            indent=2,
-                        )
-                    )
-                else:
-                    console.print(f"[bold red]Error:[/bold red] {message}")
+                _print_dependency_error(message, json_output, sarif_output)
                 raise typer.Exit(code=1)
 
     try:
@@ -1213,14 +1235,7 @@ def undeclared(
             service, invocation_dir=INVOCATION_DIR
         )
     except EnvShieldException as e:
-        if json_output:
-            print(
-                json.dumps(
-                    {"has_missing_declarations": False, "error": str(e)}, indent=2
-                )
-            )
-        else:
-            console.print(f"[bold red]Error:[/bold red] {e}")
+        _print_dependency_error(str(e), json_output, sarif_output)
         raise typer.Exit(code=1)
 
     # Mirrors schema_diff's own multi-target loop exactly: a per-service
@@ -1230,13 +1245,15 @@ def undeclared(
     had_error = False
     any_missing = False
     results: List[Dict[str, Any]] = []
+    sarif_reports: List[Any] = []
+    sarif_errors: List[Any] = []
 
     for target in targets:
-        if not json_output:
+        if not json_output and not sarif_output:
             _print_service_header(targets, target)
         try:
             usages_a, usages_b = dependency_snapshot.discover_usages_for_service(
-                target, revision_a, revision_b, quiet=json_output
+                target, revision_a, revision_b, quiet=(json_output or sarif_output)
             )
             schema_vars = set(
                 schema_snapshot.load_schema_for_diff(target, revision_b).keys()
@@ -1247,6 +1264,8 @@ def undeclared(
             had_error = True
             if json_output:
                 results.append({"service": target, "error": str(e)})
+            elif sarif_output:
+                sarif_errors.append((target, str(e)))
             else:
                 console.print(f"[bold red]Error:[/bold red] {e}")
             continue
@@ -1258,6 +1277,8 @@ def undeclared(
             entry = result.to_dict()
             entry["service"] = target
             results.append(entry)
+        elif sarif_output:
+            sarif_reports.append((target, result))
         else:
             _render_dependency_change_table(result, label_a, label_b)
 
@@ -1293,6 +1314,11 @@ def undeclared(
                 "results": results,
             }
         print(json.dumps(payload, indent=2))
+    elif sarif_output:
+        doc = dependency_diff.to_sarif(
+            sarif_reports, tool_version=__version__, errors=sarif_errors
+        )
+        print(json.dumps(doc, indent=2))
 
     if had_error or any_missing:
         raise typer.Exit(code=1)
@@ -2017,6 +2043,16 @@ def import_command(
         "-s",
         help="If set, import to this service's schema path (for multi-service projects).",
     ),
+    as_local_values: bool = typer.Option(
+        False,
+        "--as-local-values",
+        help=(
+            "For a Python config module, treat it as a local configuration source "
+            "whose top-level assignments ARE its declared values -- import every "
+            "assignment, instead of discovering actual os.environ/os.getenv reads. "
+            "No effect on a dotenv file or a deployment manifest."
+        ),
+    ),
 ):
     """Builds (or refreshes) a schema from an existing config file -- .env,
     a Python config module, or a deployment manifest.
@@ -2082,7 +2118,10 @@ def import_command(
                 existing_schema = None
 
         schema_content = importer.generate_schema_from_file(
-            file, interactive, existing_schema=existing_schema
+            file,
+            interactive,
+            existing_schema=existing_schema,
+            as_local_values=as_local_values,
         )
 
         with open(output, "w") as f:

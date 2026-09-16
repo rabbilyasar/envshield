@@ -1,6 +1,7 @@
 # envshield/core/scanner.py
 import difflib
 import fnmatch
+import logging
 import os
 import re
 import shlex
@@ -19,6 +20,7 @@ from ..utils import git_utils
 from . import discovery
 
 console = Console()
+logger = logging.getLogger(__name__)
 
 # Files (and, for importer.py's default-value suggestion path, individual
 # values) larger than this are skipped rather than fully read/embedded --
@@ -42,7 +44,147 @@ SECRET_PATTERNS: List[Dict[str, str]] = [
         # (unlike the AWS pattern below, which has no such anchor). Adding
         # one here would misfire on the single most common shape -- 'KEY='
         # with no space -- since '=' is itself a member of the value charset.
-        "pattern": r"(?i)(key|api(?!version)|token|secret|password|auth|credential)[a-z0-9_ .\-,]{0,25}\s*[:=]\s*(?:['\"][0-9a-zA-Z\-_=]{16,64}['\"]|[0-9a-zA-Z\-_=]{16,64}(?![0-9a-zA-Z\-_=]))",
+        #
+        # Two regressions found on a real site codebase, both now fixed:
+        #
+        # 1. The keyword group used to have no boundary at all, so it
+        # matched as a mid-word substring -- e.g. "auth" inside
+        # "work_authorization", "key" inside "monkey" -- flagging an
+        # ordinary Python type annotation (`work_authorization:
+        # WorkAuthorization`) as a secret. (?<![a-z])...(?![a-z]) requires
+        # the keyword to start and end its own word, not continue into (or
+        # out of) more letters -- '_'/start-of-line/'='/':' are valid
+        # boundaries, another letter is not. This mirrors
+        # importer.py's key_contains_secret_keyword token-based philosophy,
+        # but can't reuse its exact split("_")-based mechanism: the scanner
+        # matches arbitrary line text, not an already-isolated variable
+        # name, so a boundary check is the equivalent primitive here. The
+        # four explicit no-underscore compounds (accesskey/secretkey/
+        # authtoken/apikey) are listed before their single-word components
+        # so they match as one fused unit -- same compounds importer.py's
+        # SECRET_KEY_KEYWORDS already special-cases, for the same reason.
+        #
+        # 2. The unquoted branch's trailing exclusion only ruled out
+        # stopping mid-token (another identifier char immediately
+        # following); it didn't rule out stopping right before a '(' --
+        # so a bare function name in a call (`cache_key =
+        # compute_fit_cache_key(...)`) matched as if the call itself were
+        # the secret value. Adding '(' to that exclusion set means a value
+        # immediately followed by an opening paren -- i.e. actually a
+        # function call, not a literal -- is never treated as a secret.
+        #
+        # Broader real-world validation (phineas, Zeus) found the same
+        # underlying class through three more syntactic shapes, each an
+        # equally strong signal that what follows is code, not a literal:
+        # ')' -- the match is actually an ARGUMENT inside an already-open
+        # call (`s.loads(token, max_age=...)`), not the call target itself;
+        # '[' -- a subscript/dict lookup (`settings["api_key"]`); '<' -- a
+        # generic/type-parameter list (TypeScript's `api:
+        # DialogInstanceApi<T>`, found in a vendored .d.ts file, confirming
+        # this isn't Python-specific). All three are added to the same
+        # exclusion set '(' already established.
+        #
+        # '.' needs a narrower rule than the other three: unlike them, a
+        # real unquoted secret can legitimately precede a literal '.' -- a
+        # sentence-ending period in prose ("the key is abc123...xyz.").
+        # Blanket-excluding '.' would risk a false NEGATIVE on exactly that
+        # case. What's actually evidence of code, confirmed by phineas'
+        # `SessionValueType.BLOB`-style attribute access, is a '.'
+        # immediately continuing into another identifier -- so only that
+        # is excluded ('\.[a-zA-Z_]'), leaving a '.' followed by
+        # whitespace, end-of-string, or punctuation (an ordinary sentence
+        # ending) unaffected.
+        #
+        # The bracket/paren exclusions tolerate whitespace before them
+        # ('\s*[([<)]', not a bare character class) -- a real call/
+        # subscript/generic can have space before its closing punctuation
+        # (`call(  token = value  )`), and rejecting only the no-space
+        # form would make the fix depend on one exact whitespace style.
+        #
+        # Real-world precision/recall measurement (Zeus, Issuebear,
+        # Issuebear Management) found two more issues, both in the QUOTED
+        # branch only -- the unquoted branch is deliberately left
+        # untouched, since bare identifiers are already a much larger
+        # false-positive surface (Milestones 1-2 above) and loosening it
+        # further would compound that risk with no offsetting evidence:
+        #
+        # 3. The quoted branch's 16-char minimum missed real, hardcoded
+        # short passwords -- confirmed via literal 'MYSQL_PASSWORD'/
+        # 'MYSQL_ROOT_PASSWORD' values (8 and 13 chars) in committed
+        # docker-compose files, identically in three separate repositories.
+        # Lowered to 8 -- the smallest minimum that catches both confirmed
+        # cases -- rather than guessing lower with no evidence behind it.
+        #
+        # 4. A recurring false positive: a '*_KEY'-named constant or
+        # keyword argument (`SESSION_STATE_KEY = "xero_oauth_state"`,
+        # `get_config(key="tourradar_username")`) whose quoted value is
+        # itself a configuration/lookup NAME, not a credential -- 12
+        # confirmed instances in Zeus alone. Every one of those 12 values
+        # was pure ASCII letters/underscores with consistent casing (all
+        # lower or all UPPER, e.g. 'xero_oauth_state', 'TOURRADAR_USERNAME')
+        # and contained no digit; every real secret checked alongside them
+        # (API_ADMIN_TOKEN, APP_SECRET, GOOGLE_API_KEY, AWS_ACCESS_KEY_ID,
+        # etc.) contained at least one digit, with no exceptions found. The
+        # two negative lookaheads below reject a quoted value only when
+        # it's ENTIRELY lowercase-letters-and-underscores or ENTIRELY
+        # UPPERCASE-LETTERS-AND-UNDERSCORES end to end -- i.e. shaped like
+        # an identifier/name, not a generated token. A value containing
+        # even one digit, one mixed-case pair, or any other character is
+        # unaffected and still matches exactly as before. This is
+        # deliberately narrower than "no digits" alone would be: a mixed-
+        # case no-digit string (rare in this corpus, not evidenced either
+        # way) is NOT excluded, only the two specific all-one-case shapes
+        # actually observed causing false positives.
+        #
+        # '(?-i:...)' around each lookahead's character class: the whole
+        # pattern runs under the leading '(?i)', which would otherwise make
+        # '[a-z_]+' and '[A-Z_]+' identical to each other and to
+        # '[A-Za-z_]+' -- silently broadening "all one case" into "all
+        # letters, any case" and excluding real mixed-case secrets that
+        # contain no digit. Scoping case-sensitivity back on for just these
+        # two groups keeps the distinction the evidence actually supports:
+        # only a value that is ENTIRELY one actual case is excluded.
+        #
+        # 5. Real-world validation found 5 more false positives past #4's
+        # all-one-case rule: a value that's digit-free and clearly
+        # word-segmented -- camelCase/PascalCase ('reportName',
+        # 'layoutModeKey') or hyphen-separated words ('session-cookie',
+        # a non-secret itsdangerous 'salt="user-login"' argument). Every
+        # one of the 5 confirmed instances decomposed into segments of 4+
+        # letters; every real secret checked alongside them (including one,
+        # a real Google API key, that itself has 20+ internal case
+        # transitions) contains at least one digit -- the four new
+        # lookaheads below require the value to be ENTIRELY letters (no
+        # digit ends the match early) AND cleanly segmented, so they cannot
+        # exclude a real secret in this corpus regardless of its casing.
+        #
+        # Each segment (the leading run and every run after a capital, or
+        # after a hyphen) must be 2+ letters, not 1+ -- confirmed necessary
+        # by direct testing: a 1+ minimum also matches a string like
+        # 'aZxQkLpmBvCdEfGhJk' (alternating single-letter case flips, the
+        # exact shape a real generated token can produce), which is not a
+        # real word boundary and must not be excluded. The 2+ floor is
+        # still comfortably below the 4+ actually observed in every
+        # confirmed false positive, so it isn't a tight fit to the evidence.
+        "pattern": (
+            r"(?i)(?<![a-z])(accesskey|secretkey|authtoken|apikey|api(?!version)|key|token|secret|password|auth|credential)(?![a-z])"
+            r"[a-z0-9_ .\-,]{0,25}\s*[:=]\s*"
+            r"(?:['\"]"
+            r"(?!(?-i:[a-z_]+)['\"])(?!(?-i:[A-Z_]+)['\"])"
+            r"(?!(?-i:[a-z]{2,}(?:[A-Z][a-z]{2,})+)['\"])"
+            r"(?!(?-i:[A-Z][a-z]{2,}(?:[A-Z][a-z]{2,})*)['\"])"
+            r"(?!(?-i:[a-z]{2,}(?:-[a-z]{2,})+)['\"])"
+            r"(?!(?-i:[A-Z]{2,}(?:-[A-Z]{2,})+)['\"])"
+            r"[0-9a-zA-Z\-_=]{8,64}['\"]"
+            # Named so BL-129's file-local suppression check can read back
+            # exactly the unquoted value that matched, without re-deriving
+            # it (fragile: the value's own charset includes '=', so a
+            # naive re-scan from the end of the match can't reliably tell
+            # the value apart from a keyword like 'key=' immediately
+            # preceding it). Purely observational -- doesn't change what
+            # matches, only exposes what already did.
+            r"|(?P<unquoted_value>[0-9a-zA-Z\-_=]{16,64})(?![0-9a-zA-Z\-_=]|\s*[([<)]|\.[a-zA-Z_]))"
+        ),
     },
     {
         # Matches either the header or footer line, in case one was
@@ -61,7 +203,41 @@ SECRET_PATTERNS: List[Dict[str, str]] = [
         # "postgres://" alone (the shorter, older/node-style form) used to
         # be the only variant this matched, silently missing the single most
         # common real-world connection-string scheme.
-        "pattern": r"(?i)(postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis)://[^:]+:[^@]+@",
+        #
+        # "(?<![a-zA-Z])" before the scheme alternation, "mariadb" added to
+        # it, and "(?:\+[a-zA-Z0-9_]+)?" after it -- found on real Zeus/
+        # issuebear/issuebear-management codebases: SQLAlchemy's
+        # "dialect+driver://" syntax (e.g. "mysql+pymysql://",
+        # "mariadb+pymysql://") was never modeled, so the only reason
+        # "mysql+pymysql://" or "mariadb+pymysql://" ever matched at all was
+        # an accidental substring match of "mysql" inside "pymysql" landing
+        # right before "://". That accident fires just as easily when the
+        # embedded "credentials" are actually unresolved Python f-string
+        # placeholders (e.g. "{db_user}:{db_pass}"), producing a false
+        # positive. Explicitly modeling the real dialect+driver grammar (with
+        # a word-boundary lookbehind so "mysql" can't match as a substring of
+        # an unrelated word) fixes the false positive without losing the
+        # driver forms themselves -- "mariadb+pymysql://user:realpass@host"
+        # with genuinely hardcoded credentials still matches, and
+        # "postgresql+psycopg2://" is now recognized too (previously missed
+        # entirely).
+        #
+        # "[^@{}]+" (was "[^@]+") for the password segment -- excludes "{"
+        # and "}" from the password specifically, so a literal Python
+        # f-string placeholder ("{db_pass}") can never be mistaken for a
+        # real password. The username segment is deliberately left
+        # unrestricted ("[^:]+"): a templated username next to a genuinely
+        # hardcoded password (e.g. "{db_user}:realpass123@...") must still
+        # be flagged, since the actual secret -- the password -- is real.
+        # Known accepted tradeoff: a literal password that itself contains
+        # "{" or "}" (rare) will no longer match; this mirrors the existing,
+        # separately-tracked special-character recall gap in the Generic
+        # API Key pattern rather than introducing a new class of problem.
+        "pattern": (
+            r"(?i)(?<![a-zA-Z])"
+            r"(postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|redis)"
+            r"(?:\+[a-zA-Z0-9_]+)?://[^:]+:[^@{}]+@"
+        ),
     },
     {
         "name": "URL with Embedded API Key (DSN-style)",
@@ -151,15 +327,84 @@ SECRET_PATTERNS: List[Dict[str, str]] = [
 _COMPILED_SECRET_PATTERNS = [
     (secret["name"], re.compile(secret["pattern"])) for secret in SECRET_PATTERNS
 ]
+
+# Real-world recall gap (Zeus, Issuebear, Issuebear Management, all three
+# identically): Docker Compose's own list-style 'environment:' syntax
+# (`- MYSQL_PASSWORD=password`) writes literal credentials UNQUOTED, so they
+# never reach Generic API Key's quoted branch at all, and the unquoted
+# branch's 16-char floor (a floor that exists specifically because bare
+# identifiers/references are a large false-positive surface in ordinary
+# Python/JS source -- see Milestones 1-2) is too high for a real, short,
+# hardcoded password (confirmed misses: 8 and 13 chars).
+#
+# Broadening the *generic* unquoted floor was considered and rejected:
+# investigation found a real counter-example (a CodeBuild buildspec's
+# 'parameter-store:' mapping maps a credential-named key to an SSM
+# *path*, not a value) that would become a false positive under a general
+# "short value near a credential keyword" rule. What's actually safe to
+# recognize is much narrower: this exact, well-known file naming
+# convention, combined with a complete line that has no other plausible
+# reading. `_scan_single_file` already has the file path available -- no
+# parser is introduced, only a second, self-contained, file-name-gated
+# check.
+#
+# Deliberately keeps the SAME keyword requirement as Generic API Key
+# (reused, not duplicated) rather than matching every '- KEY=value' entry
+# in a Compose file: the exact same environment blocks that contain the
+# two confirmed misses also contain 'MYSQL_USER=local' and
+# 'REDIS_REPLICATION_MODE=master' on immediately adjacent lines -- neither
+# is a credential, and a keyword-free rule would flag both. Requiring the
+# same word-bounded keyword this file already uses elsewhere targets
+# exactly the shape that's missing, without inventing a new "any
+# environment variable is interesting" detector.
+#
+# Anchored to the WHOLE line ('^...$', tolerating only surrounding
+# whitespace) so it cannot match a prefix of something else -- a quoted
+# entire-entry ('- "traefik.enable=true"'), a mapping-style line
+# ('KEY: value', no leading '-'), or a '${VAR}' reference (excluded by the
+# value charset itself, which contains no '$', '{', or '}') all fail to
+# match, confirmed via direct testing against real examples of each shape
+# in this exact corpus. The value charset (alphanumeric, '-', '_', '.') is
+# deliberately narrow -- the evidence (8/13-char plain-word passwords)
+# doesn't call for anything broader, and a lower floor (4, versus the
+# generic branches' 8/16) is defensible specifically because the line
+# shape itself is already strong evidence, leaving little room for an
+# ordinary short word to collide.
+_DOCKER_COMPOSE_FILENAME_RE = re.compile(r"^docker-compose.*\.ya?ml$", re.IGNORECASE)
+_COMPOSE_ENV_LIST_ENTRY_RE = re.compile(
+    r"^\s*-\s+"
+    r"(?=[A-Z][A-Z0-9_]*=)"
+    r"(?=[A-Z0-9_]*(?i:(?<![a-z])(?:accesskey|secretkey|authtoken|apikey|"
+    r"api(?!version)|key|token|secret|password|auth|credential)(?![a-z]))"
+    r"[A-Z0-9_]*=)"
+    r"[A-Z][A-Z0-9_]*=([0-9a-zA-Z\-_.]{4,64})\s*$"
+)
+
+
+def _is_docker_compose_file(file_path: str) -> bool:
+    return bool(_DOCKER_COMPOSE_FILENAME_RE.match(os.path.basename(file_path)))
+
+
 # Directories that are never useful to scan and are expensive/noisy to walk:
 # dependency trees, VCS internals, virtualenvs, and build artifacts. These are
 # always pruned in addition to whatever the user configures in envshield.yml.
+#
+# "vendor" was added after real-world scanning turned up FPs exclusively in
+# third-party vendored code (a minified Private Key stub, a minified plugin
+# bundle, and a vendored TypeScript .d.ts's type-signature parameters) with
+# zero confirmed real credentials ever found under a vendor/ path across the
+# validated corpus -- the same noisy-dependency-tree reasoning as
+# node_modules above, not a new exclusion category. Matched by exact
+# directory name (see _is_default_excluded_dir), so "my_vendor" or
+# "vendored" are untouched -- only a path component literally named
+# "vendor" is pruned, at any depth.
 DEFAULT_EXCLUDED_DIRS = {
     ".git",
     "node_modules",
     "venv",
     ".venv",
     "env",
+    "vendor",
     "__pycache__",
     ".mypy_cache",
     ".pytest_cache",
@@ -329,6 +574,256 @@ def _record_discovered_usages(
             )
 
 
+# BL-129: file-local bare-identifier reference suppression -- Generic API
+# Key's unquoted branch on a Python file only. Deliberately NOT a symbol
+# table or parser: a real-world investigation (see this session's own
+# milestone report) found the dominant remaining false-positive class was
+# unquoted Python code -- `token=existing_token`, `client, api =
+# some_fixture` -- being read as if the bare identifier were itself a
+# secret literal. Every real credential in the validated corpus is a
+# QUOTED string literal; none is an unquoted bare identifier, so this
+# mechanism can only ever act on a shape no known real secret has.
+#
+# The rule is evidence-gated, not shape-gated (unlike BL-124/BL-126, which
+# exclude on casing/segmentation alone): a bare-identifier candidate is
+# suppressed ONLY when this exact same file positively shows, within the
+# candidate's own enclosing function, either (A) the identifier is
+# assigned from something other than a quoted string literal, or (B) the
+# identifier is a parameter of that enclosing function. Absence of
+# evidence never suppresses -- an unresolved identifier, an identifier
+# whose only local definition IS a literal (`password = "..."; api =
+# password` must stay detected), and module-level code with no enclosing
+# function are all left flagged exactly as before.
+#
+# Scope is bounded by indentation, not real parsing: scanning backward
+# from the candidate line for the nearest shallower `def` line
+# approximates "the enclosing function" the same way a simple linter
+# would, without tracking real block structure. This deliberately means a
+# same-named identifier in an unrelated, non-enclosing function elsewhere
+# in the file is never consulted -- evidence is drawn only from the one
+# function actually enclosing the candidate.
+_BARE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_DEF_LINE_RE = re.compile(r"^(\s*)(?:async\s+)?def\s+\w+\s*\(")
+
+
+def _find_enclosing_function_body(lines: List[str], line_num: int):
+    """
+    Returns (def_line_idx, body_start_idx, body_end_idx) -- 0-based indices
+    into `lines` -- for the function whose body encloses `line_num` (1-based),
+    approximated purely by indentation (no AST, no real block tracking).
+    Returns None if no enclosing `def` is found (e.g. module-level code).
+    """
+    candidate = lines[line_num - 1]
+    min_indent = len(candidate) - len(candidate.lstrip())
+
+    for i in range(line_num - 2, -1, -1):
+        line = lines[i]
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith(")"):
+            # The tail of a multi-line signature (or any other multi-line
+            # construct) closing at column 0 -- e.g. ') -> str:' -- is not
+            # itself a new, shallower statement; treating its own literal
+            # indentation as a container would stop the backward scan
+            # before it ever reaches the real 'def' line further up.
+            continue
+        indent = len(line) - len(line.lstrip())
+        if indent < min_indent:
+            if _DEF_LINE_RE.match(line):
+                def_indent = indent
+                # The function's own signature may itself span multiple
+                # lines (e.g. one parameter per line) before the body
+                # actually starts -- skip forward past every line that's
+                # still part of that opening statement (tracked by paren
+                # depth) so a parameter line's shallow indentation, or the
+                # closing ') -> ReturnType:' line, is never mistaken for
+                # the body already having ended.
+                depth = line.count("(") - line.count(")")
+                body_actually_starts = i + 1
+                while depth > 0 and body_actually_starts < len(lines):
+                    sig_line = lines[body_actually_starts]
+                    depth += sig_line.count("(") - sig_line.count(")")
+                    body_actually_starts += 1
+
+                body_end = len(lines)
+                for j in range(body_actually_starts, len(lines)):
+                    later = lines[j]
+                    if not later.strip():
+                        continue
+                    if len(later) - len(later.lstrip()) <= def_indent:
+                        body_end = j
+                        break
+                return i, body_actually_starts, body_end
+            # A shallower non-'def' line (an 'if'/'class'/'for' header, a
+            # decorator, ...) isn't the enclosing function itself -- keep
+            # scanning backward, but only ever compare against the new,
+            # shallower indent level from here on.
+            min_indent = indent
+
+    return None
+
+
+def _split_top_level(text: str, sep: str = ",") -> List[str]:
+    """Splits on `sep` only outside any (), [], {} nesting."""
+    parts = []
+    depth = 0
+    current = []
+    for ch in text:
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        if ch == sep and depth == 0:
+            parts.append("".join(current))
+            current = []
+        else:
+            current.append(ch)
+    parts.append("".join(current))
+    return parts
+
+
+def _has_non_literal_local_assignment(
+    lines: List[str], body_start: int, body_end: int, identifier: str
+) -> bool:
+    """
+    True if `identifier` is assigned, as a plain statement-level target
+    somewhere in lines[body_start:body_end], to something that does not
+    itself start with a quote. A value whose ONLY local definition is a
+    quoted literal (`password = "real-looking-secret"`) does not count --
+    the point is exactly to keep `api = password` detectable in that case.
+    """
+    pattern = re.compile(r"^\s*" + re.escape(identifier) + r"\s*=(?!=)\s*(?!['\"])\S")
+    return any(pattern.match(lines[i]) for i in range(body_start, body_end))
+
+
+def _identifier_is_function_parameter(
+    lines: List[str], def_line_idx: int, identifier: str
+) -> bool:
+    """
+    True if `identifier` is a parameter name in the `def` signature starting
+    at lines[def_line_idx] -- gathered across multiple lines via paren-depth
+    balancing if the signature itself spans more than one line.
+    """
+    text = ""
+    depth = 0
+    started = False
+    for j in range(def_line_idx, len(lines)):
+        text += lines[j]
+        for ch in lines[j]:
+            if ch == "(":
+                depth += 1
+                started = True
+            elif ch == ")":
+                depth -= 1
+        if started and depth <= 0:
+            break
+
+    match = re.search(r"\((.*)\)", text, re.DOTALL)
+    if not match:
+        return False
+
+    for part in _split_top_level(match.group(1)):
+        name_match = re.match(r"^\s*\*{0,2}([A-Za-z_][A-Za-z0-9_]*)", part)
+        if name_match and name_match.group(1) == identifier:
+            return True
+    return False
+
+
+def _should_suppress_bare_identifier_reference(
+    match: "re.Match", lines: List[str], line_num: int
+) -> bool:
+    """
+    Milestone B (BL-129): suppress a Generic API Key match ONLY when this
+    exact value is an unquoted, plain-identifier-shaped candidate AND this
+    same file's own enclosing-function evidence positively shows it's a
+    non-literal reference (assignment or parameter), never on shape or
+    absence of evidence alone.
+    """
+    # 'unquoted_value' is only present when the unquoted branch matched --
+    # None here means the quoted branch matched, which is never eligible.
+    # (Only ever called for a "Generic API Key" match, so the named group
+    # always exists syntactically; it's just unset for the quoted branch.)
+    value = match.group("unquoted_value")
+    if not value:
+        return False
+    if not _BARE_IDENTIFIER_RE.match(value):
+        # Contains '-' or '=' -- not a syntactically valid Python
+        # identifier, so it can never be "a reference" in the first place.
+        return False
+
+    scope = _find_enclosing_function_body(lines, line_num)
+    if scope is None:
+        return False
+    def_line_idx, body_start, body_end = scope
+
+    if _has_non_literal_local_assignment(lines, body_start, body_end, value):
+        return True
+    return _identifier_is_function_parameter(lines, def_line_idx, value)
+
+
+def _classify_and_maybe_suppress(
+    line: str,
+    match_start: int,
+    match_end: int,
+    match_object,
+    detector_name: str,
+    file_path: str,
+    line_num: int,
+) -> Optional[str]:
+    """
+    Classifies a match using the context classifier. Returns a suppression
+    reason string if the match should be suppressed (LIKELY_CODE), or None
+    if it should remain a finding (LIKELY_SECRET or AMBIGUOUS).
+
+    The classifier is lazily imported to avoid initialization cost when it's
+    not needed.
+
+    Args:
+        line: Source line containing the match
+        match_start: Character offset of match start (0-indexed)
+        match_end: Character offset of match end (exclusive)
+        match_object: The re.Match object (needed for unquoted_value group)
+        detector_name: Name of the detector that matched
+        file_path: File being scanned (for logging)
+        line_num: Line number (1-indexed)
+
+    Returns:
+        str: Suppression reason if LIKELY_CODE (e.g., "function keyword argument")
+        None: If LIKELY_SECRET or AMBIGUOUS (retain as finding)
+    """
+    # Lazy import to avoid overhead when classifier isn't used
+    from ..classifier import context_classifier
+
+    # For Generic API Key with unquoted branch, classify only the value part
+    # (not the "key=" prefix), since the classifier needs to analyze the
+    # value's syntactic role (identifier vs literal, keyword arg vs assignment).
+    classifier_start = match_start
+    classifier_end = match_end
+    try:
+        unquoted_value = match_object.group("unquoted_value")
+        if unquoted_value:
+            # Find the value-only span within the full match
+            value_start = line.index(unquoted_value, match_start)
+            classifier_start = value_start
+            classifier_end = value_start + len(unquoted_value)
+    except (IndexError, AttributeError):
+        # No unquoted_value group or it didn't match -- use full span
+        pass
+
+    classifier = context_classifier.ContextClassifier()
+    result = classifier.classify(line, classifier_start, classifier_end)
+
+    # Only suppress LIKELY_CODE (high-confidence FP)
+    if result.classification == context_classifier.Classification.LIKELY_CODE:
+        return (
+            f"{result.reason} (confidence: {result.confidence}, rule: {result.rule_name})"
+        )
+
+    # LIKELY_SECRET and AMBIGUOUS remain findings
+    return None
+
+
 def _scan_single_file(
     file_path: str,
     schema_vars: set,
@@ -358,15 +853,50 @@ def _scan_single_file(
             with _open_for_scan(file_path) as f:
                 lines = f.readlines()
 
+        is_compose_file = _is_docker_compose_file(file_path)
+
         for line_num, line in enumerate(lines, 1):
             # If new_lines_only is specified, skip lines not in that set
             if new_lines_only is not None and line_num not in new_lines_only:
                 continue
 
             # Check for secrets
+            matched_generic = False
             for secret_name, compiled_pattern in _COMPILED_SECRET_PATTERNS:
                 match = compiled_pattern.search(line)
                 if match:
+                    matched_generic = True
+                    if (
+                        secret_name == "Generic API Key"
+                        and file_path.endswith(".py")
+                        and _should_suppress_bare_identifier_reference(
+                            match, lines, line_num
+                        )
+                    ):
+                        # BL-129: positively evidenced as a non-secret
+                        # reference within its own enclosing function --
+                        # still "claims" the line (matched_generic stays
+                        # True) so nothing lower in SECRET_PATTERNS piles a
+                        # second finding onto the same line.
+                        break
+
+                    # Milestone 4: Context classifier suppression for Generic API Key
+                    # Applies AFTER BL-129 (line-local takes precedence), Python only
+                    # (tokenizer designed for source code, not .env files), and only
+                    # suppresses LIKELY_CODE classifications (high-confidence FPs like
+                    # function keyword arguments, type annotations, destructuring).
+                    # LIKELY_SECRET and AMBIGUOUS remain findings.
+                    if secret_name == "Generic API Key" and file_path.endswith(".py"):
+                        suppression_result = _classify_and_maybe_suppress(
+                            line, match.start(), match.end(), match, secret_name, file_path, line_num
+                        )
+                        if suppression_result:
+                            logger.debug(
+                                f"Suppressed {secret_name} at {_display_path(file_path)}:{line_num}: "
+                                f"{suppression_result}"
+                            )
+                            break
+
                     secret_findings.append(
                         {
                             "file_path": _display_path(file_path),
@@ -379,6 +909,22 @@ def _scan_single_file(
                         }
                     )
                     break
+
+            # Only tried when nothing above already matched -- a longer
+            # Compose credential (e.g. a 60+ char access key) is already
+            # caught by Generic API Key itself; this exists solely for the
+            # short values that pattern's unquoted floor misses.
+            if not matched_generic and is_compose_file:
+                compose_match = _COMPOSE_ENV_LIST_ENTRY_RE.match(line)
+                if compose_match:
+                    secret_findings.append(
+                        {
+                            "file_path": _display_path(file_path),
+                            "line_num": line_num,
+                            "secret_type": "Docker Compose Environment Credential",
+                            "redacted_preview": _redact_match(compose_match.group(0)),
+                        }
+                    )
 
         # Undeclared-variable detection for both Python and JS/TS runs once
         # over the whole file (not per line, like the secret loop above),

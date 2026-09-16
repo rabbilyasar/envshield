@@ -18,8 +18,9 @@ only that something reads a variable by that name. There is nothing here
 that needs masking.
 """
 
+import os
 from dataclasses import dataclass
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .discovery import DiscoveredVariableUsage
 
@@ -110,3 +111,125 @@ def classify_against_schema(
         for usage in new_usages
     ]
     return DependencyChangeReport(changes=changes)
+
+
+# SARIF 2.1.0 -- see https://docs.oasis-open.org/sarif/sarif/v2.1.0/. One
+# stable rule: an undeclared read is the only thing this command treats as
+# an actionable finding at all (see CATEGORIES above), so there is nothing
+# else for a rule taxonomy to distinguish.
+_SARIF_RULE_ID = "undeclared-variable"
+_SARIF_RULE: Dict[str, Any] = {
+    "id": _SARIF_RULE_ID,
+    "name": "UndeclaredVariable",
+    "shortDescription": {
+        "text": "An environment variable is read in source but not declared in the schema."
+    },
+    "helpUri": "https://docs.envshield.dev",
+    "defaultConfiguration": {"level": "error"},
+}
+
+
+def _sarif_uri(file_path: str) -> str:
+    """SARIF artifact locations are URIs -- always forward-slash, regardless of host OS."""
+    return file_path.replace(os.sep, "/")
+
+
+def to_sarif(
+    reports: List[Tuple[str, DependencyChangeReport]],
+    tool_version: str,
+    errors: Optional[List[Tuple[Optional[str], str]]] = None,
+) -> Dict[str, Any]:
+    """
+    A SARIF 2.1.0 log for one or more services' undeclared-variable
+    reports -- a pure presentation mapping over already-computed
+    DependencyChangeReport data (`reports`), the same "domain computes,
+    presentation renders" split every other JSON/table output in this
+    codebase already follows. No new discovery/classification logic lives
+    here.
+
+    Only 'missing_declaration' changes become SARIF results -- an already-
+    declared new usage isn't an actionable finding a CI/PR gate should
+    flag (the existing '--json' output already reports every change, for
+    anyone who wants the full audit trail; SARIF is specifically for
+    actionable annotations, and a result for every already-correct usage
+    would bury the one actionable finding in noise).
+
+    `errors` records services this invocation could not evaluate at all
+    (e.g. a missing schema, or a project-level error with no single
+    service -- pass `None` as that entry's service name) as SARIF's own
+    "execution not fully successful" mechanism (`invocations`), never as a
+    fabricated result -- the same distinction `scan_result`'s `complete`
+    flag draws for secret scanning (found-nothing vs. couldn't-check),
+    expressed through SARIF's own standard vocabulary instead of a bespoke
+    field invented for this command alone.
+    """
+    results: List[Dict[str, Any]] = []
+    for service_name, report in reports:
+        for change in report.changes:
+            if change.category != "missing_declaration":
+                continue
+            results.append(
+                {
+                    "ruleId": _SARIF_RULE_ID,
+                    "level": "error",
+                    "message": {
+                        "text": (
+                            f"'{change.variable}' is read in source but not "
+                            f"declared in the '{service_name}' schema."
+                        )
+                    },
+                    "locations": [
+                        {
+                            "physicalLocation": {
+                                "artifactLocation": {
+                                    "uri": _sarif_uri(change.file_path)
+                                },
+                                "region": {"startLine": change.line},
+                            }
+                        }
+                    ],
+                    "properties": {
+                        "service": service_name,
+                        "variable": change.variable,
+                        "language": change.language,
+                        "access_type": change.access_type,
+                    },
+                }
+            )
+
+    run: Dict[str, Any] = {
+        "tool": {
+            "driver": {
+                "name": "envshield",
+                "informationUri": "https://docs.envshield.dev",
+                "version": tool_version,
+                "rules": [_SARIF_RULE],
+            }
+        },
+        "results": results,
+    }
+    if errors:
+        run["invocations"] = [
+            {
+                "executionSuccessful": False,
+                "toolExecutionNotifications": [
+                    {
+                        "level": "error",
+                        "message": {
+                            "text": (
+                                message
+                                if service_name is None
+                                else f"Could not evaluate service '{service_name}': {message}"
+                            )
+                        },
+                    }
+                    for service_name, message in errors
+                ],
+            }
+        ]
+
+    return {
+        "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+        "version": "2.1.0",
+        "runs": [run],
+    }
