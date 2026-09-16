@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "envshield"
-version = "4.7.1"  # must be a string for PEP 621 compliance
+version = "4.7.2"  # must be a string for PEP 621 compliance
 description = "EnvShield: environment variables as a version-controlled configuration contract."
 readme = "README.md"
 requires-python = ">=3.10"
