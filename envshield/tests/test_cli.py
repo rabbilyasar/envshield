@@ -856,7 +856,20 @@ def test_import_help_lists_as_local_values_option():
     result = runner.invoke(app, ["import", "--help"])
 
     assert result.exit_code == 0
-    assert "--as-local-values" in result.stdout
+    # Check for the option's presence via a distinctive phrase from its help text.
+    # In narrow terminals (CI), Rich truncates "--as-local-values" and may wrap
+    # or ellipsize words. Normalize by removing ANSI codes and box-drawing chars,
+    # then check for a phrase short enough to survive truncation.
+    import re
+
+    ansi_escape = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+    clean = ansi_escape.sub("", result.stdout)
+    # Remove box-drawing characters and normalize whitespace
+    clean = re.sub(r"[│╭╮╰╯─]", " ", clean)
+    normalized = " ".join(clean.split())
+    # "treat it as a local" is distinctive to --as-local-values and survives even
+    # very narrow terminals where longer words get ellipsized.
+    assert "treat it as a local" in normalized
 
 
 def test_import_command_warns_about_commented_out_variables(tmp_path):
