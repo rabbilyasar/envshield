@@ -79,7 +79,10 @@ class TestStagedContentCorrectness:
         test_file.write_text("# Safe code\n")
         subprocess.run(["git", "add", "test.py"], cwd=repo, check=True)
         subprocess.run(
-            ["git", "commit", "-m", "Initial"], cwd=repo, check=True, capture_output=True
+            ["git", "commit", "-m", "Initial"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
         )
 
         # Modify with secret and stage
@@ -113,7 +116,10 @@ class TestStagedContentCorrectness:
         test_file.write_text("# Line 1\n# Line 2\n")
         subprocess.run(["git", "add", "test.py"], cwd=repo, check=True)
         subprocess.run(
-            ["git", "commit", "-m", "Initial"], cwd=repo, check=True, capture_output=True
+            ["git", "commit", "-m", "Initial"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
         )
 
         # Modify line 1 (safe) and stage it
@@ -156,7 +162,10 @@ class TestStagedContentCorrectness:
         other_file.write_text("# Safe code\n")
         subprocess.run(["git", "add", "."], cwd=repo, check=True)
         subprocess.run(
-            ["git", "commit", "-m", "Initial"], cwd=repo, check=True, capture_output=True
+            ["git", "commit", "-m", "Initial"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
         )
 
         # Modify ONLY other_file and stage it
@@ -189,7 +198,10 @@ class TestStagedContentCorrectness:
         test_file.write_text('api_key = "sk_live_test123456789secret"\n')
         subprocess.run(["git", "add", "test.py"], cwd=repo, check=True)
         subprocess.run(
-            ["git", "commit", "-m", "Initial"], cwd=repo, check=True, capture_output=True
+            ["git", "commit", "-m", "Initial"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
         )
 
         # Delete the secret line
@@ -280,7 +292,7 @@ class TestEnforcementWithStagedContent:
 
         # Pattern that classifier suppresses (keyword argument)
         test_file.write_text(
-            "response.set_cookie(\n" "    key=SESSION_COOKIE_NAME,\n" "    secure=True\n" ")\n"
+            "response.set_cookie(\n    key=SESSION_COOKIE_NAME,\n    secure=True\n)\n"
         )
 
         subprocess.run(["git", "add", "test.py"], cwd=repo, check=True)

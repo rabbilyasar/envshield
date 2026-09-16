@@ -169,9 +169,7 @@ class TestInteractiveOverride:
             }
         ]
         # Simulate user choosing "2" but pressing Enter without text
-        with patch(
-            "envshield.core.enforcement.console.input", side_effect=["2", ""]
-        ):
+        with patch("envshield.core.enforcement.console.input", side_effect=["2", ""]):
             allowed = enforcement.enforce_findings(secrets, [], interactive=True)
         assert allowed is False
 
@@ -188,9 +186,7 @@ class TestInteractiveOverride:
             }
         ]
         # Simulate EOF
-        with patch(
-            "envshield.core.enforcement.console.input", side_effect=EOFError()
-        ):
+        with patch("envshield.core.enforcement.console.input", side_effect=EOFError()):
             allowed = enforcement.enforce_findings(secrets, [], interactive=True)
         assert allowed is False
 

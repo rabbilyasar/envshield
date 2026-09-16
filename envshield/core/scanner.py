@@ -816,7 +816,9 @@ def _classify_and_maybe_suppress(
     result = classifier.classify(line, classifier_start, classifier_end)
 
     # Only suppress LIKELY_CODE (high-confidence FP)
-    should_suppress = result.classification == context_classifier.Classification.LIKELY_CODE
+    should_suppress = (
+        result.classification == context_classifier.Classification.LIKELY_CODE
+    )
     return should_suppress, result
 
 
@@ -885,8 +887,16 @@ def _scan_single_file(
                     # LIKELY_SECRET and AMBIGUOUS remain findings (with classification attached).
                     classification_result = None
                     if secret_name == "Generic API Key" and file_path.endswith(".py"):
-                        should_suppress, classification_result = _classify_and_maybe_suppress(
-                            line, match.start(), match.end(), match, secret_name, file_path, line_num
+                        should_suppress, classification_result = (
+                            _classify_and_maybe_suppress(
+                                line,
+                                match.start(),
+                                match.end(),
+                                match,
+                                secret_name,
+                                file_path,
+                                line_num,
+                            )
                         )
                         if should_suppress:
                             logger.debug(
@@ -911,8 +921,12 @@ def _scan_single_file(
                     if classification_result is not None:
                         # Classification is either LIKELY_SECRET or AMBIGUOUS at this point
                         # (LIKELY_CODE was suppressed above)
-                        finding["classification"] = classification_result.classification.value
-                        finding["classification_confidence"] = classification_result.confidence
+                        finding["classification"] = (
+                            classification_result.classification.value
+                        )
+                        finding["classification_confidence"] = (
+                            classification_result.confidence
+                        )
 
                     secret_findings.append(finding)
                     break
@@ -1351,9 +1365,7 @@ def run_scan(
 
         if allowed:
             # No findings or user explicitly overrode
-            console.print(
-                "\n[bold green]✓ Commit allowed.[/bold green]"
-            )
+            console.print("\n[bold green]✓ Commit allowed.[/bold green]")
             return
         else:
             # Blocked by enforcement policy

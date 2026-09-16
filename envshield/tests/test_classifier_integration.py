@@ -38,9 +38,7 @@ class TestClassifierIntegration:
     def test_function_keyword_argument_suppressed(self, tmp_path):
         """Generic API Key function keyword arguments must be suppressed."""
         test_file = tmp_path / "test.py"
-        test_file.write_text(
-            "response.set_cookie(key=CONSTANT, value=token)\n"
-        )
+        test_file.write_text("response.set_cookie(key=CONSTANT, value=token)\n")
 
         secrets, undeclared = scanner._scan_single_file(str(test_file), set())
 
@@ -49,10 +47,7 @@ class TestClassifierIntegration:
     def test_type_annotation_suppressed(self, tmp_path):
         """Type annotations must be suppressed."""
         test_file = tmp_path / "test.py"
-        test_file.write_text(
-            "def authenticate(api_key: str) -> bool:\n"
-            "    pass\n"
-        )
+        test_file.write_text("def authenticate(api_key: str) -> bool:\n    pass\n")
 
         secrets, undeclared = scanner._scan_single_file(str(test_file), set())
 
@@ -81,9 +76,7 @@ class TestClassifierIntegration:
     def test_string_literal_NOT_suppressed(self, tmp_path):
         """FN protection: string literals must remain findings."""
         test_file = tmp_path / "test.py"
-        test_file.write_text(
-            'api_key = "sk_live_abc123_real_looking_key"\n'
-        )
+        test_file.write_text('api_key = "sk_live_abc123_real_looking_key"\n')
 
         secrets, undeclared = scanner._scan_single_file(str(test_file), set())
 
@@ -94,9 +87,7 @@ class TestClassifierIntegration:
     def test_string_literal_in_function_NOT_suppressed(self, tmp_path):
         """FN protection: string literal in function call must remain finding."""
         test_file = tmp_path / "test.py"
-        test_file.write_text(
-            'response.set_cookie(key="abc123def456", secure=True)\n'
-        )
+        test_file.write_text('response.set_cookie(key="abc123def456", secure=True)\n')
 
         secrets, undeclared = scanner._scan_single_file(str(test_file), set())
 
@@ -108,10 +99,7 @@ class TestClassifierIntegration:
         """FN protection: string literal in multi-line function call must remain finding."""
         test_file = tmp_path / "test.py"
         test_file.write_text(
-            'response.set_cookie(\n'
-            '    key="xyz789ghi012",\n'
-            '    secure=True\n'
-            ')\n'
+            'response.set_cookie(\n    key="xyz789ghi012",\n    secure=True\n)\n'
         )
 
         secrets, undeclared = scanner._scan_single_file(str(test_file), set())
@@ -124,9 +112,7 @@ class TestClassifierIntegration:
         """AMBIGUOUS classifications must remain findings."""
         test_file = tmp_path / "test.py"
         # This should classify as AMBIGUOUS (standalone identifier, unclear context)
-        test_file.write_text(
-            "some_api_key\n"
-        )
+        test_file.write_text("some_api_key\n")
 
         secrets, undeclared = scanner._scan_single_file(str(test_file), set())
 
@@ -174,9 +160,7 @@ class TestClassifierIntegration:
     def test_fixture_file_comprehensive(self, tmp_path):
         """Comprehensive test using the fixture file."""
         fixture_path = os.path.join(
-            os.path.dirname(__file__),
-            "fixtures",
-            "classifier_test_file.py"
+            os.path.dirname(__file__), "fixtures", "classifier_test_file.py"
         )
 
         if os.path.exists(fixture_path):
@@ -187,7 +171,9 @@ class TestClassifierIntegration:
             # - "abc123def456ghi789"
             # - "xyz789mno012pqr345"
             # All others should be suppressed
-            assert len(secrets) == 3, f"Expected 3 findings, got {len(secrets)}: {secrets}"
+            assert len(secrets) == 3, (
+                f"Expected 3 findings, got {len(secrets)}: {secrets}"
+            )
             for secret in secrets:
                 assert secret["secret_type"] == "Generic API Key"
 
@@ -208,11 +194,7 @@ class TestClassifierDoesNotBreakExistingBehavior:
     def test_no_matches(self, tmp_path):
         """File with no matches should behave normally."""
         test_file = tmp_path / "clean.py"
-        test_file.write_text(
-            "# Just a comment\n"
-            "def foo():\n"
-            "    pass\n"
-        )
+        test_file.write_text("# Just a comment\ndef foo():\n    pass\n")
 
         secrets, undeclared = scanner._scan_single_file(str(test_file), set())
 
@@ -229,7 +211,7 @@ class TestClassifierDoesNotBreakExistingBehavior:
         test_file = tmp_path / "test.py"
         test_file.write_text(
             # JWT doesn't require keyword prefix, so it will match if no Generic API Key match
-            '# No keyword prefix here, so Generic API Key won\'t match\n'
+            "# No keyword prefix here, so Generic API Key won't match\n"
             'x = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"\n'
         )
 
@@ -257,5 +239,6 @@ class TestClassifierDoesNotBreakExistingBehavior:
         assert "Suppressed Generic API Key" in caplog.text
 
         # CRITICAL: Raw value must NOT appear in logs
-        assert "RECOGNIZABLE_CONSTANT_VALUE" not in caplog.text, \
+        assert "RECOGNIZABLE_CONSTANT_VALUE" not in caplog.text, (
             "Raw candidate value leaked into suppression logs"
+        )

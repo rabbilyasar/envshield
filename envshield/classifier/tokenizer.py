@@ -75,28 +75,28 @@ class SyntacticContext:
 # Language-agnostic patterns that work for Python, JS, TS
 TOKEN_PATTERNS = [
     # Comments (must come early to avoid matching inside comments)
-    (TokenType.COMMENT, r'#[^\n]*'),  # Python
-    (TokenType.COMMENT, r'//[^\n]*'),  # JS/TS line comment
-    (TokenType.COMMENT, r'/\*.*?\*/'),  # JS/TS block comment (single-line only)
+    (TokenType.COMMENT, r"#[^\n]*"),  # Python
+    (TokenType.COMMENT, r"//[^\n]*"),  # JS/TS line comment
+    (TokenType.COMMENT, r"/\*.*?\*/"),  # JS/TS block comment (single-line only)
     # String literals
     (TokenType.STRING_LITERAL, r'"""[^"]*(?:"")?(?:")?'),  # Python docstring start
     (TokenType.STRING_LITERAL, r"'''[^']*(?:'')?(?:')?"),  # Python docstring start
     (TokenType.STRING_LITERAL, r'"(?:[^"\\]|\\.)*"'),  # Double-quoted string
     (TokenType.STRING_LITERAL, r"'(?:[^'\\]|\\.)*'"),  # Single-quoted string
-    (TokenType.STRING_LITERAL, r'`(?:[^`\\]|\\.)*`'),  # Template literal (JS/TS)
+    (TokenType.STRING_LITERAL, r"`(?:[^`\\]|\\.)*`"),  # Template literal (JS/TS)
     # Numbers
-    (TokenType.NUMBER, r'0x[0-9a-fA-F]+'),  # Hex
-    (TokenType.NUMBER, r'\d+\.\d+'),  # Float
-    (TokenType.NUMBER, r'\d+'),  # Integer
+    (TokenType.NUMBER, r"0x[0-9a-fA-F]+"),  # Hex
+    (TokenType.NUMBER, r"\d+\.\d+"),  # Float
+    (TokenType.NUMBER, r"\d+"),  # Integer
     # Operators (multi-char first)
-    (TokenType.OPERATOR, r'===|!==|==|!=|<=|>=|&&|\|\||<<|>>|\+=|-=|\*=|/=|%='),
-    (TokenType.OPERATOR, r'[+\-*/%=<>!&|^~]'),
+    (TokenType.OPERATOR, r"===|!==|==|!=|<=|>=|&&|\|\||<<|>>|\+=|-=|\*=|/=|%="),
+    (TokenType.OPERATOR, r"[+\-*/%=<>!&|^~]"),
     # Punctuation
-    (TokenType.PUNCTUATION, r'[(){}\[\],;:.]'),
+    (TokenType.PUNCTUATION, r"[(){}\[\],;:.]"),
     # Identifiers (must come after keywords if we add them)
-    (TokenType.IDENTIFIER, r'[a-zA-Z_][a-zA-Z0-9_]*'),
+    (TokenType.IDENTIFIER, r"[a-zA-Z_][a-zA-Z0-9_]*"),
     # Whitespace
-    (TokenType.WHITESPACE, r'\s+'),
+    (TokenType.WHITESPACE, r"\s+"),
 ]
 
 # Compile patterns once
@@ -190,7 +190,7 @@ def extract_context(
     preceding_operator = None
     if preceding_tokens:
         last_token = preceding_tokens[-1]
-        if last_token.type == TokenType.OPERATOR or last_token.text in (':',',','='):
+        if last_token.type == TokenType.OPERATOR or last_token.text in (":", ",", "="):
             preceding_operator = last_token.text
 
     # Find following character
@@ -205,19 +205,18 @@ def extract_context(
     for token in significant_tokens:
         if token.start >= match_start:
             break
-        if token.text == '(':
+        if token.text == "(":
             paren_depth += 1
-        elif token.text == ')':
+        elif token.text == ")":
             paren_depth = max(0, paren_depth - 1)
-        elif token.text == '{':
+        elif token.text == "{":
             brace_depth += 1
-        elif token.text == '}':
+        elif token.text == "}":
             brace_depth = max(0, brace_depth - 1)
 
     # Type annotation heuristic: preceded by ':' not '='
-    is_type_annotation = (
-        preceding_operator == ':'
-        and not any(t.text == '=' for t in preceding_tokens[-3:] if t in preceding_tokens)
+    is_type_annotation = preceding_operator == ":" and not any(
+        t.text == "=" for t in preceding_tokens[-3:] if t in preceding_tokens
     )
 
     return SyntacticContext(
@@ -250,36 +249,36 @@ def classify_context(context: SyntacticContext) -> Tuple[str, str]:
     """
     # String literals are potential TPs (or at least not the FP classes we're targeting)
     if context.is_string_literal:
-        return 'likely_tp', 'string literal value'
+        return "likely_tp", "string literal value"
 
     # Type annotation (TypeScript/Python)
     if context.is_type_annotation:
-        return 'likely_fp', 'type annotation (: Type syntax)'
+        return "likely_fp", "type annotation (: Type syntax)"
 
     # Function keyword argument (inside known function call)
-    if context.inside_function_call and context.following_char in (',', ')'):
-        if context.preceding_operator in ('=',):
-            return 'likely_fp', 'function keyword argument'
+    if context.inside_function_call and context.following_char in (",", ")"):
+        if context.preceding_operator in ("=",):
+            return "likely_fp", "function keyword argument"
 
     # Keyword argument pattern WITHOUT seeing opening paren:
     # identifier=identifier, or identifier=identifier)
     # Catches multi-line function calls where opening paren is on previous line
     if (
-        context.preceding_operator == '='
+        context.preceding_operator == "="
         and not context.is_string_literal
-        and context.following_char in (',', ')')
+        and context.following_char in (",", ")")
     ):
-        return 'likely_fp', 'function keyword argument'
+        return "likely_fp", "function keyword argument"
 
     # Destructuring (inside braces on LHS)
-    if context.inside_braces and context.following_char in (',', '}'):
-        return 'likely_fp', 'destructuring assignment'
+    if context.inside_braces and context.following_char in (",", "}"):
+        return "likely_fp", "destructuring assignment"
 
     # Assignment with identifier RHS (not a literal)
-    if context.preceding_operator == '=' and not context.is_string_literal:
-        return 'likely_fp', 'identifier reference (not literal)'
+    if context.preceding_operator == "=" and not context.is_string_literal:
+        return "likely_fp", "identifier reference (not literal)"
 
-    return 'uncertain', 'no clear FP pattern'
+    return "uncertain", "no clear FP pattern"
 
 
 # Convenience function for the common case

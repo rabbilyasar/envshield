@@ -28,7 +28,9 @@ def _is_interactive() -> bool:
     return sys.stdin.isatty()
 
 
-def _group_findings_by_classification(findings: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+def _group_findings_by_classification(
+    findings: List[Dict[str, Any]],
+) -> Dict[str, List[Dict[str, Any]]]:
     """
     Groups findings by classification level for display.
 
@@ -68,7 +70,9 @@ def _display_enforcement_warning(findings: List[Dict[str, Any]]) -> None:
     grouped = _group_findings_by_classification(findings)
 
     total_count = len(findings)
-    console.print(f"\n[bold red]⚠ EnvShield found {total_count} potential secret(s)[/bold red]\n")
+    console.print(
+        f"\n[bold red]⚠ EnvShield found {total_count} potential secret(s)[/bold red]\n"
+    )
 
     # Display high-confidence findings
     if grouped["high_confidence"]:
@@ -116,10 +120,14 @@ def _prompt_user_decision() -> bool:
         return False
 
     # User chose "2" - require explicit confirmation
-    console.print("\n[bold yellow]⚠ You are about to commit potentially sensitive data.[/bold yellow]")
+    console.print(
+        "\n[bold yellow]⚠ You are about to commit potentially sensitive data.[/bold yellow]"
+    )
 
     try:
-        confirmation = console.input("Type [bold]COMMIT ANYWAY[/bold] to confirm: ").strip()
+        confirmation = console.input(
+            "Type [bold]COMMIT ANYWAY[/bold] to confirm: "
+        ).strip()
     except (EOFError, KeyboardInterrupt):
         console.print("\n[yellow]Aborted by user.[/yellow]")
         return False

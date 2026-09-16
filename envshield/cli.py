@@ -1751,7 +1751,7 @@ def scan(
         False,
         "--enforce",
         help="Enable enforcement mode with interactive override for high-confidence findings. "
-             "Intended for Git hooks - distinguishes commit enforcement from normal scanning.",
+        "Intended for Git hooks - distinguishes commit enforcement from normal scanning.",
     ),
 ):
     """Scans files for hardcoded secrets and reports every currently-undeclared environment-variable read."""
@@ -1766,7 +1766,9 @@ def scan(
             # M7: --json and --enforce are mutually exclusive
             # JSON output is for machine consumers; enforcement is for interactive humans
             if enforce:
-                console.print("[bold red]Error:[/bold red] --json and --enforce cannot be used together.")
+                console.print(
+                    "[bold red]Error:[/bold red] --json and --enforce cannot be used together."
+                )
                 raise typer.Exit(code=1)
 
             result = scanner.scan_result(
