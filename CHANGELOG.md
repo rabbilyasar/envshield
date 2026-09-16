@@ -2,6 +2,34 @@
 
 All notable changes to this project are documented in this file.
 
+## [4.7.3] - 2026-09-16
+
+CI hardening release. Fixes test failures in CI environments and adds classifier module to secret-scanning exclusions.
+
+### Fixed
+- **Test suite compatibility with narrow terminal environments.** The `test_import_help_lists_as_local_values_option` test assertion was fragile to terminal width variations — in narrow terminals (like CI), Rich's help rendering would truncate or wrap `--as-local-values` across lines, causing the substring assertion to fail. The test now normalizes output (strips ANSI codes, removes box-drawing characters, collapses whitespace) and checks for a distinctive phrase from the option's help text that survives even aggressive truncation.
+- **CI self-scan now excludes the classifier module.** EnvShield's context classifier contains documented example API keys in docstrings (e.g., `'sk_live_abc123'`) for illustration purposes. The CI secret-scanning step was correctly detecting these as potential secrets. The classifier module is now added to `.github/envshield.ci.yml`'s exclusion list alongside other pattern-definition modules.
+
+### CI
+- All formatting and lint issues in the classifier, tests, and scanner modules have been resolved for CI compatibility.
+
+## [4.7.2] - 2026-09-16
+
+Major feature release: Git hook enforcement with context-aware classification.
+
+### Added
+- **Git hook enforcement with interactive override (M7).** `envshield scan --staged --enforce` now applies a classification-based enforcement policy:
+  - **Clearly code-shaped** patterns (type annotations, function keyword arguments, identifier references) are suppressed by the classifier.
+  - **Ambiguous** findings (insufficient syntactic context) block without override.
+  - **High-confidence secrets** (string literals matching secret patterns) block by default but offer an interactive override for local commits with explicit `COMMIT ANYWAY` confirmation.
+  - In non-interactive environments (CI), high-confidence findings block with no prompt.
+  - Raw secret values are never displayed in enforcement output.
+
+- **Context-aware classifier for Generic API Key detection.** Python secret candidates are now analyzed for syntactic context using a lightweight tokenizer. Patterns like `key=CONSTANT`, `api_key: str`, or `func(token=CONFIG_VAR)` are classified as code rather than secrets, while `key="sk_live_..."` string literals remain detectable. This reduces false positives on ordinary code patterns without broadly suppressing secret-shaped values.
+
+### Fixed
+- **Function-local `from os import getenv`/`environ` discovery (BL-132).** The Python discovery engine now recognizes environment access through locally-imported names (`from os import getenv` followed by bare `getenv()` calls), not only module-qualified forms (`os.getenv()`).
+
 ## [4.7.1] - 2026-09-08
 
 A correctness patch for Git hook installation and removal, a new command

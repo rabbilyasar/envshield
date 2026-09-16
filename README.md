@@ -211,7 +211,7 @@ Every command above documents its own options with `--help`; the full reference 
 
 ## Git / CI workflow
 
-This is where the schema stops being documentation and starts being enforcement. Three concrete things EnvShield catches in a PR:
+This is where the schema stops being documentation and starts being enforcement. Three concrete things EnvShield catches before a change reaches production:
 
 **A new environment variable used in code but missing from the schema:**
 
@@ -225,11 +225,13 @@ envshield undeclared origin/main HEAD --service api
 envshield schema diff origin/main HEAD --service api
 ```
 
-**A secret accidentally introduced into a commit** — the pre-commit hook runs `scan --staged` automatically:
+**A secret accidentally introduced into a commit:**
 
 ```bash
 envshield hook install
 ```
+
+The pre-commit hook runs `scan --staged --enforce`, applying classification-based enforcement with interactive override for high-confidence findings on local commits, and strict blocking in CI. See [Secret safety](#secret-safety) for enforcement behavior details.
 
 In CI, diff against the merge-base, not the base branch's current tip (which can move while the PR is open):
 
@@ -407,10 +409,82 @@ Source-code discovery (what powers `undeclared` and `explain`'s "used in source"
 
 ## Secret safety
 
-A supporting check alongside the contract, not the product itself. `secret = true` on a field tells EnvShield (and `setup`, and code generation) that it's sensitive — the schema records that fact, never the actual value. On top of that:
+A supporting check alongside the contract, not the product itself. `secret = true` on a field tells EnvShield (and `setup`, and code generation) that it's sensitive — the schema records that fact, never the actual value.
 
-- **`envshield scan`** looks for hardcoded secrets by pattern (Stripe, AWS, GitHub tokens, and more), and for env-var reads the schema doesn't declare, in one pass. Values are always redacted in output — a Stripe *publishable* key (`pk_...`) is never flagged, since detection matches the secret-key pattern (`sk_...`) by shape, not the variable's name. Python candidates are context-aware: code-shaped patterns like `key=CONSTANT` or `api_key: str` may be suppressed when they're clearly not secret values, while secret-shaped string literals remain detectable regardless of context.
-- **`envshield hook install`** wires `scan --staged` into a pre-commit hook, so a real secret is caught before it's committed, not after.
+### Secret scanning
+
+**`envshield scan`** looks for hardcoded secrets by pattern (Stripe, AWS, GitHub tokens, and more), and for env-var reads the schema doesn't declare, in one pass. Values are always redacted in output — a Stripe *publishable* key (`pk_...`) is never flagged, since detection matches the secret-key pattern (`sk_...`) by shape, not the variable's name.
+
+### Context-aware classification
+
+Python candidates are analyzed for syntactic context to distinguish code patterns from secret values:
+
+```python
+# Classified as code (suppressed):
+client(key=CONFIG_CONSTANT)
+def handler(api_key: str):
+    ...
+
+# Classified as likely secret (detected):
+client(key="sk_live_abc123...")
+```
+
+This reduces false positives on ordinary code patterns without broadly suppressing secret-shaped values. Classification is lightweight and syntactic — it recognizes type annotations, function arguments, and identifier references, but doesn't perform semantic analysis beyond what the tokenizer can see.
+
+### Git hook enforcement
+
+**`envshield hook install`** wires secret scanning into your Git workflow with classification-based enforcement:
+
+```bash
+envshield hook install
+```
+
+The pre-commit hook runs `scan --staged --enforce`, which scans only staged content and applies an enforcement policy based on classification confidence.
+
+#### Enforcement behavior
+
+| Finding type | Interactive (local commit) | Non-interactive (CI) |
+|---|---|---|
+| No findings | Allow | Allow |
+| Clearly code-shaped | Suppressed | Suppressed |
+| Ambiguous | Block | Block |
+| High-confidence secret | Block + explicit override | Block |
+
+**Clearly code-shaped** candidates (type annotations, function keyword arguments, etc.) are suppressed by the classifier and don't produce findings.
+
+**Ambiguous** findings — insufficient context to confidently classify — block without override in both modes.
+
+**High-confidence secrets** (string literals matching secret patterns) block by default but offer an interactive override for local commits:
+
+```
+⚠ EnvShield found potential secrets
+
+HIGH CONFIDENCE
+  src/config.py:42    Generic API Key    [REDACTED (30 chars)]
+
+[1] Abort commit
+[2] Commit anyway
+
+Choice: 2
+
+Type COMMIT ANYWAY to confirm: COMMIT ANYWAY
+
+Proceeding with commit. The finding remains in the repository history.
+```
+
+The override requires exact confirmation text — `yes` or `Y` won't work. EOF (Ctrl+D) or Ctrl+C aborts. Raw secret values are never displayed in enforcement output.
+
+In CI or other non-interactive contexts, high-confidence findings block with no prompt — the commit is refused, and the scan exits non-zero.
+
+#### Scanning modes
+
+```bash
+envshield scan                      # Audit entire codebase
+envshield scan --staged             # Scan only staged Git content
+envshield scan --staged --enforce   # Staged scan + enforcement policy
+```
+
+The pre-commit hook uses the third form. `scan` without flags is for repository-wide audits, not commit-time enforcement.
 
 ---
 
