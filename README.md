@@ -422,8 +422,10 @@ Python candidates are analyzed for syntactic context to distinguish code pattern
 ```python
 # Classified as code (suppressed):
 client(key=CONFIG_CONSTANT)
-def handler(api_key: str):
-    ...
+
+
+def handler(api_key: str): ...
+
 
 # Classified as likely secret (detected):
 client(key="sk_live_abc123...")
