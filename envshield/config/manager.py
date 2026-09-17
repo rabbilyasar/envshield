@@ -437,6 +437,22 @@ def add_service(
         entry["config_source"] = config_source
     services[name] = entry
 
+    if (
+        entry.get("local_file")
+        and not entry.get("example_file")
+        and not entry["local_file"].endswith(".py")
+        and os.path.basename(entry["local_file"]) != ".env"
+    ):
+        console.print(
+            f"[yellow]Note:[/yellow] service '{name}' overrides local_file to "
+            f"'{entry['local_file']}' but not example_file -- the template "
+            "will still default to '.env.example' in this service's "
+            "directory. If this local_file follows a different naming "
+            "convention (e.g. '.env.local' pairs with '.env.local.example'), "
+            "set example_file explicitly too, or Template Sync will look at "
+            "the wrong file."
+        )
+
     with open(CONFIG_FILE_NAME, "w") as f:
         yaml.dump(config, f, sort_keys=False, indent=2)
 

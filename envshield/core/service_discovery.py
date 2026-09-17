@@ -291,13 +291,30 @@ def detect_env_style(service_dir: str) -> Dict[str, Optional[str]]:
     ('<service_dir>/.env' / '<service_dir>/.env.example') -- i.e. for the
     python format, when the real dotenv file found isn't literally named
     '.env', or when only a template was found under a non-standard name.
+
+    When the real file isn't '.env' (e.g. Next.js's '.env.local'), its
+    paired template conventionally isn't '.env.example' either -- it's
+    '<real_file>.example' ('.env.local' -> '.env.local.example'). Without
+    checking for that file specifically, every downstream command
+    (doctor's Template Sync, 'schema sync', the pre-commit hook's
+    post-schema-change check) would keep resolving the untouched default
+    '.env.example' instead, reporting a real, in-sync template as missing.
+    This only sets `example_file` when that paired file is actually found
+    on disk -- evidence-gated, like the rest of this module's detection,
+    not guessed from the name alone.
     """
     real_file = _find_real_dotenv_file(service_dir)
     if real_file:
+        local_file = None if os.path.basename(real_file) == ".env" else real_file
+        example_file = None
+        if local_file:
+            paired_template = real_file + ".example"
+            if os.path.isfile(paired_template):
+                example_file = paired_template
         return {
             "format": "dotenv",
-            "local_file": None if os.path.basename(real_file) == ".env" else real_file,
-            "example_file": None,
+            "local_file": local_file,
+            "example_file": example_file,
         }
 
     template_file = _find_dotenv_template(service_dir)

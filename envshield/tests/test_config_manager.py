@@ -636,6 +636,72 @@ def test_add_service_includes_optional_fields_only_when_given(tmp_path, monkeypa
     }
 
 
+def test_add_service_warns_when_local_file_is_overridden_without_example_file(
+    tmp_path, monkeypatch, capsys
+):
+    """
+    BL-133 regression: overriding local_file to a non-'.env' convention
+    (e.g. Next.js's '.env.local') without also overriding example_file
+    silently leaves Template Sync pointed at the untouched default
+    ('.env.example'), which won't match. Registration should still succeed
+    (this is advisory, not a hard error), but must say so.
+    """
+    monkeypatch.chdir(tmp_path)
+
+    config_manager.add_service(
+        "frontend", "frontend/env.schema.toml", local_file="frontend/.env.local"
+    )
+
+    captured = capsys.readouterr()
+    assert "example_file" in captured.out
+    assert (
+        config_manager.get_services()["frontend"]["local_file"] == "frontend/.env.local"
+    )
+
+
+def test_add_service_does_not_warn_when_example_file_is_also_given(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.chdir(tmp_path)
+
+    config_manager.add_service(
+        "frontend",
+        "frontend/env.schema.toml",
+        local_file="frontend/.env.local",
+        example_file="frontend/.env.local.example",
+    )
+
+    captured = capsys.readouterr()
+    assert "example_file" not in captured.out
+
+
+def test_add_service_does_not_warn_for_a_python_local_file(
+    tmp_path, monkeypatch, capsys
+):
+    """A '.py' local_file has no separate template file at all -- see doctor.py::_check_example_file_sync -- so there's nothing to warn about."""
+    monkeypatch.chdir(tmp_path)
+
+    config_manager.add_service(
+        "alpha",
+        "alpha/env.schema.toml",
+        local_file="alpha/config/env_config.local.py",
+    )
+
+    captured = capsys.readouterr()
+    assert "example_file" not in captured.out
+
+
+def test_add_service_does_not_warn_when_local_file_is_the_default(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.chdir(tmp_path)
+
+    config_manager.add_service("api", "api/env.schema.toml", local_file="api/.env")
+
+    captured = capsys.readouterr()
+    assert "example_file" not in captured.out
+
+
 def test_add_manifest_registers_a_container_to_service_mapping(tmp_path, monkeypatch):
     """
     A manifest is registered independently of any one service -- it's

@@ -22,6 +22,27 @@ def test_detect_env_style_overrides_local_file_for_non_dot_env_variant(tmp_path)
 
     assert result["format"] == "dotenv"
     assert result["local_file"] == str(tmp_path / "api" / ".env.local")
+    assert result["example_file"] is None
+
+
+def test_detect_env_style_pairs_example_file_with_a_non_dot_env_local_file(tmp_path):
+    """
+    BL-133 regression: a real file found under a non-'.env' name (e.g.
+    Next.js's '.env.local') conventionally pairs with '<name>.example', not
+    the plain '.env.example' default -- if that paired template is actually
+    on disk, it must be reported, or every downstream command (doctor's
+    Template Sync, 'schema sync', the pre-commit hook) keeps looking at an
+    '.env.example' that was never meant to exist for this service.
+    """
+    (tmp_path / "frontend").mkdir()
+    (tmp_path / "frontend" / ".env.local").write_text("KEY=value\n")
+    (tmp_path / "frontend" / ".env.local.example").write_text("KEY=\n")
+
+    result = service_discovery.detect_env_style(str(tmp_path / "frontend"))
+
+    assert result["format"] == "dotenv"
+    assert result["local_file"] == str(tmp_path / "frontend" / ".env.local")
+    assert result["example_file"] == str(tmp_path / "frontend" / ".env.local.example")
 
 
 def test_detect_env_style_finds_python_config_module(tmp_path):
