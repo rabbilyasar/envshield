@@ -57,6 +57,28 @@ class TestDefaultComparisonIsHeadVsWorkingTree:
             assert "FOO" in result.stdout
             assert "missing declaration" in result.stdout
 
+    def test_missing_declaration_suggestion_gives_a_concrete_next_step(self, tmp_path):
+        """
+        Regression: a missing declaration used to end with a bare
+        "New source dependencies are missing from the contract." and no
+        suggestion at all -- the same gap 'scan' had. Must not suggest
+        'schema sync' either: that command only propagates an
+        already-declared schema variable into '.env.example'/a local
+        config module, it never adds a newly-discovered read to the
+        schema itself.
+        """
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            _single_service_repo()
+            _write("app.py", "import os\nx = os.environ.get('FOO')\n")  # uncommitted
+
+            result = runner.invoke(app, ["undeclared"])
+
+            assert result.exit_code == 1
+            assert "env.schema.toml" in result.stdout
+            assert "hand-edited" in result.stdout
+            assert "envshield undeclared" in result.stdout
+            assert "schema sync" not in result.stdout
+
     def test_untracked_new_file_is_caught_before_commit(self, tmp_path):
         with runner.isolated_filesystem(temp_dir=tmp_path):
             _single_service_repo()

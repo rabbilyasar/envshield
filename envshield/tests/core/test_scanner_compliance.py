@@ -40,6 +40,37 @@ def test_scan_with_undeclared_variable(mocker, tmp_path):
         assert "UNDECLARED_KEY" in result.stdout
 
 
+def test_scan_undeclared_suggestion_gives_a_concrete_next_step(mocker, tmp_path):
+    """
+    Regression: the old suggestion ("Please add these variables to your
+    'env.schema.toml' to maintain your configuration contract.") told the
+    user the desired end state but not how to get there. It must now point
+    at the actual next action -- and must not imply 'schema sync' does this,
+    since that command only ever propagates an *already-declared* schema
+    variable into '.env.example'/a local config module; it never adds a
+    newly-discovered undeclared read into the schema itself.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[DECLARED_KEY]\ndescription="This one is okay"\n')
+        mocker.patch(
+            "envshield.config.manager.load_schema", return_value={"DECLARED_KEY": {}}
+        )
+
+        python_code = "import os\n\nAPI_KEY = os.environ.get('UNDECLARED_KEY')\n"
+        with open("app.py", "w") as f:
+            f.write(python_code)
+
+        result = runner.invoke(app, ["scan"])
+
+        assert result.exit_code == 1
+        assert "env.schema.toml" in result.stdout
+        assert "hand-edited" in result.stdout
+        assert "envshield scan" in result.stdout
+        assert "schema sync" not in result.stdout
+        assert "Please add these variables" not in result.stdout
+
+
 def test_scan_reports_consistent_relative_paths_regardless_of_argument_form(
     mocker, tmp_path
 ):
@@ -330,6 +361,36 @@ def test_scan_staged_does_not_flag_secret_removed_before_staging(tmp_path):
 
         assert result.exit_code == 0
         assert "No issues found" in result.stdout
+
+
+def test_scan_staged_enforce_undeclared_gives_a_concrete_next_step(tmp_path):
+    """
+    Regression: 'scan --staged --enforce' (what the installed pre-commit
+    hook runs) blocks on an undeclared variable unconditionally -- there's
+    no interactive override for it, unlike a high-confidence secret finding
+    (see enforcement.enforce_findings). The commit-abort message on this
+    path previously named the problem ('Commit aborted. Please fix the
+    issues above...') without ever saying how -- the same gap as the plain
+    'scan' suggestion, just on a different code path.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.system("git init -q")
+        os.system('git config user.email "test@example.com"')
+        os.system('git config user.name "Test"')
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[DECLARED_KEY]\ndescription="This one is okay"\n')
+
+        with open("app.py", "w") as f:
+            f.write("import os\n\nAPI_KEY = os.environ.get('UNDECLARED_KEY')\n")
+        os.system("git add .")
+
+        result = runner.invoke(app, ["scan", "--staged", "--enforce"])
+
+        assert result.exit_code == 1
+        assert "Commit aborted" in result.stdout
+        assert "env.schema.toml" in result.stdout
+        assert "hand-edited" in result.stdout
+        assert "schema sync" not in result.stdout
 
 
 def test_scan_without_service_resolves_schema_per_service_directory(tmp_path):

@@ -1128,6 +1128,12 @@ def _render_dependency_change_table(
         console.print(
             "\n[bold red]New source dependencies are missing from the contract.[/bold red]"
         )
+        console.print(
+            "[bold]Suggestion:[/bold] Review these -- not every read belongs "
+            "in the contract. For the ones that do, add them to "
+            "'env.schema.toml' (hand-edited, not generated). Re-run "
+            "'envshield undeclared' to confirm."
+        )
 
 
 def _print_dependency_error(

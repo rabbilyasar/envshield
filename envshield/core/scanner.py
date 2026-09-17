@@ -1387,6 +1387,12 @@ def run_scan(
                         finding["variable_name"],
                     )
                 console.print(undeclared_table)
+                console.print(
+                    "\n[bold]Suggestion:[/bold] Review these -- not every read "
+                    "belongs in the contract. For the ones that do, add them to "
+                    "'env.schema.toml' (hand-edited, not generated), then re-stage "
+                    "and commit again."
+                )
 
             console.print(
                 "\n[bold red]Commit aborted. Please fix the issues above before committing.[/bold red]"
@@ -1438,7 +1444,10 @@ def run_scan(
             )
         console.print(undeclared_table)
         console.print(
-            "\n[bold]Suggestion:[/bold] Please add these variables to your 'env.schema.toml' to maintain your configuration contract."
+            "\n[bold]Suggestion:[/bold] Review these -- not every read belongs "
+            "in the contract. For the ones that do, add them to "
+            "'env.schema.toml' (hand-edited, not generated). Re-run "
+            "'envshield scan' to confirm."
         )
 
     # A skip means eligible content was never actually inspected -- this
