@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented in this file.
 
+## [4.7.4] - 2026-09-17
+
+UX and multi-service correctness fixes found while dogfooding EnvShield on a real multi-service project.
+
+### Fixed
+- **Undeclared-variable suggestions now give a concrete next step.** `envshield scan`, its `--staged --enforce` commit-abort path, and the dedicated `envshield undeclared` subcommand's missing-declaration message all ended with a vague "add these to your schema" suggestion (or, for `undeclared`, no suggestion at all). They now point at manual review and edit of `env.schema.toml` (hand-edited, not generated) followed by re-running the same command to confirm — and deliberately never suggest `schema sync`, which only ever propagates an already-declared schema variable outward, not a newly-discovered undeclared one inward.
+- **`example_file` is now paired with a non-`.env` local file when found (BL-133).** Service auto-detection (`envshield service discover`) could find a real local file under a non-`.env` name (e.g. Next.js's `.env.local`) without ever checking for its matching `<name>.example` template, leaving Template Sync (`doctor`, `schema sync --check`, the pre-commit hook) pointed at a default `.env.example` that didn't exist. `service add`/manual `envshield.yml` registration also now warns when `local_file` is overridden without a paired `example_file`.
+- **`envshield hook status` now detects a stale installed hook (BL-134).** A hook installed before a service was added to `envshield.yml` (and therefore missing that service's block) previously reported as a plain installed checkmark with no indication anything was out of date. It's now reported as stale, with a pointer to `hook install --yes` to refresh it — informational only; `hook install`/`hook remove`'s own exact-match ownership safety checks (BL-119/BL-120) are unchanged.
+
 ## [4.7.3] - 2026-09-16
 
 CI hardening release. Fixes test failures in CI environments and adds classifier module to secret-scanning exclusions.
