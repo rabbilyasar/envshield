@@ -895,7 +895,7 @@ Component: `core/scanner.py` (`SECRET_PATTERNS[0]`'s unquoted branch — one add
 
 ### BL-133 — `local_file` can be overridden per-service with no paired `example_file` override, silently pointing Template Sync at the wrong file
 
-Type: `UX` · Evidence: `CONFIRMED` (live-reproduced on JossJobs) · Priority: **P2** · Status: **fixed, tested — not yet committed**
+Type: `UX` · Evidence: `CONFIRMED` (live-reproduced on JossJobs) · Priority: **P2** · Status: **fixed, tested, committed (`91aec49`)**
 Source: JossJobs multi-service dogfooding pass (2026-09-17) — inspecting the project's `envshield.yml`/schema setup for scalability as it grew from one service (root, dotenv) to two (root + a Next.js `frontend`).
 Component: `core/service_discovery.py::detect_env_style` (root cause) and `config/manager.py::add_service` (safety net for the manual/hand-edited path); downstream affected: `doctor.py::_check_example_file_sync`, `schema_manager.py::sync_schema`, `scanner.py::_generate_pre_commit_hook_content`.
 
@@ -915,12 +915,12 @@ Component: `core/service_discovery.py::detect_env_style` (root cause) and `confi
 - **Tests:** `test_service_discovery.py::test_detect_env_style_pairs_example_file_with_a_non_dot_env_local_file` (the fix) plus an added assertion on the pre-existing `test_detect_env_style_overrides_local_file_for_non_dot_env_variant` (no paired template on disk -> `example_file` stays `None`, unchanged behavior). `test_config_manager.py` gained four cases: warning fires for a `.env.local`-style override with no `example_file`; does not fire when `example_file` is also given; does not fire for a `.py` local_file (no separate template exists for that case at all, see `doctor.py::_check_example_file_sync`); does not fire when `local_file` is the plain `.env` default. Full suite 1440/1440 (was 1433), `ruff check .` clean, `ruff format --check .` clean on every file touched.
 - **Real-world verification:** re-ran against the actual JossJobs repository (not just the added unit tests) after adding `example_file: frontend/.env.local.example` to its `envshield.yml` by hand (the same workaround this entry's prior text described) — `envshield doctor --service frontend` and `envshield doctor` (root) both report every check green, including Template Sync.
 - **Related, found and fixed in the same pass, not a separate BL:** `hook status` had no way to tell an installed hook had gone stale relative to `envshield.yml` (e.g. after a new service like `frontend` was added) — the exact blind spot this dogfooding session also hit directly on JossJobs' own installed hooks. See `BL-134`.
-- **Decision:** **Fixed in the working tree, per explicit instruction. Not yet committed.**
+- **Decision:** **Fixed and committed (`91aec49`).**
 - **Target:** done for this pass.
 
 ### BL-134 — `hook status` had no way to detect an installed hook had gone stale relative to `envshield.yml`
 
-Type: `UX` · Evidence: `CONFIRMED` (live-reproduced, both on a synthetic case and directly against JossJobs' real installed hooks) · Priority: **P3** · Status: **fixed, tested — not yet committed**
+Type: `UX` · Evidence: `CONFIRMED` (live-reproduced, both on a synthetic case and directly against JossJobs' real installed hooks) · Priority: **P3** · Status: **fixed, tested, committed (`0c07864`)**
 Source: Same JossJobs dogfooding pass as `BL-133` — JossJobs' own installed pre-commit/post-merge hooks predate its `frontend` service and still only contain the root `jossjobs` service's block; `envshield hook status` reported both as a plain installed ✓ with nothing indicating this.
 Component: `core/hooks_manager.py` (`HooksManager.print_hook_status`, new `_hook_status_line`)
 
@@ -929,7 +929,7 @@ Component: `core/hooks_manager.py` (`HooksManager.print_hook_status`, new `_hook
 - **Deliberately not addressed here (still open, matches `BL-119`/`BL-120`'s own existing scope note):** automatic stale-hook refresh or removal. `hook install --yes` still correctly refuses to silently overwrite a stale-but-marker-bearing hook non-interactively (exactly as `BL-119` established) — a real terminal and an explicit "yes" at the interactive overwrite prompt are still required. This entry only adds visibility that a refresh is needed; it doesn't change how a refresh happens.
 - **Tests:** `test_hook_cli.py::test_hook_status_flags_a_stale_hook_after_a_service_is_added` (a hook installed for one service, a second service then added to `envshield.yml`, `hook status` reports "stale" and the refresh command) and `..._does_not_flag_a_freshly_installed_hook_as_stale` (no false positive on an up-to-date hook). Full suite 1440/1440 (was 1433, shared count with `BL-133` -- both fixed in the same pass), `ruff check .`/`ruff format --check .` clean.
 - **Real-world verification:** run directly against JossJobs' actual installed hooks (not just synthetic test fixtures) — both `pre-commit` and `post-merge` were correctly flagged stale before `envshield hook install` was re-run there.
-- **Decision:** **Fixed in the working tree, per explicit instruction. Not yet committed.**
+- **Decision:** **Fixed and committed (`0c07864`).**
 - **Target:** done for this pass.
 
 ---
