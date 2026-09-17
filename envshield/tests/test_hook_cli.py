@@ -36,6 +36,54 @@ def test_hook_status_reports_installed_hooks(tmp_path):
         assert "post-merge hook" in result.stdout
 
 
+def test_hook_status_flags_a_stale_hook_after_a_service_is_added(tmp_path):
+    """
+    BL-133-adjacent (already-known limitation, see BL-119/BL-120): a hook
+    generated before a new service was registered in envshield.yml still
+    only covers the service(s) that existed at install time. 'hook status'
+    used to report this as a plain installed ✓ with no way to tell it had
+    gone stale -- this only adds visibility, it doesn't change install/
+    remove's own exact-match safety behavior at all.
+    """
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _init_git_repo()
+        with open("envshield.yml", "w") as f:
+            f.write(
+                "project_name: acme\nservices:\n  api:\n    schema: env.schema.toml\n"
+            )
+        runner.invoke(app, ["hook", "install", "--yes"])
+
+        # A second service registered after the hook was already installed --
+        # the installed file on disk is now missing its block.
+        with open("envshield.yml", "w") as f:
+            f.write(
+                "project_name: acme\nservices:\n"
+                "  api:\n    schema: env.schema.toml\n"
+                "  frontend:\n    schema: frontend/env.schema.toml\n"
+            )
+
+        result = runner.invoke(app, ["hook", "status"])
+
+        assert result.exit_code == 0
+        assert "stale" in result.stdout
+        assert "hook install --yes" in result.stdout
+
+
+def test_hook_status_does_not_flag_a_freshly_installed_hook_as_stale(tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _init_git_repo()
+        with open("envshield.yml", "w") as f:
+            f.write(
+                "project_name: acme\nservices:\n  api:\n    schema: env.schema.toml\n"
+            )
+        runner.invoke(app, ["hook", "install", "--yes"])
+
+        result = runner.invoke(app, ["hook", "status"])
+
+        assert result.exit_code == 0
+        assert "stale" not in result.stdout
+
+
 def test_hook_remove_deletes_envshield_installed_hooks(tmp_path):
     with runner.isolated_filesystem(temp_dir=tmp_path):
         _init_git_repo()

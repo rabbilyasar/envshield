@@ -145,24 +145,70 @@ class HooksManager:
         except EnvShieldException as e:
             console.print(f"[bold yellow]⚠️  Warning:[/] {e}")
 
+    def _hook_status_line(
+        self, hooks_dir: str, filename: str, label: str, generator
+    ) -> str:
+        """
+        Describes one installed hook: missing, up to date, or stale --
+        present, and still carrying EnvShield's marker/shape, but no longer
+        byte-for-byte what EnvShield would generate right now (e.g. a
+        service was added to envshield.yml after this hook was installed,
+        so it's missing that service's block; or the file was hand-edited).
+
+        This is purely informational: unlike `are_hooks_installed` (used by
+        `hook install`/`uninstall`'s exact-match ownership check -- see
+        BL-119/BL-120), staleness here never gates or changes what those
+        commands do. A stale hook is not "not installed" -- it still runs
+        and still protects whatever it was generated to protect; this only
+        surfaces that it may no longer match the project's current config,
+        so nothing here needed to touch that exact-match safety invariant.
+        """
+        path = os.path.join(hooks_dir, filename)
+        if not os.path.exists(path):
+            return f"[dim]✗ {label}[/dim]"
+
+        try:
+            with open(path, "r") as f:
+                installed_content = f.read()
+        except OSError:
+            return f"[green]✓ {label}[/green]"
+
+        if installed_content == generator():
+            return f"[green]✓ {label}[/green]"
+
+        return (
+            f"[yellow]✓ {label} (stale -- doesn't match what EnvShield would "
+            "generate now; run 'envshield hook install --yes' to refresh)[/yellow]"
+        )
+
     def print_hook_status(self) -> None:
         """Print the current status of installed hooks."""
         if not self.git_root:
             console.print("[dim]Not in a git repository.[/dim]")
             return
 
-        pre_commit, post_merge = self.are_hooks_installed()
+        # Import here to avoid circular imports (same pattern as
+        # _do_install_hooks above).
+        from . import scanner
 
-        status = []
-        if pre_commit:
-            status.append("[green]✓ pre-commit hook[/green] (secret scanning)")
-        else:
-            status.append("[dim]✗ pre-commit hook[/dim]")
+        hooks_dir = git_utils.get_hooks_dir() or os.path.join(
+            self.git_root, ".git", "hooks"
+        )
 
-        if post_merge:
-            status.append("[green]✓ post-merge hook[/green] (config change detection)")
-        else:
-            status.append("[dim]✗ post-merge hook[/dim]")
+        status = [
+            self._hook_status_line(
+                hooks_dir,
+                "pre-commit",
+                "pre-commit hook (secret scanning)",
+                scanner._generate_pre_commit_hook_content,
+            ),
+            self._hook_status_line(
+                hooks_dir,
+                "post-merge",
+                "post-merge hook (config change detection)",
+                scanner._generate_post_merge_hook_content,
+            ),
+        ]
 
         console.print("\n[bold]Git Hooks:[/bold]")
         for s in status:
