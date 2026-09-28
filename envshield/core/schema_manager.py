@@ -7,8 +7,11 @@ from rich.console import Console
 from rich.table import Table
 
 from envshield.config import manager as config_manager
-from envshield.core import file_updater, schema_types
-from envshield.core.exceptions import EnvShieldException
+from envshield.core import file_updater, schema_scope, schema_types
+from envshield.core.exceptions import (
+    EnvShieldException,
+    SharedSchemaWriteRefusedError,
+)
 from envshield.parsers._base import BaseParser
 from envshield.parsers._deployment import looks_like_unrendered_helm_template
 from envshield.parsers.factory import get_manifest_parser_and_vars, get_parser
@@ -38,6 +41,33 @@ def _no_parser_found_message(file_path: str) -> str:
             "final YAML, not Helm's template source."
         )
     return f"No parser found for file type '{file_path}'."
+
+
+def assert_schema_rewritable(schema_path: str) -> None:
+    """
+    Refuses a wholesale schema rewrite ('import', 'init --force') of a
+    hand-maintained schema -- one shared by more than one registered
+    service, or one that uses 'services' scoping at all. The importer's
+    regenerate-and-merge keeps field values but drops comments and the
+    scope table layout, which is exactly the hand-maintained content a
+    shared system schema carries. A missing file is always writable; an
+    unparseable one is judged by its users alone (unchanged behavior for a
+    broken single-user schema).
+    """
+    if not os.path.exists(schema_path):
+        return
+    users = config_manager.get_schema_users(schema_path)
+    scoped = False
+    try:
+        raw = config_manager.load_toml_schema(schema_path)
+        scoped = any(
+            isinstance(details, dict) and schema_scope.SCOPE_KEY in details
+            for details in raw.values()
+        )
+    except EnvShieldException:
+        pass
+    if len(users) > 1 or scoped:
+        raise SharedSchemaWriteRefusedError(schema_path, users)
 
 
 class SchemaDiff:

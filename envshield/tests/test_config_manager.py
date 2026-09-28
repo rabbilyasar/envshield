@@ -9,7 +9,9 @@ from envshield.core.exceptions import (
     InvalidManifestDefinitionError,
     SchemaNotFoundError,
     SchemaParseError,
+    SchemaScopeError,
     SecretDefaultConflictError,
+    ServiceConfigError,
     UnsafePathError,
 )
 
@@ -1329,3 +1331,171 @@ class TestServiceDirContains:
             )
             is True
         )
+
+
+SHARED_YML = (
+    "services:\n"
+    "  api:\n    schema: env.schema.toml\n    dir: api\n"
+    "  worker:\n    schema: env.schema.toml\n    dir: worker\n"
+)
+
+
+class TestSharedSchemaLoading:
+    """Phase 1 of the shared system schema: load_schema projects through
+    schema_scope.project, keeping its external return shape."""
+
+    def _setup(self, tmp_path, monkeypatch, yml, schema):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "envshield.yml").write_text(yml)
+        (tmp_path / "env.schema.toml").write_text(schema)
+
+    def test_single_user_schema_loads_exactly_as_before(self, tmp_path, monkeypatch):
+        self._setup(
+            tmp_path,
+            monkeypatch,
+            "services:\n  api:\n    schema: env.schema.toml\n",
+            '[DATABASE_URL]\nsecret = true\n\n[PORT]\ndefaultValue = "8000"\n',
+        )
+        assert config_manager.load_schema("api") == {
+            "DATABASE_URL": {"secret": True},
+            "PORT": {"defaultValue": "8000"},
+        }
+
+    def test_shared_schema_projects_per_service(self, tmp_path, monkeypatch):
+        self._setup(
+            tmp_path,
+            monkeypatch,
+            SHARED_YML,
+            '[DATABASE_URL]\nsecret = true\nservices = ["api", "worker"]\n\n'
+            '[STRIPE_SECRET_KEY]\nsecret = true\nservices = ["api"]\n\n'
+            '[LOG_LEVEL]\ndefaultValue = "info"\n',
+        )
+        assert set(config_manager.load_schema("api")) == {
+            "DATABASE_URL",
+            "STRIPE_SECRET_KEY",
+            "LOG_LEVEL",
+        }
+        assert set(config_manager.load_schema("worker")) == {
+            "DATABASE_URL",
+            "LOG_LEVEL",
+        }
+        view = config_manager.load_schema_view("worker")
+        assert view.status("STRIPE_SECRET_KEY") == "out_of_scope"
+        assert view.users == ("api", "worker")
+
+    def test_shared_unscoped_secret_fails_closed(self, tmp_path, monkeypatch):
+        self._setup(
+            tmp_path, monkeypatch, SHARED_YML, "[STRIPE_SECRET_KEY]\nsecret = true\n"
+        )
+        with pytest.raises(SchemaScopeError, match="STRIPE_SECRET_KEY"):
+            config_manager.load_schema("api")
+
+    def test_system_secret_default_is_rejected_even_when_out_of_scope(
+        self, tmp_path, monkeypatch
+    ):
+        self._setup(
+            tmp_path,
+            monkeypatch,
+            SHARED_YML,
+            '[TOKEN]\nsecret = true\ndefaultValue = "x"\nservices = ["api"]\n',
+        )
+        with pytest.raises(SecretDefaultConflictError):
+            config_manager.load_schema("worker")
+
+    def test_extends_base_can_carry_scopes(self, tmp_path, monkeypatch):
+        self._setup(
+            tmp_path,
+            monkeypatch,
+            SHARED_YML,
+            'extends = "base.toml"\n\n[LOG_LEVEL]\ndefaultValue = "info"\n',
+        )
+        (tmp_path / "base.toml").write_text(
+            '[STRIPE_SECRET_KEY]\nsecret = true\nservices = ["api"]\n'
+        )
+        assert "STRIPE_SECRET_KEY" in config_manager.load_schema("api")
+        assert "STRIPE_SECRET_KEY" not in config_manager.load_schema("worker")
+
+    def test_extends_base_unscoped_secret_still_fails_when_root_is_shared(
+        self, tmp_path, monkeypatch
+    ):
+        self._setup(tmp_path, monkeypatch, SHARED_YML, 'extends = "base.toml"\n')
+        (tmp_path / "base.toml").write_text("[KEY]\nsecret = true\n")
+        with pytest.raises(SchemaScopeError, match="KEY"):
+            config_manager.load_schema("api")
+
+    def test_list_plus_table_scope_is_a_clear_parse_error_not_a_crash(
+        self, tmp_path, monkeypatch
+    ):
+        self._setup(
+            tmp_path,
+            monkeypatch,
+            SHARED_YML,
+            '[PORT]\nservices = ["api", "worker"]\n\n'
+            '[PORT.services.worker]\ndefaultValue = "9000"\n',
+        )
+        with pytest.raises(SchemaParseError, match="invalid TOML structure"):
+            config_manager.load_schema("api")
+
+
+class TestGetSchemaUsers:
+    def test_users_are_every_service_on_the_same_real_file(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "envshield.yml").write_text(
+            SHARED_YML + "  web:\n    schema: web/env.schema.toml\n"
+            "  alias:\n    schema: ./env.schema.toml\n    dir: alias\n"
+        )
+        (tmp_path / "env.schema.toml").write_text("")
+        assert config_manager.get_schema_users("env.schema.toml") == [
+            "api",
+            "worker",
+            "alias",
+        ]
+
+    def test_symlinked_schema_counts_as_the_same_file(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "env.schema.toml").write_text("")
+        (tmp_path / "link.toml").symlink_to(tmp_path / "env.schema.toml")
+        (tmp_path / "envshield.yml").write_text(
+            "services:\n  api:\n    schema: env.schema.toml\n"
+            "  worker:\n    schema: link.toml\n"
+        )
+        assert config_manager.get_schema_users("env.schema.toml") == ["api", "worker"]
+
+    def test_legacy_path_key_is_still_compared(self, tmp_path, monkeypatch):
+        """A legacy 'path:' entry is broken for its own commands, but its
+        path is still readable -- it must count, not vanish."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "envshield.yml").write_text(
+            "services:\n  api:\n    schema: env.schema.toml\n"
+            "  worker:\n    path: env.schema.toml\n"
+        )
+        assert config_manager.get_schema_users("env.schema.toml") == ["api", "worker"]
+
+    @pytest.mark.parametrize(
+        "entry", ['"just-a-string"', "{}", "{description: x}", "{schema: 3}"]
+    )
+    def test_unresolvable_service_fails_closed(self, tmp_path, monkeypatch, entry):
+        """Invariant: user discovery must never silently shrink the set --
+        a service we can't read could be a second user of this schema."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "envshield.yml").write_text(
+            f"services:\n  api:\n    schema: env.schema.toml\n  broken: {entry}\n"
+        )
+        (tmp_path / "env.schema.toml").write_text("[A]\n")
+        with pytest.raises(ServiceConfigError, match="broken"):
+            config_manager.get_schema_users("env.schema.toml")
+        with pytest.raises(ServiceConfigError, match="broken"):
+            config_manager.load_schema("api")
+
+
+class TestLoadBareSchemaScope:
+    def test_unscoped_bare_schema_unchanged(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "env.schema.toml").write_text("[A]\nsecret = true\n")
+        assert config_manager.load_bare_schema() == {"A": {"secret": True}}
+
+    def test_scoped_bare_schema_requires_registration(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "env.schema.toml").write_text('[A]\nservices = ["api"]\n')
+        with pytest.raises(SchemaScopeError, match="--service"):
+            config_manager.load_bare_schema()

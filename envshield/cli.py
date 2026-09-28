@@ -230,6 +230,12 @@ def init(
         )
         raise typer.Exit()
 
+    try:
+        schema_manager.assert_schema_rewritable(config_manager.SCHEMA_FILE_NAME)
+    except EnvShieldException as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
+        raise typer.Exit(code=1)
+
     if force and has_services:
         overwrite = questionary.confirm(
             "Are you sure you want to overwrite your existing EnvShield configuration? This cannot be undone.",
@@ -2112,7 +2118,10 @@ def import_command(
                 # what lets the auto-sync below keep .env.example honest
                 # from this very first import, not just from the next one.
                 service = os.path.basename(os.getcwd())
+                schema_manager.assert_schema_rewritable(output)
                 config_manager.add_service(service, output)
+
+        schema_manager.assert_schema_rewritable(output)
 
         if os.path.exists(output) and not force and not interactive:
             console.print(

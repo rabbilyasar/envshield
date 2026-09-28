@@ -8,6 +8,8 @@ from envshield.core.exceptions import (
     ConfigParseError,
     SchemaNotFoundError,
     SchemaParseError,
+    SchemaScopeError,
+    ServiceConfigError,
     UnsafePathError,
 )
 
@@ -422,3 +424,114 @@ class TestLexicalContainment:
         """'a/../b' normalizes to 'b' -- never actually escapes anything."""
         result = schema_snapshot._ensure_lexically_within_project("a/../b", "HEAD")
         assert result == "a/../b"
+
+
+class TestRevisionServiceProjection:
+    """The registered-service set used for scope projection must come from
+    envshield.yml AT the revision, never from the live working tree."""
+
+    SHARED = (
+        "services:\n"
+        "  api:\n    schema: env.schema.toml\n    dir: api\n"
+        "  worker:\n    schema: env.schema.toml\n    dir: worker\n"
+    )
+    SCHEMA = (
+        '[DB]\nsecret = true\nservices = ["api", "worker"]\n\n'
+        '[STRIPE]\nsecret = true\nservices = ["api"]\n'
+    )
+
+    def test_projects_with_revision_users(self, tmp_path, monkeypatch):
+        _init_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path, "envshield.yml", self.SHARED)
+        _write(tmp_path, "env.schema.toml", self.SCHEMA)
+        _commit(tmp_path, "v1")
+
+        assert set(schema_snapshot.load_schema_for_diff("worker", "HEAD")) == {"DB"}
+        view = schema_snapshot.load_schema_view_for_diff("worker", "HEAD")
+        assert view.status("STRIPE") == "out_of_scope"
+        assert view.users == ("api", "worker")
+
+    def test_live_topology_change_does_not_leak_into_history(
+        self, tmp_path, monkeypatch
+    ):
+        _init_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path, "envshield.yml", self.SHARED)
+        _write(tmp_path, "env.schema.toml", self.SCHEMA)
+        _commit(tmp_path, "v1")
+        # Live tree: worker removed -- HEAD must still see both users.
+        _write(
+            tmp_path,
+            "envshield.yml",
+            "services:\n  api:\n    schema: env.schema.toml\n",
+        )
+
+        assert set(schema_snapshot.load_schema_for_diff("api", "HEAD")) == {
+            "DB",
+            "STRIPE",
+        }
+        with pytest.raises(SchemaScopeError, match="worker"):
+            schema_snapshot.load_schema_for_diff("api", None)
+
+    def test_history_where_worker_was_not_yet_registered(self, tmp_path, monkeypatch):
+        _init_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        _write(
+            tmp_path,
+            "envshield.yml",
+            "services:\n  api:\n    schema: env.schema.toml\n",
+        )
+        _write(tmp_path, "env.schema.toml", "[STRIPE]\nsecret = true\n")
+        _commit(tmp_path, "v1")
+        _write(tmp_path, "envshield.yml", self.SHARED)
+        _write(tmp_path, "env.schema.toml", self.SCHEMA)
+        _commit(tmp_path, "v2")
+
+        # v1: single user, unscoped secret is legacy-valid.
+        assert schema_snapshot.load_schema_for_diff("api", "HEAD~1") == {
+            "STRIPE": {"secret": True}
+        }
+        assert set(schema_snapshot.load_schema_for_diff("api", "HEAD")) == {
+            "DB",
+            "STRIPE",
+        }
+
+    def test_shared_unscoped_secret_fails_at_a_revision(self, tmp_path, monkeypatch):
+        _init_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path, "envshield.yml", self.SHARED)
+        _write(tmp_path, "env.schema.toml", "[KEY]\nsecret = true\n")
+        _commit(tmp_path, "v1")
+        with pytest.raises(SchemaScopeError, match="KEY"):
+            schema_snapshot.load_schema_for_diff("api", "HEAD")
+
+    def test_unresolvable_service_at_a_revision_fails_closed(
+        self, tmp_path, monkeypatch
+    ):
+        _init_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        _write(
+            tmp_path,
+            "envshield.yml",
+            "services:\n  api:\n    schema: env.schema.toml\n  broken: {}\n",
+        )
+        _write(tmp_path, "env.schema.toml", "[A]\n")
+        _commit(tmp_path, "v1")
+        with pytest.raises(ServiceConfigError, match="broken"):
+            schema_snapshot.load_schema_for_diff("api", "HEAD")
+
+    def test_list_plus_table_scope_at_a_revision_is_a_parse_error(
+        self, tmp_path, monkeypatch
+    ):
+        _init_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path, "envshield.yml", self.SHARED)
+        _write(
+            tmp_path,
+            "env.schema.toml",
+            '[P]\nservices = ["api"]\n\n[P.services.worker]\ndefaultValue = "1"\n',
+        )
+        _commit(tmp_path, "v1")
+        with pytest.raises(SchemaParseError, match="invalid TOML structure"):
+            schema_snapshot.load_schema_for_diff("api", "HEAD")

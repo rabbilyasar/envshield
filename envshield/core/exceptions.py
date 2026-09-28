@@ -128,3 +128,54 @@ class InvalidManifestDefinitionError(EnvShieldException):
     def __init__(self, message: str):
         self.message = message
         super().__init__(self.message)
+
+
+class SchemaScopeError(SchemaParseError):
+    """
+    Raised when a schema's service scoping ('services' on a variable) is
+    invalid for the services actually registered against that schema file
+    -- an unscoped secret in a shared schema, an unknown or stale service
+    name, a disallowed per-service override, or a requiredIf dependency
+    that isn't available everywhere its dependent field is.
+
+    A SchemaParseError subclass so every existing handler that already
+    reports a bad schema reports this one the same way.
+    """
+
+    def __init__(self, schema_path: str, details: str):
+        super().__init__(schema_path, details)
+        self.message = f"Schema error in {schema_path}: {details}"
+        self.args = (self.message,)
+
+
+class ServiceConfigError(EnvShieldException):
+    """
+    Raised when envshield.yml's service topology can't be resolved safely
+    -- e.g. a registered service whose entry can't be read well enough to
+    tell whether it shares a schema file with another service.
+    """
+
+    def __init__(self, message: str):
+        self.message = message
+        super().__init__(self.message)
+
+
+class SharedSchemaWriteRefusedError(EnvShieldException):
+    """
+    Raised when a schema-writing command ('import', 'init --force') would
+    rewrite a hand-maintained schema that's shared by several services or
+    uses service scoping -- a rewrite would drop its comments and layout.
+    """
+
+    def __init__(self, schema_path: str, users: list):
+        if len(users) > 1:
+            reason = f"is the shared contract for services {', '.join(users)}"
+        else:
+            reason = "scopes variables to services ('services = ...')"
+        self.message = (
+            f"Refusing to rewrite '{schema_path}': it {reason} and is "
+            "hand-maintained, so regenerating it would discard its comments "
+            "and scope layout. Edit it directly instead -- 'envshield "
+            "undeclared' and 'envshield explain' show what's missing."
+        )
+        super().__init__(self.message)

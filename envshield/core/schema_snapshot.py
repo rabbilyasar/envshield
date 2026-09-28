@@ -22,18 +22,20 @@ Git blob content has no live filesystem to resolve symlinks against.
 
 import os
 import posixpath
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import toml
 import yaml
 
 from envshield.config import manager as config_manager
+from envshield.core import schema_scope
 from envshield.utils import git_utils
 
 from .exceptions import (
     ConfigParseError,
     SchemaNotFoundError,
     SchemaParseError,
+    ServiceConfigError,
     UnsafePathError,
 )
 
@@ -45,16 +47,67 @@ def load_schema_for_diff(service_name: str, revision: Optional[str]) -> Dict[str
     behavior, delegated straight to config_manager.load_schema); any other
     value is treated as a Git revision and resolved entirely via
     `git show <revision>:<path>`.
+
+    Returns the service's effective (scope-projected) schema -- see
+    load_schema_view_for_diff.
+    """
+    return load_schema_view_for_diff(service_name, revision).fields
+
+
+def load_schema_view_for_diff(
+    service_name: str, revision: Optional[str]
+) -> schema_scope.ServiceSchemaView:
+    """
+    load_schema_for_diff's full result (see config_manager.load_schema_view).
+    At a revision, the services a shared schema is projected against come
+    from envshield.yml *at that revision*, never from the live tree -- so
+    a historical contract is judged by the topology it actually had.
     """
     if revision is None:
-        return config_manager.load_schema(service_name=service_name)
+        return config_manager.load_schema_view(service_name=service_name)
 
-    schema_path = _get_service_schema_path_at_revision(service_name, revision)
+    config = _load_config_at_revision(revision)
+    schema_path = _get_service_schema_path_at_revision(service_name, revision, config)
     if _read_optional_at_revision(schema_path, revision) is None:
         raise SchemaNotFoundError(
             f"Schema file not found: '{schema_path}' at revision '{revision}'."
         )
-    return _load_schema_at_revision(schema_path, revision)
+    merged = _load_schema_at_revision(schema_path, revision)
+    services = config.get("services")
+    services = services if isinstance(services, dict) else {}
+    return schema_scope.project(
+        merged,
+        schema_path,
+        service_name,
+        _get_schema_users_at_revision(services, schema_path, revision),
+        registered=services.keys(),
+    )
+
+
+def _get_schema_users_at_revision(
+    services: Dict[str, Any], schema_path: str, revision: str
+) -> List[str]:
+    """
+    Mirrors config_manager.get_schema_users, lexically (posixpath -- there's
+    no live filesystem to resolve a historical symlink against), and fails
+    closed the same way: an entry whose schema can't be determined is an
+    error, never silently dropped from the user set.
+    """
+    target = posixpath.normpath(schema_path)
+    users = []
+    for name, entry in services.items():
+        ref = (
+            entry.get("schema", entry.get("path")) if isinstance(entry, dict) else None
+        )
+        if not isinstance(ref, str) or not ref:
+            raise ServiceConfigError(
+                f"Service '{name}' in envshield.yml at revision '{revision}' has "
+                f"no usable 'schema:' path, so EnvShield can't tell whether it "
+                f"shares '{schema_path}' with other services."
+            )
+        if posixpath.normpath(ref) == target:
+            users.append(name)
+    return users
 
 
 def _load_config_at_revision(revision: str) -> Dict[str, Any]:
@@ -74,8 +127,11 @@ def _load_config_at_revision(revision: str) -> Dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
-def _get_service_schema_path_at_revision(service_name: str, revision: str) -> str:
-    config = _load_config_at_revision(revision)
+def _get_service_schema_path_at_revision(
+    service_name: str, revision: str, config: Optional[Dict[str, Any]] = None
+) -> str:
+    if config is None:
+        config = _load_config_at_revision(revision)
     services = config.get("services")
     services = services if isinstance(services, dict) else {}
 
@@ -148,6 +204,10 @@ def _parse_toml_at_revision(schema_path: str, revision: str) -> Dict[str, Any]:
     content = _read_at_revision(schema_path, revision)
     try:
         return toml.loads(content)
+    except (TypeError, IndexError) as e:
+        raise SchemaParseError(
+            schema_path, config_manager.invalid_toml_structure_message(e)
+        )
     except toml.TomlDecodeError as e:
         error_msg = str(e)
         if "already exists" in error_msg:

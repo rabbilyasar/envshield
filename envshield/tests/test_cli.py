@@ -2340,3 +2340,89 @@ def test_scan_json_reports_clean_state(tmp_path):
             "skipped_files": [],
             "complete": True,
         }
+
+
+# --- Shared system schema, Phase 1: schema writers must refuse to rewrite a
+# shared or scoped hand-maintained schema (init --force, import).
+
+_SHARED_YML = (
+    "services:\n"
+    "  api:\n    schema: env.schema.toml\n    dir: api\n"
+    "  worker:\n    schema: env.schema.toml\n    dir: worker\n"
+)
+_SHARED_SCHEMA = (
+    "# hand-maintained -- this comment must survive\n"
+    '[DATABASE_URL]\nsecret = true\nservices = ["api", "worker"]\n'
+)
+
+
+def _write_shared_project():
+    with open(CONFIG_FILE_NAME, "w") as f:
+        f.write(_SHARED_YML)
+    with open(SCHEMA_FILE_NAME, "w") as f:
+        f.write(_SHARED_SCHEMA)
+    with open(".env", "w") as f:
+        f.write("DATABASE_URL=x\nNEW_VAR=1\n")
+
+
+def test_import_refuses_a_shared_schema_even_with_force(tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_shared_project()
+        for args in (
+            ["import", ".env", "--service", "api", "--force"],
+            ["import", ".env", "--service", "worker"],
+            ["import", ".env", "--output", "./" + SCHEMA_FILE_NAME, "--force"],
+        ):
+            result = runner.invoke(app, args)
+            assert result.exit_code == 1, (args, result.stdout)
+            assert "shared" in result.stdout
+        with open(SCHEMA_FILE_NAME) as f:
+            assert f.read() == _SHARED_SCHEMA
+        with open(CONFIG_FILE_NAME) as f:
+            assert f.read() == _SHARED_YML
+
+
+def test_import_refuses_a_single_user_schema_that_uses_scopes(tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        with open(CONFIG_FILE_NAME, "w") as f:
+            f.write("services:\n  api:\n    schema: env.schema.toml\n")
+        schema = '[A]\nservices = ["api"]\n'
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write(schema)
+        with open(".env", "w") as f:
+            f.write("A=1\nB=2\n")
+        result = runner.invoke(app, ["import", ".env", "--force"])
+        assert result.exit_code == 1, result.stdout
+        with open(SCHEMA_FILE_NAME) as f:
+            assert f.read() == schema
+
+
+def test_init_force_refuses_a_shared_schema_before_prompting(tmp_path, mocker):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_shared_project()
+        confirm = mocker.patch("questionary.confirm")
+        result = runner.invoke(app, ["init", "--force"])
+        assert result.exit_code == 1, result.stdout
+        assert "shared" in result.stdout
+        confirm.assert_not_called()
+        with open(SCHEMA_FILE_NAME) as f:
+            assert f.read() == _SHARED_SCHEMA
+        with open(CONFIG_FILE_NAME) as f:
+            assert f.read() == _SHARED_YML
+
+
+def test_import_into_a_fresh_project_refuses_a_scoped_schema_without_registering(
+    tmp_path,
+):
+    """The refusal must come before 'import' bootstraps envshield.yml."""
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        schema = '[A]\nservices = ["api"]\n'
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write(schema)
+        with open(".env", "w") as f:
+            f.write("A=1\n")
+        result = runner.invoke(app, ["import", ".env", "--force"])
+        assert result.exit_code == 1, result.stdout
+        assert not os.path.exists(CONFIG_FILE_NAME)
+        with open(SCHEMA_FILE_NAME) as f:
+            assert f.read() == schema

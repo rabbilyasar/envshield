@@ -5,14 +5,16 @@ import toml
 import yaml
 from rich.console import Console
 
-from envshield.core import schema_types
+from envshield.core import schema_scope, schema_types
 from envshield.core.exceptions import (
     ConfigNotFoundError,
     ConfigParseError,
     InvalidManifestDefinitionError,
     SchemaNotFoundError,
     SchemaParseError,
+    SchemaScopeError,
     SecretDefaultConflictError,
+    ServiceConfigError,
     UnsafePathError,
 )
 from envshield.utils import git_utils
@@ -156,6 +158,22 @@ def load_schema(service_name: str) -> Dict[str, Any]:
     A schema can also declare a top-level `extends` key (a path, or a list
     of paths, to one or more base schemas) to share common variables across
     services without copy-pasting them -- see `_load_schema_file`.
+
+    Returns the service's *effective* schema -- for a schema shared by
+    several services, only what this service is granted, with its
+    per-service overrides applied (see load_schema_view). For a schema with
+    one user and no 'services' scoping, that's the merged schema, exactly
+    as before shared schemas existed.
+    """
+    return load_schema_view(service_name).fields
+
+
+def load_schema_view(service_name: str) -> schema_scope.ServiceSchemaView:
+    """
+    load_schema's full result: the service's effective fields plus the
+    whole system schema and each variable's service grants -- for callers
+    that must tell "defined but not granted to this service" apart from
+    "not defined at all". Every live schema load goes through here.
     """
     schema_path = get_service_schema_path(service_name)
     if not schema_path:
@@ -170,9 +188,50 @@ def load_schema(service_name: str) -> Dict[str, Any]:
             f"Schema file not found: {schema_path}. Run 'envshield init' to "
             "recreate it, or restore the file at that path."
         )
-    schema = _load_schema_file(schema_path)
-    _reject_secret_defaults(schema, schema_path)
-    return schema
+    merged = _load_schema_file(schema_path)
+    view = schema_scope.project(
+        merged,
+        schema_path,
+        service_name,
+        get_schema_users(schema_path),
+        registered=get_services().keys(),
+    )
+    # The whole system, not only this service's fields: a secret carrying a
+    # default is refused even while it's out of this service's scope.
+    _reject_secret_defaults(view.system, schema_path)
+    return view
+
+
+def get_schema_users(schema_path: str) -> List[str]:
+    """
+    Every registered service whose `schema` is this same file (compared by
+    resolved real path, so './env.schema.toml' or a symlink to it counts),
+    in envshield.yml order.
+
+    Fails closed: a registered service whose entry can't be read well
+    enough to tell which schema it uses raises ServiceConfigError instead
+    of being skipped -- silently dropping it could make a shared schema
+    look single-user, and single-user schemas don't require secrets to be
+    scoped. A legacy 'path:' entry is still compared by that path: it's
+    broken for its own commands, but its schema is still knowable.
+    """
+    target = os.path.realpath(os.path.join(os.getcwd(), schema_path))
+    users = []
+    for name, entry in get_services().items():
+        ref = (
+            entry.get("schema", entry.get("path")) if isinstance(entry, dict) else None
+        )
+        if not isinstance(ref, str) or not ref:
+            raise ServiceConfigError(
+                f"Service '{name}' in {CONFIG_FILE_NAME} has no usable 'schema:' "
+                f"path, so EnvShield can't tell whether it shares '{schema_path}' "
+                "with other services -- and secret scoping depends on exactly "
+                f"that. Give '{name}' a 'schema:' path, or remove it with "
+                f"'envshield service remove {name}'."
+            )
+        if os.path.realpath(os.path.join(os.getcwd(), ref)) == target:
+            users.append(name)
+    return users
 
 
 def load_bare_schema(path: str = SCHEMA_FILE_NAME) -> Dict[str, Any]:
@@ -197,6 +256,16 @@ def load_bare_schema(path: str = SCHEMA_FILE_NAME) -> Dict[str, Any]:
             "generate one from an existing config, or 'envshield init'."
         )
     schema = _load_schema_file(path)
+    if any(
+        isinstance(details, dict) and schema_scope.SCOPE_KEY in details
+        for details in schema.values()
+    ):
+        raise SchemaScopeError(
+            path,
+            "this schema scopes variables to services ('services = ...'), which "
+            "needs envshield.yml to say which services exist. Register the "
+            "service(s) with 'envshield service add' and pass --service.",
+        )
     _reject_secret_defaults(schema, path)
     return schema
 
@@ -227,6 +296,8 @@ def load_toml_schema(schema_path: str) -> Dict[str, Any]:
     try:
         with open(schema_path, "r") as f:
             return toml.load(f)
+    except (TypeError, IndexError) as e:
+        raise SchemaParseError(schema_path, invalid_toml_structure_message(e))
     except toml.TomlDecodeError as e:
         error_msg = str(e)
         if "already exists" in error_msg:
@@ -243,6 +314,22 @@ def load_toml_schema(schema_path: str) -> Dict[str, Any]:
                 else error_msg
             )
         raise SchemaParseError(schema_path, details)
+
+
+def invalid_toml_structure_message(error: Exception) -> str:
+    """
+    The 'toml' library doesn't always raise TomlDecodeError for invalid
+    TOML: a key defined as both a value and a table -- e.g.
+    `services = [...]` alongside a `[VAR.services.NAME]` table -- crashes
+    it with a bare TypeError/IndexError instead. Turned into a clear
+    SchemaParseError rather than an uncaught crash.
+    """
+    return (
+        "invalid TOML structure -- a key is probably defined twice with "
+        "incompatible types (e.g. 'services = [...]' together with a "
+        "'[VAR.services.NAME]' table; use only the table form when a "
+        f"variable needs per-service overrides). ({type(error).__name__})"
+    )
 
 
 def _load_schema_file(
