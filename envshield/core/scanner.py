@@ -545,6 +545,7 @@ def _record_discovered_usages(
     usages,
     schema_vars: set,
     new_lines_only: Optional[set],
+    system_vars: Optional[set] = None,
 ) -> None:
     """Shared adapter for both discovery.py engines: filters by
     new_lines_only and schema_vars, then appends in the same finding shape
@@ -558,6 +559,9 @@ def _record_discovered_usages(
     "this might be an environment-sourced read, unproven" doesn't belong
     in that class of result. Medium-confidence usages remain visible only
     through 'explain', where a human reads the caveat directly.
+
+    A variable in `system_vars` (the system schema) but not `schema_vars`
+    is still undeclared for this service, marked scope 'out_of_scope'.
     """
     for usage in usages:
         if usage.confidence != "high":
@@ -565,13 +569,14 @@ def _record_discovered_usages(
         if new_lines_only is not None and usage.line not in new_lines_only:
             continue
         if usage.variable not in schema_vars:
-            undeclared_findings.append(
-                {
-                    "file_path": _display_path(usage.file_path),
-                    "line_num": usage.line,
-                    "variable_name": usage.variable,
-                }
-            )
+            finding = {
+                "file_path": _display_path(usage.file_path),
+                "line_num": usage.line,
+                "variable_name": usage.variable,
+            }
+            if system_vars and usage.variable in system_vars:
+                finding["scope"] = "out_of_scope"
+            undeclared_findings.append(finding)
 
 
 # BL-129: file-local bare-identifier reference suppression -- Generic API
@@ -827,6 +832,7 @@ def _scan_single_file(
     schema_vars: set,
     content: Optional[str] = None,
     new_lines_only: Optional[set] = None,
+    system_vars: Optional[set] = None,
 ) -> (List[Dict], List[Dict]):
     """
     Helper to scan one file for both secrets and undeclared variables.
@@ -960,6 +966,7 @@ def _scan_single_file(
                     discovery.discover_python_usages(full_text, file_path),
                     schema_vars,
                     new_lines_only,
+                    system_vars,
                 )
             elif file_path.endswith((".js", ".jsx", ".ts", ".tsx")):
                 _record_discovered_usages(
@@ -967,6 +974,7 @@ def _scan_single_file(
                     discovery.discover_js_usages(full_text, file_path),
                     schema_vars,
                     new_lines_only,
+                    system_vars,
                 )
 
     except (IOError, OSError):
@@ -1072,9 +1080,11 @@ def _filter_files(files: List[str], exclude_patterns: List[str]) -> List[str]:
 
 def _build_undeclared_var_resolver(service_name: Optional[str]):
     """
-    Returns a function mapping a scanned file path to the schema variable
-    set it should be checked against for undeclared-variable detection --
-    or None if there's no schema at all to check against.
+    Returns a function mapping a scanned file path to the (service variable
+    set, system variable set) pair it should be checked against for
+    undeclared-variable detection -- or None if there's no schema at all to
+    check against. The system set only labels an undeclared read
+    'out_of_scope'; the service set alone decides what's declared.
 
     An explicit `service_name` checks every file against that one schema --
     unchanged, single-target behavior.
@@ -1094,16 +1104,15 @@ def _build_undeclared_var_resolver(service_name: Optional[str]):
     """
     if service_name:
         try:
-            schema_vars = set(
-                config_manager.load_schema(service_name=service_name).keys()
-            )
+            view = config_manager.load_schema_view(service_name=service_name)
+            vars_pair = (set(view.fields), set(view.system))
             console.print("[dim]Schema loaded for compliance check.[/dim]")
         except SchemaNotFoundError:
             console.print(
                 "[yellow]Warning: Schema not found. Skipping undeclared variable check.[/yellow]"
             )
             return None
-        return lambda _file_path: schema_vars
+        return lambda _file_path: vars_pair
 
     service_dirs = []
     for name in sorted(config_manager.get_services().keys()):
@@ -1111,7 +1120,7 @@ def _build_undeclared_var_resolver(service_name: Optional[str]):
             service_dir = config_manager.normalize_path_for_service_match(
                 config_manager.get_service_dir(name)
             )
-            schema_vars = set(config_manager.load_schema(service_name=name).keys())
+            view = config_manager.load_schema_view(service_name=name)
         except SchemaNotFoundError:
             continue
         except EnvShieldException as e:
@@ -1127,7 +1136,7 @@ def _build_undeclared_var_resolver(service_name: Optional[str]):
                 f"Skipping its undeclared-variable check.[/yellow]"
             )
             continue
-        service_dirs.append((service_dir, schema_vars))
+        service_dirs.append((service_dir, (set(view.fields), set(view.system))))
     # Longest directory first, so a nested service dir wins over a shorter
     # sibling -- and so a single-service project's '.' entry only ever acts
     # as the last-resort catch-all it should be, not a premature match.
@@ -1141,11 +1150,11 @@ def _build_undeclared_var_resolver(service_name: Optional[str]):
 
     console.print("[dim]Per-service schemas loaded for compliance check.[/dim]")
 
-    def _resolve(file_path: str) -> set:
-        for service_dir, schema_vars in service_dirs:
+    def _resolve(file_path: str) -> tuple:
+        for service_dir, vars_pair in service_dirs:
             if config_manager.service_dir_contains(file_path, service_dir):
-                return schema_vars
-        return set()
+                return vars_pair
+        return set(), set()
 
     return _resolve
 
@@ -1248,7 +1257,9 @@ def _scan_files(
                 scan_task, description=os.path.basename(file_path), advance=1
             )
 
-            schema_vars = schema_resolver(file_path) if schema_resolver else set()
+            schema_vars, system_vars = (
+                schema_resolver(file_path) if schema_resolver else (set(), set())
+            )
 
             if staged_only:
                 # Scan what's actually staged in the index, not the working-tree
@@ -1298,6 +1309,7 @@ def _scan_files(
                     schema_vars,
                     content=content,
                     new_lines_only=new_lines_only,
+                    system_vars=system_vars,
                 )
             else:
                 if (
@@ -1306,7 +1318,9 @@ def _scan_files(
                 ):
                     skipped_large_files.append(file_path)
                     continue
-                secrets, undeclared = _scan_single_file(file_path, schema_vars)
+                secrets, undeclared = _scan_single_file(
+                    file_path, schema_vars, system_vars=system_vars
+                )
 
             all_secret_findings.extend(secrets)
             all_undeclared_findings.extend(undeclared)
@@ -1440,7 +1454,12 @@ def run_scan(
             undeclared_table.add_row(
                 finding["file_path"],
                 str(finding["line_num"]),
-                finding["variable_name"],
+                finding["variable_name"]
+                + (
+                    " (out of scope: defined, not granted to this service)"
+                    if finding.get("scope") == "out_of_scope"
+                    else ""
+                ),
             )
         console.print(undeclared_table)
         console.print(
@@ -1449,6 +1468,12 @@ def run_scan(
             "'env.schema.toml' (hand-edited, not generated). Re-run "
             "'envshield scan' to confirm."
         )
+        if any(f.get("scope") == "out_of_scope" for f in all_undeclared_findings):
+            console.print(
+                "[bold]Out of scope:[/bold] already defined in the system schema "
+                "for other services. Don't redeclare them -- add this service "
+                "to their 'services' list if it should receive them."
+            )
 
     # A skip means eligible content was never actually inspected -- this
     # scan cannot honestly be called "clean" outright, even when nothing

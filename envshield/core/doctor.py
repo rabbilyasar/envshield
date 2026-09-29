@@ -101,6 +101,7 @@ def _check_local_env_sync(service_name: str):
 
         diff = schema_manager.diff_against_schema(schema, local_values)
         schema_manager.drop_file_peer_extras(diff, service_name, local_file)
+        schema_manager.mark_out_of_scope(diff, service_name)
         if diff.is_clean:
             return True, f"'{local_file}' is in sync with schema."
         return False, diff.summary()
@@ -142,6 +143,7 @@ def _check_deployment_manifest(service_name: str):
             diff = schema_manager.diff_against_schema(
                 schema, local_values, has_unresolved_source=parser.has_unresolved_source
             )
+            schema_manager.mark_out_of_scope(diff, service_name)
             if diff.is_clean:
                 messages.append(f"'{manifest['path']}' is in sync with schema.")
             else:
@@ -316,10 +318,21 @@ def _check_example_file_sync(service_name: str):
             f"Missing from '{example_file}': {', '.join(missing)} "
             "(run 'envshield schema sync' to regenerate it)"
         )
-    if extra:
+    try:
+        out_of_scope = (
+            extra & schema_manager.system_only_vars(service_name) if extra else set()
+        )
+    except EnvShieldException as e:
+        return False, str(e)
+    if extra - out_of_scope:
         messages.append(
-            f"Extra in '{example_file}': {', '.join(extra)} "
+            f"Extra in '{example_file}': {', '.join(sorted(extra - out_of_scope))} "
             "(remove them, or add them to the schema if they're meant to be there)"
+        )
+    if out_of_scope:
+        messages.append(
+            f"Out of scope in '{example_file}': {', '.join(sorted(out_of_scope))} "
+            f"({schema_manager.OUT_OF_SCOPE_HINT})"
         )
     return False, "; ".join(messages)
 

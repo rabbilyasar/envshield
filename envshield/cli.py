@@ -751,14 +751,26 @@ def _render_undeclared_explain_report(
     """
     console.print(f"\n[bold cyan]{report.variable}[/bold cyan]")
     console.print("─" * max(len(report.variable), 8))
-    console.print(
-        f"\n[yellow]Not declared in the schema for service '{report.service}'.[/yellow]"
-    )
+    if report.granted_to is not None:
+        console.print(
+            f"\n[yellow]Out of scope for service '{report.service}': defined in "
+            "the system schema but not granted to it (granted to: "
+            f"{', '.join(report.granted_to)}).[/yellow]"
+        )
+    else:
+        console.print(
+            f"\n[yellow]Not declared in the schema for service '{report.service}'.[/yellow]"
+        )
 
     _render_source_usages(report.source_usages)
     _render_manifest_references(report.manifest_references, report.variable)
 
-    if report.source_usages:
+    if report.granted_to is not None:
+        console.print(
+            f"\n[dim]Don't redeclare it -- add '{report.service}' to its "
+            "'services' list if this service should receive it.[/dim]"
+        )
+    elif report.source_usages:
         console.print(
             "\n[dim]Add it to the schema once you know what it should require -- "
             "see the file/line above for where it's read.[/dim]"
@@ -1121,6 +1133,8 @@ def _render_dependency_change_table(
         style, label = _DEPENDENCY_CHANGE_CATEGORY_STYLE.get(
             change.category, ("", change.category)
         )
+        if change.scope == "out_of_scope":
+            label += " (out of scope: defined, not granted to this service)"
         table.add_row(
             change.variable,
             change.file_path,
@@ -1140,6 +1154,12 @@ def _render_dependency_change_table(
             "'env.schema.toml' (hand-edited, not generated). Re-run "
             "'envshield undeclared' to confirm."
         )
+        if any(c.scope == "out_of_scope" for c in result.changes):
+            console.print(
+                "[bold]Out of scope:[/bold] already defined in the system schema "
+                "for other services. Don't redeclare them -- add this service "
+                "to their 'services' list if it should receive them."
+            )
 
 
 def _print_dependency_error(
@@ -1267,11 +1287,11 @@ def undeclared(
             usages_a, usages_b = dependency_snapshot.discover_usages_for_service(
                 target, revision_a, revision_b, quiet=(json_output or sarif_output)
             )
-            schema_vars = set(
-                schema_snapshot.load_schema_for_diff(target, revision_b).keys()
-            )
+            view = schema_snapshot.load_schema_view_for_diff(target, revision_b)
             new_usages = dependency_diff.find_new_usages(usages_a, usages_b)
-            result = dependency_diff.classify_against_schema(new_usages, schema_vars)
+            result = dependency_diff.classify_against_schema(
+                new_usages, set(view.fields), set(view.system)
+            )
         except EnvShieldException as e:
             had_error = True
             if json_output:
@@ -1502,9 +1522,10 @@ def schema_diff(
         left_predates_adoption = False
         try:
             try:
-                schema_left = schema_snapshot.load_schema_for_diff(
+                view_left = schema_snapshot.load_schema_view_for_diff(
                     target, left_revision
                 )
+                schema_left, system_left = view_left.fields, set(view_left.system)
             except SchemaNotFoundError:
                 # Only for the explicit two-revision form's OLDER side: a
                 # revision that genuinely doesn't resolve was already
@@ -1521,10 +1542,14 @@ def schema_diff(
                 # an intentional query, so it still raises.
                 if not explicit_revisions:
                     raise
-                schema_left = {}
+                schema_left, system_left = {}, set()
                 left_predates_adoption = True
-            schema_right = schema_snapshot.load_schema_for_diff(target, right_revision)
-            result = contract_diff.diff_schemas(schema_left, schema_right)
+            view_right = schema_snapshot.load_schema_view_for_diff(
+                target, right_revision
+            )
+            result = contract_diff.diff_schemas(
+                schema_left, view_right.fields, system_left, set(view_right.system)
+            )
         except EnvShieldException as e:
             had_error = True
             if json_output:

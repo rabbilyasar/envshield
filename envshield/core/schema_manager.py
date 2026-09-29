@@ -99,6 +99,14 @@ class SchemaDiff:
         # a clean pass, but the reporting below never claims the variable
         # is absent -- only that it can't be confirmed.
         self.unresolved = unresolved if unresolved is not None else set()
+        # Variables the system schema defines but doesn't grant this
+        # service (see mark_out_of_scope). Reporting only: an out-of-scope
+        # variable is still `extra`.
+        self.system_only: set = set()
+
+    @property
+    def out_of_scope(self) -> set:
+        return self.extra & self.system_only
 
     @property
     def is_clean(self) -> bool:
@@ -129,10 +137,16 @@ class SchemaDiff:
                 f"Invalid values: {details_str} (run 'envshield setup' to fix -- "
                 "it re-validates existing values, not just missing ones)"
             )
-        if self.extra:
+        undefined = self.extra - self.system_only
+        if undefined:
             messages.append(
-                f"Extra variables: {', '.join(sorted(self.extra))} "
+                f"Extra variables: {', '.join(sorted(undefined))} "
                 "(remove them if unused, or add them to the schema if they're meant to be there)"
+            )
+        if self.out_of_scope:
+            messages.append(
+                f"Out of scope: {', '.join(sorted(self.out_of_scope))} "
+                f"({OUT_OF_SCOPE_HINT})"
             )
         if self.unresolved:
             messages.append(
@@ -142,6 +156,34 @@ class SchemaDiff:
                 "manually, or include it in the manifest to let EnvShield check it)"
             )
         return "; ".join(messages)
+
+
+OUT_OF_SCOPE_HINT = (
+    "defined in the system schema but not granted to this service -- remove "
+    "them, or add this service to their 'services' list"
+)
+
+
+def system_only_vars(service_name: str) -> set:
+    """
+    Variables the system schema defines but doesn't grant `service_name`
+    (its out-of-scope set). Empty for an unregistered service, which has
+    no registered topology to be scoped against.
+    """
+    if service_name not in config_manager.get_services():
+        return set()
+    view = config_manager.load_schema_view(service_name)
+    return set(view.system) - set(view.fields)
+
+
+def mark_out_of_scope(diff: SchemaDiff, service_name: str) -> None:
+    """
+    Records which of `diff`'s extras are out of scope rather than undefined
+    (SchemaDiff.out_of_scope). Reporting only -- they stay `extra`. Only
+    consults envshield.yml when there are extras at all.
+    """
+    if diff.extra:
+        diff.system_only = system_only_vars(service_name)
 
 
 def diff_against_schema(
@@ -629,6 +671,7 @@ def check_schema(
     )
     if paths is None:
         drop_file_peer_extras(diff, service_name, file_path)
+    mark_out_of_scope(diff, service_name)
 
     if diff.is_clean:
         console.print(
@@ -653,7 +696,12 @@ def check_schema(
             table.add_row("[red]Invalid Value[/red]", var, reason)
 
         for var in sorted(diff.extra):
-            table.add_row("[yellow]Extra in Local[/yellow]", var, file_path)
+            status = (
+                "[yellow]Out of Scope[/yellow]"
+                if var in diff.out_of_scope
+                else "[yellow]Extra in Local[/yellow]"
+            )
+            table.add_row(status, var, file_path)
 
         for var in sorted(diff.unresolved):
             table.add_row(
@@ -675,10 +723,12 @@ def check_schema(
                 suggestions.append(
                     "Run 'envshield setup' to fill in missing/blank values or fix invalid ones."
                 )
-        if diff.extra:
+        if diff.extra - diff.out_of_scope:
             suggestions.append(
                 "Remove extra variables if unused, or add them to the schema if they're meant to be there."
             )
+        if diff.out_of_scope:
+            suggestions.append(f"Out-of-scope variables are {OUT_OF_SCOPE_HINT}.")
         if diff.unresolved:
             suggestions.append(
                 "Verify the 'Cannot Confirm' variables manually, or include the "
@@ -740,17 +790,18 @@ def check_result(
     diff = diff_against_schema(
         schema, local_values, has_unresolved_source=parser.has_unresolved_source
     )
-    if paths is None:
-        try:
+    try:
+        if paths is None:
             drop_file_peer_extras(diff, service_name, file_path)
-        except EnvShieldException as e:
-            return {
-                "file": file_path,
-                "service": service_name,
-                "clean": False,
-                "error": str(e),
-            }
-    return {
+        mark_out_of_scope(diff, service_name)
+    except EnvShieldException as e:
+        return {
+            "file": file_path,
+            "service": service_name,
+            "clean": False,
+            "error": str(e),
+        }
+    result = {
         "file": file_path,
         "service": service_name,
         "clean": diff.is_clean,
@@ -760,6 +811,11 @@ def check_result(
         "extra": sorted(diff.extra),
         "unresolved": sorted(diff.unresolved),
     }
+    if diff.out_of_scope:
+        # The subset of `extra` defined system-wide but not granted here.
+        # Only present when non-empty, so a unique schema's shape is unchanged.
+        result["out_of_scope"] = sorted(diff.out_of_scope)
+    return result
 
 
 def sync_schema(service_name: str) -> bool:

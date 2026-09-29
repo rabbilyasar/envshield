@@ -275,9 +275,13 @@ class UndeclaredVariableReport:
     service: str
     source_usages: List[discovery.DiscoveredVariableUsage]
     manifest_references: List[ManifestReference]
+    # Set when the system schema defines `variable` but doesn't grant it to
+    # `service`: the services it IS granted to (names only). None when it's
+    # undefined system-wide.
+    granted_to: Optional[List[str]] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        payload: Dict[str, Any] = {
             "variable": self.variable,
             "service": self.service,
             "found": False,
@@ -285,6 +289,10 @@ class UndeclaredVariableReport:
             "source_usages": [u.to_dict() for u in self.source_usages],
             "manifest_references": [m.to_dict() for m in self.manifest_references],
         }
+        if self.granted_to is not None:
+            payload["scope"] = "out_of_scope"
+            payload["granted_to"] = self.granted_to
+        return payload
 
 
 def build_undeclared_report(
@@ -298,12 +306,17 @@ def build_undeclared_report(
     (e.g. a missing/unreadable envshield.yml) still propagates unchanged,
     matching build_report's own contract.
     """
+    view = config_manager.load_schema_view(service_name=service_name)
+    granted = (
+        view.granted_to(variable) if view.status(variable) == "out_of_scope" else None
+    )
     service_dir = config_manager.get_service_dir(service_name)
     additional_roots = config_manager.get_service_additional_source_roots(service_name)
     manifests = config_manager.get_deployment_manifests(service_name)
     return UndeclaredVariableReport(
         variable=variable,
         service=service_name,
+        granted_to=sorted(granted) if granted is not None else None,
         source_usages=_discover_current_usages(
             [service_dir] + additional_roots, variable
         ),

@@ -40,9 +40,13 @@ class DependencyChange:
     language: str
     access_type: str
     category: str
+    # 'out_of_scope' when a missing_declaration is defined in the system
+    # schema but not granted to this service; None otherwise. Only
+    # serialized when set, so a unique schema's output is unchanged.
+    scope: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        entry = {
             "variable": self.variable,
             "file_path": self.file_path,
             "line": self.line,
@@ -50,6 +54,9 @@ class DependencyChange:
             "access_type": self.access_type,
             "category": self.category,
         }
+        if self.scope:
+            entry["scope"] = self.scope
+        return entry
 
 
 @dataclass
@@ -87,7 +94,9 @@ def find_new_usages(
 
 
 def classify_against_schema(
-    new_usages: List[DiscoveredVariableUsage], schema_vars: Set[str]
+    new_usages: List[DiscoveredVariableUsage],
+    schema_vars: Set[str],
+    system_vars: Optional[Set[str]] = None,
 ) -> DependencyChangeReport:
     """
     The one public entry point after find_new_usages: labels each new
@@ -96,7 +105,13 @@ def classify_against_schema(
     ones filters on category, rather than this module silently deciding
     what's worth surfacing (the same presentation/domain split
     contract_diff.py already follows).
+
+    `system_vars` (optional): every variable the system schema defines. A
+    usage outside `schema_vars` but inside `system_vars` is still a
+    missing_declaration for this service -- a variable granted to another
+    service is never valid here -- but is marked scope='out_of_scope'.
     """
+    system_only = (system_vars or set()) - schema_vars
     changes = [
         DependencyChange(
             variable=usage.variable,
@@ -107,6 +122,7 @@ def classify_against_schema(
             category=(
                 "declared" if usage.variable in schema_vars else "missing_declaration"
             ),
+            scope="out_of_scope" if usage.variable in system_only else None,
         )
         for usage in new_usages
     ]
@@ -174,7 +190,11 @@ def to_sarif(
                     "level": "error",
                     "message": {
                         "text": (
-                            f"'{change.variable}' is read in source but not "
+                            f"'{change.variable}' is read in source but is "
+                            "defined in the system schema without being "
+                            f"granted to '{service_name}' (out of scope)."
+                            if change.scope == "out_of_scope"
+                            else f"'{change.variable}' is read in source but not "
                             f"declared in the '{service_name}' schema."
                         )
                     },
@@ -193,6 +213,7 @@ def to_sarif(
                         "variable": change.variable,
                         "language": change.language,
                         "access_type": change.access_type,
+                        **({"scope": change.scope} if change.scope else {}),
                     },
                 }
             )

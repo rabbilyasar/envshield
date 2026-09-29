@@ -19,7 +19,7 @@ as breaking or safe. See the categories below for the full taxonomy.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 from . import schema_types
 
@@ -113,27 +113,60 @@ class ContractDiff:
         }
 
 
-def diff_schemas(schema_a: Dict[str, Any], schema_b: Dict[str, Any]) -> ContractDiff:
-    """The one public entry point: compare two resolved schema dicts."""
+def diff_schemas(
+    schema_a: Dict[str, Any],
+    schema_b: Dict[str, Any],
+    system_a: Optional[Iterable[str]] = None,
+    system_b: Optional[Iterable[str]] = None,
+) -> ContractDiff:
+    """
+    The one public entry point: compare two resolved schema dicts.
+
+    `system_a`/`system_b` (optional): every variable each side's system
+    schema defines. A variable entering or leaving the service projection
+    while still defined system-wide is a grant change, not a declaration
+    added/removed -- same category, but its detail carries
+    `scope: "out_of_scope"` for the side it was out of scope on.
+    """
     keys_a = set(schema_a.keys())
     keys_b = set(schema_b.keys())
+    out_of_scope_a = set(system_a or ()) - keys_a
+    out_of_scope_b = set(system_b or ()) - keys_b
 
     changes: List[ContractChange] = []
 
     for key in sorted(keys_b - keys_a):
-        changes.append(_classify_added(key, schema_b[key]))
+        change = _classify_added(key, schema_b[key])
+        if key in out_of_scope_a:
+            change.description += (
+                " It was already defined in the system schema; this service "
+                "is newly granted it."
+            )
+            change.detail["scope_before"] = "out_of_scope"
+        changes.append(change)
 
     for key in sorted(keys_a - keys_b):
+        if key in out_of_scope_b:
+            description = (
+                f"'{key}' is no longer granted to this service (still defined "
+                "in the system schema, now out of scope). Schema-only diff "
+                "can't tell whether code still reads it -- treated as "
+                "informational, not breaking."
+            )
+            detail = {"removed": True, "scope": "out_of_scope"}
+        else:
+            description = (
+                f"'{key}' was removed from the contract. Schema-only diff "
+                "can't tell whether code still reads it -- treated as "
+                "informational, not breaking."
+            )
+            detail = {"removed": True}
         changes.append(
             ContractChange(
                 variable=key,
                 category="informational",
-                description=(
-                    f"'{key}' was removed from the contract. Schema-only diff "
-                    "can't tell whether code still reads it -- treated as "
-                    "informational, not breaking."
-                ),
-                detail={"removed": True},
+                description=description,
+                detail=detail,
             )
         )
 
