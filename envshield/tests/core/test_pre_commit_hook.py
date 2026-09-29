@@ -1,218 +1,117 @@
 # envshield/tests/core/test_pre_commit_hook.py
 import os
-import re
 import subprocess
 
-from envshield.core import scanner
+from envshield.core import hooks_manager, scanner
 
 
-def _extract_if_blocks(hook_script: str) -> list[tuple[str, str, str]]:
-    """
-    Returns [(schema_path, service_name, block_body), ...] for every
-    top-level per-service 'if grep ...; then ...; fi' block.
-
-    schema_path/service_name are read from the _ENVSHIELD_SCHEMA_PATH /
-    _ENVSHIELD_SERVICE_NAME shell-variable assignments that now precede
-    the grep/--service usage (see P0-4: shlex.quote()'d at generation
-    time, referenced afterward only as "$VAR", never re-embedded as
-    literal text) -- a plain capture is enough here because every fixture
-    value these tests use is already shell-safe, so shlex.quote() leaves
-    it unquoted. Adversarial values that DO need quoting are exercised
-    separately in TestShellInjectionIsPrevented, by actually running the
-    generated script through a real shell.
-
-    Matches on an unindented '^fi$' line to find the OUTER closing 'fi'
-    specifically -- a block's body can itself contain a nested, indented
-    '  fi' (the unstaged-template check), which a naive '.*?fi' match
-    would stop at instead.
-    """
-    blocks = re.findall(
-        r"_ENVSHIELD_SCHEMA_PATH=(\S+)\n"
-        r"_ENVSHIELD_SERVICE_NAME=(\S+)\n"
-        r'if git diff --cached --name-only \| grep -qxF "\$_ENVSHIELD_SCHEMA_PATH"; then\n'
-        r"(.*?)\n^fi$",
-        hook_script,
-        re.DOTALL | re.MULTILINE,
+def _record_subcommands(mocker):
+    calls = []
+    mocker.patch.object(
+        hooks_manager, "_envshield", side_effect=lambda *a, **k: calls.append(a) or 0
     )
-    assert blocks, f"no per-service if-blocks found in generated hook:\n{hook_script}"
-    return blocks
+    return calls
 
 
-def test_pre_commit_hook_always_scans_staged_files():
-    script = scanner._generate_pre_commit_hook_content()
-
-    assert "envshield scan --staged" in script
-
-
-def test_pre_commit_hook_is_scan_only_when_no_services_registered(mocker):
-    mocker.patch("envshield.config.manager.load_config", return_value={})
-
-    script = scanner._generate_pre_commit_hook_content()
-
-    assert "grep" not in script
-    assert "envshield scan --staged" in script
+def _repo_with(files, config):
+    subprocess.run(["git", "init", "-q"], check=True)
+    for path, content in {"envshield.yml": config, **files}.items():
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(path, "w") as f:
+            f.write(content)
 
 
-def test_pre_commit_hook_grep_detects_its_own_services_schema_change(mocker):
-    """Each service's grep must match its own staged schema path."""
-    mocker.patch(
-        "envshield.config.manager.load_config",
-        return_value={
-            "services": {
-                "api": {"schema": "services/api/env.schema.toml"},
-                "web": {"schema": "services/web/env.schema.toml"},
-            }
-        },
+TWO_SERVICES = (
+    "services:\n"
+    "  api:\n    schema: services/api/env.schema.toml\n"
+    "  web:\n    schema: services/web/env.schema.toml\n"
+)
+
+
+def test_pre_commit_hook_always_scans_staged_files(tmp_path, monkeypatch, mocker):
+    monkeypatch.chdir(tmp_path)
+    subprocess.run(["git", "init", "-q"], check=True)
+    calls = _record_subcommands(mocker)
+
+    hooks_manager.run_pre_commit()
+
+    assert calls[0] == ("scan", "--staged", "--enforce")
+    assert (
+        "envshield hook run pre-commit" in scanner._generate_pre_commit_hook_content()
     )
-
-    script = scanner._generate_pre_commit_hook_content()
-    blocks = _extract_if_blocks(script)
-
-    for pattern, _name, _body in blocks:
-        result = subprocess.run(f"echo '{pattern}' | grep -qxF '{pattern}'", shell=True)
-        assert result.returncode == 0, f"expected {pattern} to match itself"
-
-    result = subprocess.run(
-        "echo 'unrelated/file.py' | grep -qxF 'services/api/env.schema.toml'",
-        shell=True,
-    )
-    assert result.returncode == 1
 
 
 def test_pre_commit_hook_only_checks_the_service_whose_schema_was_actually_staged(
-    mocker,
+    tmp_path, monkeypatch, mocker
 ):
     """
     Real bug this reproduces: staging only 'web's schema change still ran
-    'api's template-sync check too (and failed the commit over it), because
-    a single shared 'if' gated every service's check on whether ANY schema
-    changed, not just that service's own. Each service's sync check must
-    live inside its OWN 'if', gated on its OWN schema path only.
-
-    The sync command text itself is now generic (`--service
-    "$_ENVSHIELD_SERVICE_NAME"`, see P0-4) rather than the literal service
-    name, so "did the wrong service's name leak into this block" is
-    checked via the shell variable each block actually binds, not via a
-    substring of the command text.
+    'api's template-sync check too (and failed the commit over it). Only
+    the service whose own schema was staged is checked.
     """
-    mocker.patch(
-        "envshield.config.manager.load_config",
-        return_value={
-            "services": {
-                "api": {"schema": "services/api/env.schema.toml"},
-                "web": {"schema": "services/web/env.schema.toml"},
-            }
+    monkeypatch.chdir(tmp_path)
+    _repo_with(
+        {
+            "services/api/env.schema.toml": "[A]\n",
+            "services/web/env.schema.toml": "[B]\n",
         },
+        TWO_SERVICES,
     )
-
-    script = scanner._generate_pre_commit_hook_content()
-    blocks = {path: (name, body) for path, name, body in _extract_if_blocks(script)}
-
-    api_pattern = "services/api/env.schema.toml"
-    web_pattern = "services/web/env.schema.toml"
-    api_name, api_body = blocks[api_pattern]
-    web_name, web_body = blocks[web_pattern]
-
-    assert api_name == "api"
-    assert web_name == "web"
-    assert (
-        'envshield schema sync --service "$_ENVSHIELD_SERVICE_NAME" --check' in api_body
+    subprocess.run(["git", "add", "-A"], check=True)
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "base"],
+        check=True,
     )
-    assert (
-        'envshield schema sync --service "$_ENVSHIELD_SERVICE_NAME" --check' in web_body
-    )
+    with open("services/web/env.schema.toml", "w") as f:
+        f.write("[B]\n[C]\n")
+    subprocess.run(["git", "add", "services/web/env.schema.toml"], check=True)
+    calls = _record_subcommands(mocker)
+
+    hooks_manager.run_pre_commit()
+
+    assert calls[1:] == [("schema", "sync", "--service", "web", "--check")]
 
 
-def test_pre_commit_hook_runs_a_sync_check_per_service_and_blocks_on_failure(mocker):
-    mocker.patch(
-        "envshield.config.manager.load_config",
-        return_value={
-            "services": {
-                "api": {"schema": "services/api/env.schema.toml"},
-                "web": {"schema": "services/web/env.schema.toml"},
-            }
+def test_pre_commit_hook_runs_a_sync_check_per_service_and_blocks_on_failure(
+    tmp_path, monkeypatch, mocker
+):
+    monkeypatch.chdir(tmp_path)
+    _repo_with(
+        {
+            "services/api/env.schema.toml": "[A]\n",
+            "services/web/env.schema.toml": "[B]\n",
         },
+        TWO_SERVICES,
+    )
+    subprocess.run(["git", "add", "-A"], check=True)
+    mocker.patch.object(
+        hooks_manager,
+        "_envshield",
+        side_effect=lambda *a, **k: 1 if a[:2] == ("schema", "sync") else 0,
     )
 
-    script = scanner._generate_pre_commit_hook_content()
-    blocks = _extract_if_blocks(script)
-
-    assert {name for _path, name, _body in blocks} == {"api", "web"}
-    for _path, _name, body in blocks:
-        assert (
-            'envshield schema sync --service "$_ENVSHIELD_SERVICE_NAME" --check' in body
-        )
-    # A failing sync check must actually fail the commit, not just print.
-    assert "|| STATUS=1" in script
-    assert "exit $STATUS" in script
+    assert hooks_manager.run_pre_commit() == 1
 
 
-def test_pre_commit_hook_flags_a_template_with_unstaged_changes_per_service(mocker):
-    """
-    'schema sync --check' below only ever reads '.env.example' off disk,
-    not what's actually staged -- syncing the template (updating disk) and
-    forgetting to 'git add' it would otherwise pass that check while the
-    commit itself still lands with the stale, pre-sync template. Each
-    service's own unstaged-diff check must reference only its own
-    template file, scoped inside its own block.
-    """
-    mocker.patch(
-        "envshield.config.manager.load_config",
-        return_value={
-            "services": {
-                "api": {"schema": "services/api/env.schema.toml"},
-                "web": {"schema": "services/web/env.schema.toml"},
-            }
-        },
-    )
-    mocker.patch(
-        "envshield.config.manager.get_env_paths",
-        side_effect=lambda service_name: {
-            "local_file": f"services/{service_name}/.env",
-            "example_file": f"services/{service_name}/.env.example",
-        },
-    )
-
-    script = scanner._generate_pre_commit_hook_content()
-    blocks = {path: body for path, _name, body in _extract_if_blocks(script)}
-
-    api_block = blocks["services/api/env.schema.toml"]
-    web_block = blocks["services/web/env.schema.toml"]
-    assert "services/api/.env.example" in api_block
-    assert "services/web/.env.example" in web_block
-    # Neither service's template check leaked into the other's block.
-    assert "services/web/.env.example" not in api_block
-    assert "services/api/.env.example" not in web_block
-
-    result = subprocess.run(
-        "echo 'services/api/.env.example' | grep -qxF 'services/api/.env.example'",
-        shell=True,
-    )
-    assert result.returncode == 0
-
-
-def test_pre_commit_hook_skips_unstaged_template_check_for_a_python_target(mocker):
+def test_pre_commit_hook_skips_unstaged_template_check_for_a_python_target(
+    tmp_path, monkeypatch, mocker, capsys
+):
     """A Python-module local_file has no separate template file to check (see _check_example_file_sync)."""
-    mocker.patch(
-        "envshield.config.manager.load_config",
-        return_value={"services": {"app": {"schema": "env.schema.toml"}}},
+    monkeypatch.chdir(tmp_path)
+    _repo_with(
+        {"env.schema.toml": "[A]\n", "config/env_config.local.py": "A = 1\n"},
+        "services:\n  app:\n    schema: env.schema.toml\n"
+        "    local_file: config/env_config.local.py\n"
+        "    example_file: config/env_config.local.py\n",
     )
-    mocker.patch(
-        "envshield.config.manager.get_env_paths",
-        return_value={
-            "local_file": "config/env_config.local.py",
-            "example_file": "config/env_config.local.py",
-        },
-    )
+    subprocess.run(["git", "add", "-A"], check=True)
+    with open("config/env_config.local.py", "w") as f:
+        f.write("A = 2\n")  # unstaged, but it's the local file, not a template
+    calls = _record_subcommands(mocker)
 
-    script = scanner._generate_pre_commit_hook_content()
-    blocks = _extract_if_blocks(script)
-
-    assert len(blocks) == 1
-    _path, name, body = blocks[0]
-    assert name == "app"
-    assert "unstaged changes" not in body
-    assert 'envshield schema sync --service "$_ENVSHIELD_SERVICE_NAME" --check' in body
+    assert hooks_manager.run_pre_commit() == 0
+    assert "unstaged changes" not in capsys.readouterr().out
+    assert calls[1:] == [("schema", "sync", "--service", "app", "--check")]
 
 
 class TestRealInstalledHookRejectsStalePythonLocalFile:

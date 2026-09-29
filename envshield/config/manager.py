@@ -63,9 +63,9 @@ def _check_schema_extends_cycle(schema_path: str, visited: frozenset) -> str:
     """
     Returns the resolved real path for `schema_path` (for the caller to add
     to its own `visited` set), raising SchemaParseError if it's already in
-    `visited`. Shared by _load_schema_file and resolve_field_provenance so
-    a future fix to this check can't patch only one of the two (see
-    BL-010) -- both already mirror each other's extends-recursion exactly.
+    `visited`. Used by _iter_schema_chain, the single live walk of an
+    `extends` chain, which every loader of a live schema goes through
+    (see BL-010).
 
     Uses os.path.realpath, not os.path.abspath: abspath only normalizes a
     path lexically (collapsing '.'/'..' segments) and never follows
@@ -333,13 +333,54 @@ def invalid_toml_structure_message(error: Exception) -> str:
     )
 
 
-def _load_schema_file(
-    schema_path: str, _visited: Optional[frozenset] = None
-) -> Dict[str, Any]:
+def _iter_schema_chain(schema_path: str, _visited: Optional[frozenset] = None):
     """
-    Loads one schema file, resolving and merging any `extends` base
-    schema(s) it declares (a string or list of strings, each a path
-    relative to *this* schema file's own directory).
+    The one walk of a schema's `extends` chain: yields (path, raw) for
+    `schema_path` and every base it (transitively) extends, in merge order
+    -- each base's own chain first, in `extends`-list order, then the file
+    itself -- with `raw` being that file's own table minus its `extends`
+    key. `extends` is a string or list of strings, each a path relative to
+    *this* schema file's own directory.
+
+    `extends` paths are validated the same way service overrides in
+    envshield.yml are (see _ensure_within_project) -- a schema file is just
+    as committed-and-shared as envshield.yml, so an unvalidated `extends`
+    would be the same supply-chain-style path-traversal risk. Cycles are
+    rejected per chain (_check_schema_extends_cycle), so a diamond (two
+    bases sharing a base) is fine and simply yields that base twice.
+
+    Shared by _load_schema_file, resolve_field_provenance and
+    get_schema_files, so none of them can drift from the others (BL-010).
+    """
+    visited = _visited or frozenset()
+    real_path = _check_schema_extends_cycle(schema_path, visited)
+    visited = visited | {real_path}
+
+    raw = load_toml_schema(schema_path)
+    extends = raw.pop("extends", None)
+
+    if extends:
+        base_refs = [extends] if isinstance(extends, str) else list(extends)
+        base_dir = os.path.dirname(schema_path) or "."
+        for base_ref in base_refs:
+            base_path = _ensure_within_project(
+                os.path.normpath(os.path.join(base_dir, base_ref)),
+                f"'extends' reference in '{schema_path}'",
+            )
+            if not os.path.exists(base_path):
+                raise SchemaNotFoundError(
+                    f"'{schema_path}' extends '{base_path}', which doesn't exist. "
+                    f"Fix the 'extends' path in {schema_path}, or create the missing file."
+                )
+            yield from _iter_schema_chain(base_path, _visited=visited)
+
+    yield schema_path, raw
+
+
+def _load_schema_file(schema_path: str) -> Dict[str, Any]:
+    """
+    Loads one schema file, merging in any `extends` base schema(s) it
+    declares (see _iter_schema_chain).
 
     A variable declared in both a base schema and the schema that extends
     it is fully replaced by the child's own definition -- no per-field
@@ -347,82 +388,43 @@ def _load_schema_file(
     ones on a conflict, same as the child overrides all of them. This
     keeps the merge predictable: whichever definition is "closest" to the
     schema actually being loaded always wins.
-
-    `extends` paths are validated the same way service overrides in
-    envshield.yml are (see _ensure_within_project) -- a schema file is just
-    as committed-and-shared as envshield.yml, so an unvalidated `extends`
-    would be the same supply-chain-style path-traversal risk.
     """
-    visited = _visited or frozenset()
-    real_path = _check_schema_extends_cycle(schema_path, visited)
-    visited = visited | {real_path}
-
-    raw = load_toml_schema(schema_path)
-    extends = raw.pop("extends", None)
-
     merged: Dict[str, Any] = {}
-    if extends:
-        base_refs = [extends] if isinstance(extends, str) else list(extends)
-        base_dir = os.path.dirname(schema_path) or "."
-        for base_ref in base_refs:
-            base_path = _ensure_within_project(
-                os.path.normpath(os.path.join(base_dir, base_ref)),
-                f"'extends' reference in '{schema_path}'",
-            )
-            if not os.path.exists(base_path):
-                raise SchemaNotFoundError(
-                    f"'{schema_path}' extends '{base_path}', which doesn't exist. "
-                    f"Fix the 'extends' path in {schema_path}, or create the missing file."
-                )
-            merged.update(_load_schema_file(base_path, _visited=visited))
-
-    merged.update(raw)
+    for _path, raw in _iter_schema_chain(schema_path):
+        merged.update(raw)
     return merged
 
 
-def resolve_field_provenance(
-    schema_path: str, _visited: Optional[frozenset] = None
-) -> Dict[str, str]:
+def resolve_field_provenance(schema_path: str) -> Dict[str, str]:
     """
-    Mirrors _load_schema_file's extends-merge exactly (same recursion, same
-    circular-extends detection, same within-project path validation), but
-    returns {variable_name: contributing_schema_path} instead of the
-    merged field values -- which schema file's own declaration of each key
-    actually won the merge (whole-field-replace: a variable redeclared
+    Same extends-merge as _load_schema_file (the same _iter_schema_chain
+    walk), but returns {variable_name: contributing_schema_path} instead of
+    the merged field values -- which schema file's own declaration of each
+    key actually won the merge (whole-field-replace: a variable redeclared
     both in a base schema and the schema that extends it always resolves
-    to the *child*, exactly matching _load_schema_file's own last-write-
-    wins semantics -- see 'merged.update(raw)' there).
+    to the *child*).
 
     Additive only: does not change how schemas are loaded or merged
     anywhere else. Used by 'envshield explain' to report where a field
     actually came from -- never guessed at from anything but this same
     resolution path.
     """
-    visited = _visited or frozenset()
-    real_path = _check_schema_extends_cycle(schema_path, visited)
-    visited = visited | {real_path}
-
-    raw = load_toml_schema(schema_path)
-    extends = raw.pop("extends", None)
-
     provenance: Dict[str, str] = {}
-    if extends:
-        base_refs = [extends] if isinstance(extends, str) else list(extends)
-        base_dir = os.path.dirname(schema_path) or "."
-        for base_ref in base_refs:
-            base_path = _ensure_within_project(
-                os.path.normpath(os.path.join(base_dir, base_ref)),
-                f"'extends' reference in '{schema_path}'",
-            )
-            if not os.path.exists(base_path):
-                raise SchemaNotFoundError(
-                    f"'{schema_path}' extends '{base_path}', which doesn't exist. "
-                    f"Fix the 'extends' path in {schema_path}, or create the missing file."
-                )
-            provenance.update(resolve_field_provenance(base_path, _visited=visited))
-
-    provenance.update({key: schema_path for key in raw.keys()})
+    for path, raw in _iter_schema_chain(schema_path):
+        provenance.update({key: path for key in raw.keys()})
     return provenance
+
+
+def get_schema_files(schema_path: str) -> List[str]:
+    """
+    Every file `schema_path`'s contract is built from: the schema itself
+    plus each file in its `extends` chain, as resolved real paths: the
+    schema first, then its bases in merge order, each listed once.
+    Walks the same chain loading does (_iter_schema_chain), with the same
+    containment, cycle and missing-base errors.
+    """
+    chain = [os.path.realpath(path) for path, _raw in _iter_schema_chain(schema_path)]
+    return list(dict.fromkeys([chain[-1], *chain[:-1]]))
 
 
 def get_services() -> Dict[str, Dict[str, Any]]:

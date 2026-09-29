@@ -134,24 +134,18 @@ def _commit(path, message):
 
 class TestHookGrepMatchesExactPathOnly:
     """
-    Regression: the generated pre-commit/post-merge hooks used to gate each
-    service's check on 'grep -qF "$SCHEMA_PATH"' -- a literal-*substring*
-    match against 'git diff --name-only' output, not an exact-line match.
-    A service whose schema path is a substring of another's (e.g.
-    'api/env.schema.toml' inside 'internal-api/env.schema.toml') had its
-    check incorrectly fire whenever only the OTHER service's schema changed.
+    Regression: the generated hooks used to gate each service's check on a
+    literal-*substring* grep of 'git diff --name-only', so a service whose
+    schema path is a substring of another's (e.g. 'api/env.schema.toml'
+    inside 'internal-api/env.schema.toml') fired whenever only the OTHER
+    service's schema changed. The hook runner now compares resolved paths.
     """
 
-    def _install_fake_envshield(self, bin_dir, log_path):
-        fake = bin_dir / "envshield"
-        fake.write_text(f'#!/bin/sh\necho "$@" >> "{log_path}"\nexit 0\n')
-        fake.chmod(0o755)
-
     def test_pre_commit_hook_does_not_cross_trigger_on_substring_schema_path(
-        self, tmp_path, monkeypatch
+        self, tmp_path, monkeypatch, mocker
     ):
         from envshield.config import manager as config_manager
-        from envshield.core import scanner
+        from envshield.core import hooks_manager
 
         _init_repo(tmp_path)
         monkeypatch.chdir(tmp_path)
@@ -163,57 +157,39 @@ class TestHookGrepMatchesExactPathOnly:
 
         config_manager.add_service("api", "api/env.schema.toml")
         config_manager.add_service("internal-api", "internal-api/env.schema.toml")
+        _commit(tmp_path, "register")
 
-        hook_content = scanner._generate_pre_commit_hook_content()
-        hook_path = tmp_path / "generated-pre-commit.sh"
-        hook_path.write_text(hook_content)
-        hook_path.chmod(0o755)
-
-        # Only 'internal-api's schema is staged -- 'api's own schema path
-        # ('api/env.schema.toml') is a literal substring of
-        # 'internal-api/env.schema.toml', which is exactly what used to
-        # cross-trigger 'api's block.
         (tmp_path / "internal-api" / "env.schema.toml").write_text("CHANGED = true\n")
         subprocess.run(
             ["git", "add", "internal-api/env.schema.toml"], cwd=tmp_path, check=True
         )
+        calls = []
+        mocker.patch.object(
+            hooks_manager,
+            "_envshield",
+            side_effect=lambda *a, **k: calls.append(a) or 0,
+        )
 
-        bin_dir = tmp_path / "fakebin"
-        bin_dir.mkdir()
-        log_path = tmp_path / "envshield-calls.log"
-        self._install_fake_envshield(bin_dir, log_path)
+        hooks_manager.run_pre_commit()
 
-        env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"}
-        subprocess.run(["sh", str(hook_path)], cwd=tmp_path, env=env, check=False)
+        invoked_services = {
+            a[a.index("--service") + 1] for a in calls if "--service" in a
+        }
+        assert invoked_services == {"internal-api"}
 
-        invoked_services = set()
-        if log_path.exists():
-            for line in log_path.read_text().splitlines():
-                tokens = line.split()
-                if "--service" in tokens:
-                    invoked_services.add(tokens[tokens.index("--service") + 1])
-
-        assert "internal-api" in invoked_services
-        assert "api" not in invoked_services
-
-    def test_pre_commit_and_post_merge_hooks_use_exact_line_match(
-        self, tmp_path, monkeypatch
-    ):
+    def test_hooks_do_no_path_matching_in_shell(self, tmp_path, monkeypatch):
         from envshield.config import manager as config_manager
         from envshield.core import scanner
 
         monkeypatch.chdir(tmp_path)
         config_manager.add_service("api", "api/env.schema.toml")
 
-        pre_commit_content = scanner._generate_pre_commit_hook_content()
-        post_merge_content = scanner._generate_post_merge_hook_content()
-
-        for content, expected_qxf_count in (
-            (pre_commit_content, 2),  # schema path + example file
-            (post_merge_content, 1),  # schema path only
+        for content in (
+            scanner._generate_pre_commit_hook_content(),
+            scanner._generate_post_merge_hook_content(),
         ):
-            assert "-qF " not in content
-            assert content.count("-qxF ") == expected_qxf_count
+            assert "grep" not in content
+            assert "api/" not in content
 
 
 class TestGetFileContentAtRevision:

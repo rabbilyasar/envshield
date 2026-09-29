@@ -235,18 +235,17 @@ def test_uninstall_preserves_a_marker_free_hook_that_happens_to_resemble_envshie
             assert f.read() == stripped
 
 
-def test_uninstall_preserves_a_stale_envshield_hook_after_a_service_is_added(tmp_path):
+def test_uninstall_removes_a_hook_installed_before_a_service_was_added(tmp_path):
     """
-    A hook generated before a service was registered no longer exactly
-    matches what EnvShield would generate now that the service exists --
-    it must be preserved, not silently deleted or regenerated, exactly as
-    'hook remove'/'hook install --yes' already behave for this case.
+    Before Phase 5, a hook generated before a service was registered no
+    longer matched what EnvShield would generate, so uninstall had to
+    preserve it and it could never be removed. The hook is now a constant
+    shim: a configuration change doesn't change it, so it stays provably
+    EnvShield's own and is removed.
     """
     with runner.isolated_filesystem(temp_dir=tmp_path):
         _init_git_repo()
         runner.invoke(app, ["hook", "install", "--yes"])
-        with open(".git/hooks/pre-commit") as f:
-            before = f.read()
 
         os.makedirs("api")
         with open("api/.env", "w") as f:
@@ -257,10 +256,8 @@ def test_uninstall_preserves_a_stale_envshield_hook_after_a_service_is_added(tmp
         result = runner.invoke(app, ["uninstall", "--yes"])
 
         assert result.exit_code == 0
-        assert os.path.exists(".git/hooks/pre-commit")
-        with open(".git/hooks/pre-commit") as f:
-            assert f.read() == before
-        assert "Preserved" in result.stdout
+        assert not os.path.exists(".git/hooks/pre-commit")
+        assert not os.path.exists(".git/hooks/post-merge")
 
 
 def test_uninstall_respects_a_custom_hooks_path(tmp_path):

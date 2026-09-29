@@ -1916,6 +1916,26 @@ def hook_install(
         raise typer.Exit(code=1)
 
 
+@hook_app.command("run", hidden=True)
+def hook_run(
+    event: str = typer.Argument(
+        ..., help="The Git hook event: pre-commit or post-merge."
+    ),
+):
+    """Runs EnvShield's checks for a Git hook event. Called by the installed hooks."""
+    runners = {
+        "pre-commit": hooks_manager.run_pre_commit,
+        "post-merge": hooks_manager.run_post_merge,
+    }
+    if event not in runners:
+        console.print(
+            f"[bold red]Error:[/bold red] Unknown hook event '{event}'. "
+            f"Expected one of: {', '.join(runners)}."
+        )
+        raise typer.Exit(code=2)
+    raise typer.Exit(code=runners[event]())
+
+
 @hook_app.command("status")
 def hook_status():
     """Shows which EnvShield Git hooks are currently installed."""

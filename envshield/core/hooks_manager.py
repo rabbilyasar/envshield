@@ -1,16 +1,193 @@
 """Manages Git hooks installation and lifecycle."""
 
 import os
+import subprocess
 import sys
-from typing import Tuple
+from typing import Iterable, List, Tuple
 
 import questionary
 from rich.console import Console
 
-from ..core.exceptions import EnvShieldException
+from ..config import manager as config_manager
+from ..core.exceptions import EnvShieldException, ServiceConfigError
 from ..utils import git_utils
 
 console = Console()
+
+# The opening lines of the per-service hooks EnvShield generated before
+# the hook became a constant shim. Only used to *describe* such a file in
+# 'hook status' -- never as proof of ownership: install/remove still
+# require an exact match against the current shim (BL-119/BL-120).
+_LEGACY_HOOK_PREFIXES = {
+    "pre-commit": (
+        "#!/bin/sh\n\n# Hook installed by EnvShield\n"
+        "# Scans staged files for hardcoded secrets AND undeclared environment variables.\n",
+    ),
+    "post-merge": (
+        "#!/bin/sh\n\n# Hook installed by EnvShield\n"
+        "# Smart: only runs for a service whose own schema actually changed in this merge.\n",
+        "#!/bin/sh\n\n# Hook installed by EnvShield\n"
+        "# No services registered yet -- nothing to check.\n",
+    ),
+}
+
+
+def schema_coverage() -> List[Tuple[str, List[str], List[str]]]:
+    """
+    What the hooks protect, resolved from the current envshield.yml: one
+    (schema_path, files, users) entry per registered schema file, in
+    envshield.yml order. `files` is the schema plus its `extends` chain
+    (config_manager.get_schema_files, real paths); `users` is every
+    service using that schema (config_manager.get_schema_users).
+
+    A schema that doesn't exist yet covers just its own path -- creating
+    it is then a change to that path like any other. Fails closed: a
+    service whose schema can't be determined raises instead of being left
+    out of coverage.
+    """
+    coverage = []
+    seen = set()
+    for name in config_manager.get_services():
+        schema = config_manager.get_service_schema_path(name)
+        if not schema:
+            raise ServiceConfigError(
+                f"Service '{name}' in {config_manager.CONFIG_FILE_NAME} has no "
+                "'schema:' path, so EnvShield can't tell which changes affect it."
+            )
+        key = os.path.realpath(schema)
+        if key in seen:
+            continue
+        seen.add(key)
+        files = (
+            config_manager.get_schema_files(schema) if os.path.exists(schema) else [key]
+        )
+        coverage.append((schema, files, config_manager.get_schema_users(schema)))
+    return coverage
+
+
+def affected_services(changed_paths: Iterable[str]) -> List[str]:
+    """
+    Registered services a change to `changed_paths` (absolute, or relative
+    to the project root) can affect, in envshield.yml order: every user of
+    a schema whose file set (the schema or anything it extends) changed,
+    or every service when envshield.yml itself changed. Chooses which
+    services to check -- never what any of them is granted.
+    """
+    changed = {os.path.realpath(path) for path in changed_paths}
+    services = list(config_manager.get_services())
+    # Resolved even when envshield.yml changed, so a broken topology fails
+    # the same way whichever file triggered it.
+    coverage = schema_coverage()
+    if os.path.realpath(config_manager.CONFIG_FILE_NAME) in changed:
+        return services
+    hit = {
+        user
+        for _schema, files, users in coverage
+        if changed.intersection(files)
+        for user in users
+    }
+    return [name for name in services if name in hit]
+
+
+def _changed_files(*diff_args: str) -> List[str]:
+    """
+    Absolute paths 'git diff --name-only' reports for `diff_args`. Unlike
+    git_utils.list_changed_files this raises on failure: a hook that
+    can't tell what changed must not conclude that nothing did. '-z'
+    keeps unusual file names unquoted; '--no-renames' reports a rename as
+    both of its paths.
+    """
+    git_root = git_utils.get_git_root()
+    if not git_root:
+        raise EnvShieldException("Not inside a Git repository.")
+    result = subprocess.run(
+        ["git", "diff", "--name-only", "--no-renames", "-z", *diff_args],
+        cwd=git_root,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise EnvShieldException(
+            f"'git diff {' '.join(diff_args)}' failed: {result.stderr.strip()}"
+        )
+    return [os.path.join(git_root, p) for p in result.stdout.split("\0") if p]
+
+
+def _envshield(*args: str, **kwargs) -> int:
+    """Runs an existing EnvShield command, from this same installation."""
+    return subprocess.run(
+        [sys.executable, "-m", "envshield", *args], **kwargs
+    ).returncode
+
+
+def run_pre_commit() -> int:
+    """
+    The pre-commit hook: scans staged files, then, for every service a
+    staged change affects, checks its tracked template is both staged and
+    in sync with its schema. Returns the hook's exit code; anything
+    non-zero blocks the commit, including not being able to work out
+    which services are affected.
+    """
+    status = _envshield("scan", "--staged", "--enforce")
+    try:
+        services = affected_services(_changed_files("--cached"))
+        unstaged = {os.path.realpath(p) for p in _changed_files()}
+    except EnvShieldException as e:
+        console.print(
+            "[bold red]Error:[/bold red] EnvShield couldn't work out which "
+            f"services this commit affects: {e}"
+        )
+        return 1
+
+    checked_templates = set()
+    for name in services:
+        try:
+            paths = config_manager.get_env_paths(service_name=name)
+        except EnvShieldException as e:
+            console.print(f"[bold red]Error:[/bold red] {e}")
+            status = 1
+            continue
+        # 'schema sync --check' reads the template off disk, not what's
+        # staged -- syncing it and forgetting 'git add' would pass that
+        # check while the commit still lands with the stale template. A
+        # template shared by several services is one file: check it once.
+        # A Python-module local_file has no separate template.
+        example_file = paths["example_file"]
+        template = os.path.realpath(example_file)
+        if (
+            not paths["local_file"].endswith(".py")
+            and template not in checked_templates
+        ):
+            checked_templates.add(template)
+            if template in unstaged:
+                console.print(
+                    f"✗ '{example_file}' has unstaged changes -- did you forget "
+                    "'git add' after running 'envshield schema sync'?"
+                )
+                status = 1
+        # Per service, not per template: each checks its own projection's
+        # variables are in the file.
+        if _envshield("schema", "sync", "--service", name, "--check") != 0:
+            status = 1
+    return status
+
+
+def run_post_merge() -> int:
+    """
+    The post-merge hook: runs 'doctor' for every service the merge
+    affected. Never blocks (always returns 0) -- it only warns.
+    """
+    try:
+        services = affected_services(_changed_files("HEAD@{1}", "HEAD"))
+    except EnvShieldException as e:
+        console.print(
+            "[yellow]⚠️  EnvShield couldn't check this merge's configuration "
+            f"changes: {e}[/yellow]"
+        )
+        return 0
+    for name in services:
+        _envshield("doctor", "--service", name, stderr=subprocess.DEVNULL)
+    return 0
 
 
 def _is_interactive() -> bool:
@@ -149,20 +326,14 @@ class HooksManager:
         self, hooks_dir: str, filename: str, label: str, generator
     ) -> str:
         """
-        Describes one installed hook: missing, up to date, or stale --
-        present, and still carrying EnvShield's marker/shape, but no longer
-        byte-for-byte what EnvShield would generate right now (e.g. a
-        service was added to envshield.yml after this hook was installed,
-        so it's missing that service's block; or the file was hand-edited).
-
-        This is purely informational: unlike `are_hooks_installed` (used by
-        `hook install`/`uninstall`'s exact-match ownership check -- see
-        BL-119/BL-120), staleness here never gates or changes what those
-        commands do. A stale hook is not "not installed" -- it still runs
-        and still protects whatever it was generated to protect; this only
-        surfaces that it may no longer match the project's current config,
-        so nothing here needed to touch that exact-match safety invariant.
+        Describes one hook file: missing, current (exactly EnvShield's
+        shim), a legacy EnvShield hook, modified, or foreign. Purely
+        informational -- install/remove decide ownership themselves, by
+        exact match (BL-119/BL-120). The shim is the same for every
+        configuration, so a change to envshield.yml never makes it stale.
         """
+        from .scanner import ENVSHIELD_HOOK_MARKER
+
         path = os.path.join(hooks_dir, filename)
         if not os.path.exists(path):
             return f"[dim]✗ {label}[/dim]"
@@ -171,18 +342,21 @@ class HooksManager:
             with open(path, "r") as f:
                 installed_content = f.read()
         except OSError:
-            return f"[green]✓ {label}[/green]"
+            return f"[yellow]? {label} (couldn't read {path})[/yellow]"
 
         if installed_content == generator():
             return f"[green]✓ {label}[/green]"
-
-        return (
-            f"[yellow]✓ {label} (stale -- doesn't match what EnvShield would "
-            "generate now; run 'envshield hook install --yes' to refresh)[/yellow]"
-        )
+        if installed_content.startswith(_LEGACY_HOOK_PREFIXES[filename]):
+            return (
+                f"[yellow]✓ {label} (older EnvShield hook -- may not cover every "
+                "service; run 'envshield hook install' to upgrade)[/yellow]"
+            )
+        if ENVSHIELD_HOOK_MARKER in installed_content:
+            return f"[yellow]✓ {label} (modified -- not EnvShield's own hook)[/yellow]"
+        return f"[yellow]✓ {label} (not installed by EnvShield)[/yellow]"
 
     def print_hook_status(self) -> None:
-        """Print the current status of installed hooks."""
+        """Print the installed hooks and what they currently cover."""
         if not self.git_root:
             console.print("[dim]Not in a git repository.[/dim]")
             return
@@ -213,4 +387,20 @@ class HooksManager:
         console.print("\n[bold]Git Hooks:[/bold]")
         for s in status:
             console.print(f"  {s}")
+
+        console.print("\n[bold]Coverage[/bold] [dim](from envshield.yml, now):[/dim]")
+        try:
+            coverage = schema_coverage()
+        except EnvShieldException as e:
+            console.print(f"  [red]Can't resolve coverage: {e}[/red]")
+            console.print()
+            return
+        if not coverage:
+            console.print(
+                "  [dim]No services registered -- only secret scanning.[/dim]"
+            )
+        for schema, files, users in coverage:
+            console.print(f"  {schema} → {', '.join(users)}")
+            for base in files[1:]:
+                console.print(f"    [dim]extends {os.path.relpath(base)}[/dim]")
         console.print()

@@ -42,7 +42,11 @@ def _run_generated_script(script_content: str, tmp_path) -> subprocess.Completed
 class TestShellInjectionIsPrevented:
     """Each test uses a distinct injection technique against a different
     interpolation point, so a fix that only closes one technique or one
-    call site would still show up as a failure elsewhere in this class."""
+    call site would still show up as a failure elsewhere in this class.
+
+    Since Phase 5 the hook is a constant shim, so no config value is
+    interpolated at all; each test also asserts the value never reaches
+    the script."""
 
     def test_malicious_schema_path_cannot_run_a_second_command(self, mocker, tmp_path):
         """The exact P0-4 report: a single-quote breakout in schema_path,
@@ -59,6 +63,7 @@ class TestShellInjectionIsPrevented:
         )
 
         script = scanner._generate_pre_commit_hook_content()
+        assert malicious_schema not in script
         _run_generated_script(script, tmp_path)
 
         assert not sentinel.exists()
@@ -79,6 +84,7 @@ class TestShellInjectionIsPrevented:
         )
 
         script = scanner._generate_pre_commit_hook_content()
+        assert malicious_name not in script
         _run_generated_script(script, tmp_path)
 
         assert not sentinel.exists()
@@ -108,6 +114,7 @@ class TestShellInjectionIsPrevented:
         )
 
         script = scanner._generate_pre_commit_hook_content()
+        assert malicious_example not in script
         _run_generated_script(script, tmp_path)
 
         assert not sentinel.exists()
@@ -133,6 +140,7 @@ class TestShellInjectionIsPrevented:
         )
 
         script = scanner._generate_pre_commit_hook_content()
+        assert malicious_example not in script
         _run_generated_script(script, tmp_path)
 
         assert not sentinel.exists()
@@ -153,6 +161,7 @@ class TestShellInjectionIsPrevented:
         )
 
         script = scanner._generate_pre_commit_hook_content()
+        assert malicious_schema not in script
         _run_generated_script(script, tmp_path)
 
         assert not sentinel.exists()
@@ -179,10 +188,11 @@ class TestShellInjectionIsPrevented:
         )
 
         script = scanner._generate_pre_commit_hook_content()
+        assert malicious_schema not in script
         result = _run_generated_script(script, tmp_path)
 
         assert not sentinel.exists()
-        assert result.returncode == 0
+        assert "syntax error" not in result.stderr.lower()
 
     def test_post_merge_hook_malicious_schema_path_cannot_run_a_second_command(
         self, mocker, tmp_path
@@ -197,6 +207,7 @@ class TestShellInjectionIsPrevented:
         )
 
         script = scanner._generate_post_merge_hook_content()
+        assert malicious_schema not in script
         _run_generated_script(script, tmp_path)
 
         assert not sentinel.exists()
@@ -212,6 +223,7 @@ class TestShellInjectionIsPrevented:
         )
 
         script = scanner._generate_post_merge_hook_content()
+        assert malicious_name not in script
         _run_generated_script(script, tmp_path)
 
         assert not sentinel.exists()
