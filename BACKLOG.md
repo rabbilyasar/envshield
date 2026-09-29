@@ -1063,19 +1063,18 @@ Findings from the shared-system-schema design and implementation work
 architecture itself is documented in
 [docs/architecture/shared-system-schema.md](docs/architecture/shared-system-schema.md);
 phase status is in [progress.md](progress.md). Phase 1 is committed as
-`f34bfb9`. Phase 2 (explicit service `dir`) is in the working tree,
-uncommitted and pending approval, as of 2026-09-29.
+`f34bfb9`. Phase 2 (explicit service `dir`) is committed as `a2be864`.
 
 ### BL-135 — `service add --schema` discarded the `DIRECTORY` argument
 
-Type: `BUG` · Evidence: `CONFIRMED` (code reading at `f34bfb9`: `cli.py::service_add` used `DIRECTORY` only for the existence check and compose-file discovery) · Priority: **P1** (blocks shared schemas: sharing services had no way to record distinct directories) · Status: **fixed in the Phase 2 working tree, tested, not committed**
+Type: `BUG` · Evidence: `CONFIRMED` (code reading at `f34bfb9`: `cli.py::service_add` used `DIRECTORY` only for the existence check and compose-file discovery) · Priority: **P1** (blocks shared schemas: sharing services had no way to record distinct directories) · Status: **fixed, tested, committed (`a2be864`)**
 Source: shared-schema design work, 2026-09.
 Component: `cli.py::service_add`, `config/manager.py::add_service`, `config/manager.py::get_service_dir`
 
 - **Problem:** with `--schema`, the service's own directory was never persisted, and `get_service_dir` always returned the schema's parent. Every service registered against a root schema therefore resolved to `.` and claimed the whole repository.
-- **Fix (Phase 2, uncommitted):** `service add` persists `DIRECTORY` as `dir` when the schema lives outside it, or when other services already use the schema, even if `DIRECTORY` equals the schema's parent. `get_service_dir` honours an explicit `dir`, keeps the schema-parent fallback for single-user schemas, and raises `ServiceConfigError` for a shared-schema service with no `dir`. Existing users missing `dir` are warned about, not backfilled.
-- **Tests:** 22 new across `test_config_manager.py`, `test_service_cli.py`, `tests/core/test_service_manager.py`; no existing test modified. Suite: 1526 passed.
-- **Decision:** awaiting review and approval of Phase 2.
+- **Fix (Phase 2, `a2be864`):** `service add` persists `DIRECTORY` as `dir` when the schema lives outside it, or when other services already use the schema, even if `DIRECTORY` equals the schema's parent. `get_service_dir` honours an explicit `dir`, keeps the schema-parent fallback for single-user schemas, and raises `ServiceConfigError` for a shared-schema service with no `dir`. A re-add replaces a previously persisted `dir`, so a stale one can't survive. Existing users missing `dir` are warned about, not backfilled.
+- **Tests:** 23 new across `test_config_manager.py`, `test_service_cli.py`, `tests/core/test_service_manager.py`; no existing test modified. Suite: 1527 passed.
+- **Decision:** **Fixed and committed (`a2be864`).**
 
 ### BL-136 — Hook generation collapses services that share one schema path
 

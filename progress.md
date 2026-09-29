@@ -15,14 +15,13 @@ Findings: BACKLOG.md Part 5b (`BL-135` to `BL-142`).
 | Phase | Status |
 |---|---|
 | Phase 1 | Complete (committed `f34bfb9`) |
-| Phase 2 | In progress: implemented in the working tree, pending approval, not committed |
+| Phase 2 | Complete (committed `a2be864`) |
 | Phase 3 | Not started |
 | Phase 4 | Not started |
 | Phase 5 | Not started |
 | Phase 6 | Not started |
 
-**Next approved action: review and approve Phase 2.** Do not start
-Phase 3 until Phase 2 is approved and committed.
+**Next phase: Phase 3 (not started).**
 
 The scope of Phases 3–6 is not recorded in this repository. Define each
 one here before starting it; don't infer it.
@@ -57,10 +56,9 @@ ruff check passes
 formatting passes
 ```
 
-### Phase 2: explicit service directories (in progress)
+### Phase 2: explicit service directories (complete)
 
-Uncommitted changes to `envshield/cli.py`, `envshield/config/manager.py`,
-and three test files.
+Commit `a2be864`, "feat: persist explicit service directories". Unreleased.
 
 - Persisted `dir` on service entries.
 - `get_service_dir()` uses an explicit `dir` when present.
@@ -70,14 +68,15 @@ and three test files.
   is a `ServiceConfigError`.
 - `service add` persists the directory when the schema is outside it or
   already shared (including when the directory equals the schema's
-  parent). Existing users missing `dir` are warned about, never backfilled.
+  parent), and a re-add replaces a previously persisted `dir`. Existing
+  users missing `dir` are warned about, never backfilled.
 - Equal-directory behavior intentionally left unresolved (`BL-137`).
 
-Current working-tree state, verified 2026-09-29:
+Verified 2026-09-29 before committing `a2be864`:
 
 ```text
-1526 tests passing
-1504 existing + 22 new
+1527 tests passing
+1504 existing + 23 new
 0 existing tests modified
 ruff check passes
 formatting passes

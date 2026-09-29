@@ -820,9 +820,9 @@ pruning) — none are blockers, and none require another Phase 2C milestone.
 
 **Current phase (updated 2026-09-29): Shared System Schema.** Latest
 release tag is `v4.7.4`. Phase 1 (shared schema projection) is committed as
-`f34bfb9`, unreleased. Phase 2 (explicit service `dir`) is implemented in the
-working tree and pending approval. See [progress.md](progress.md) for phase
-status; the next approved action is Phase 2 review, not Phase 3. The
+`f34bfb9`, unreleased. Phase 2 (explicit service `dir`) is committed as
+`a2be864`, unreleased. See [progress.md](progress.md) for phase status;
+Phase 3 is the next phase and has not started. The
 paragraphs below are the post-`v4.6.1` record, kept as history.
 
 **Current phase: post-`v4.6.1`. Every release blocker in BACKLOG.md's Part 0
