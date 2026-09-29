@@ -220,6 +220,19 @@ def diff_against_schema(
     )
 
 
+def drop_file_peer_extras(diff: SchemaDiff, service_name: str, file_path: str) -> None:
+    """
+    Stops `diff` reporting a variable as `extra` when `file_path` is
+    `service_name`'s local_file/example_file and another service that shares
+    that physical file receives it (config_manager.get_file_contract_vars) --
+    it belongs there. Requirements (missing/blank/invalid) stay judged
+    against the service's own projection. Only consults envshield.yml when
+    there are extras at all, so an unshared, in-sync file is untouched.
+    """
+    if diff.extra:
+        diff.extra -= config_manager.get_file_contract_vars(service_name, file_path)
+
+
 class UnionSource(NamedTuple):
     """
     One registered source's already-loaded local values, ready for
@@ -614,6 +627,8 @@ def check_schema(
     diff = diff_against_schema(
         schema, local_values, has_unresolved_source=parser.has_unresolved_source
     )
+    if paths is None:
+        drop_file_peer_extras(diff, service_name, file_path)
 
     if diff.is_clean:
         console.print(
@@ -725,6 +740,16 @@ def check_result(
     diff = diff_against_schema(
         schema, local_values, has_unresolved_source=parser.has_unresolved_source
     )
+    if paths is None:
+        try:
+            drop_file_peer_extras(diff, service_name, file_path)
+        except EnvShieldException as e:
+            return {
+                "file": file_path,
+                "service": service_name,
+                "clean": False,
+                "error": str(e),
+            }
     return {
         "file": file_path,
         "service": service_name,
@@ -770,8 +795,14 @@ def sync_schema(service_name: str) -> bool:
     regardless of which source actually satisfies each variable, which
     stays correct either way.
     """
-    schema = config_manager.load_schema(service_name=service_name)
     paths = config_manager.get_env_paths(service_name=service_name)
+    # The file being written may be shared by several services -- it's
+    # generated from the union of their projections (the physical-file
+    # contract), never narrowed to this one service's view.
+    schema = config_manager.load_file_contract(
+        service_name,
+        "local_file" if paths["local_file"].endswith(".py") else "example_file",
+    )
 
     if paths["local_file"].endswith(".py"):
         already_satisfied = None

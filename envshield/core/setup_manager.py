@@ -163,6 +163,12 @@ def run_setup(service_name: str, output_file: Optional[str] = None) -> SetupResu
         schema = config_manager.load_schema(service_name=service_name)
     except EnvShieldException:
         schema = {}
+    # When the file being written is the service's own local file and other
+    # services share it, it's materialized from the union of their
+    # projections (the physical-file contract). A peer or conflict error
+    # propagates -- it must not fall back to writing without a schema.
+    if schema and config_manager.same_physical_file(local_file, paths["local_file"]):
+        schema = config_manager.load_file_contract(service_name, "local_file")
 
     seed_values = _read_seed_values(example_file, local_file)
 

@@ -9,6 +9,7 @@ from envshield.core import schema_scope, schema_types
 from envshield.core.exceptions import (
     ConfigNotFoundError,
     ConfigParseError,
+    EnvShieldException,
     InvalidManifestDefinitionError,
     SchemaNotFoundError,
     SchemaParseError,
@@ -934,6 +935,106 @@ def get_env_paths(service_name: str) -> Dict[str, str]:
         "example_file": _resolve("example_file", ".env.example"),
         "local_file": _resolve("local_file", ".env"),
     }
+
+
+def same_physical_file(a: str, b: str) -> bool:
+    cwd = os.getcwd()
+    return os.path.realpath(os.path.join(cwd, a)) == os.path.realpath(
+        os.path.join(cwd, b)
+    )
+
+
+_ENV_FILE_DEFAULTS = {"local_file": ".env", "example_file": ".env.example"}
+
+
+def _unresolved_peer_path(entry: Any, key: str) -> Optional[str]:
+    """
+    Where a service whose paths can't be resolved (e.g. a shared-schema
+    service with no `dir` yet) could have its `key` file: its own override
+    if it sets one (that doesn't depend on its directory), otherwise the
+    default file beside its schema -- where EnvShield resolved it before a
+    `dir` became required. None when there's nothing to anchor it to.
+    """
+    if not isinstance(entry, dict):
+        return None
+    override = entry.get(key)
+    if override:
+        return override if isinstance(override, str) else None
+    schema = entry.get("schema", entry.get("path"))
+    if not isinstance(schema, str) or not schema:
+        return None
+    return os.path.join(os.path.dirname(schema), _ENV_FILE_DEFAULTS[key])
+
+
+def get_file_peers(service_name: str, key: str) -> List[str]:
+    """
+    Every registered service whose `key` file ('local_file' or
+    'example_file', resolved via get_env_paths) is the same physical file
+    as `service_name`'s -- compared by resolved real path -- sorted by name,
+    `service_name` included. The two keys are resolved independently:
+    sharing '.env' says nothing about sharing '.env.example'.
+
+    A service whose paths can't be resolved is skipped only when it
+    provably can't use this file (see _unresolved_peer_path); otherwise
+    this raises ServiceConfigError -- dropping a real peer would narrow
+    the file's contract, and a write could then discard its variables.
+    """
+    target = get_env_paths(service_name)[key]
+    peers = []
+    for name, entry in get_services().items():
+        try:
+            path = get_env_paths(name)[key]
+        except EnvShieldException as e:
+            candidate = _unresolved_peer_path(entry, key)
+            if candidate is not None and not same_physical_file(candidate, target):
+                continue
+            raise ServiceConfigError(
+                f"Can't tell whether service '{name}' also uses '{target}' "
+                f"({e}). Fix '{name}' in {CONFIG_FILE_NAME} first -- changing "
+                "a file it may share could drop its variables."
+            ) from e
+        if same_physical_file(path, target):
+            peers.append(name)
+    return sorted(peers)
+
+
+def load_file_contract(service_name: str, key: str) -> Dict[str, Any]:
+    """
+    The physical-file contract for `service_name`'s `key` file: what that
+    file must be able to hold. For a file only this service uses, exactly
+    load_schema(service_name). For a file several services share, the
+    union of their projections (schema_scope.union_fields), raising
+    FileContractConflictError if they define a shared variable differently.
+
+    For materializing or validating the file itself -- never as what
+    `service_name` is granted; that's load_schema.
+    """
+    peers = get_file_peers(service_name, key)
+    if len(peers) == 1:
+        return load_schema(service_name)
+    return schema_scope.union_fields(
+        [load_schema_view(peer) for peer in peers], get_env_paths(service_name)[key]
+    )
+
+
+def get_file_contract_vars(service_name: str, file_path: str) -> set:
+    """
+    Every variable `file_path` may legitimately hold when validated for
+    `service_name`: the union of every sharing service's projected names if
+    it's that service's (shared) local_file or example_file, otherwise just
+    the service's own. Names only -- never raises a definition conflict,
+    since validating one service's requirements doesn't need a merged
+    definition.
+    """
+    if service_name not in get_services():
+        return set(load_schema(service_name))  # unregistered: no file peers
+    paths = get_env_paths(service_name)
+    for key in ("local_file", "example_file"):
+        if same_physical_file(file_path, paths[key]):
+            peers = get_file_peers(service_name, key)
+            if len(peers) > 1:
+                return set().union(*(load_schema(peer) for peer in peers))
+    return set(load_schema(service_name))
 
 
 def generate_default_config_content(

@@ -100,6 +100,7 @@ def _check_local_env_sync(service_name: str):
         local_values = parser.get_vars(local_file, get_values=True)
 
         diff = schema_manager.diff_against_schema(schema, local_values)
+        schema_manager.drop_file_peer_extras(diff, service_name, local_file)
         if diff.is_clean:
             return True, f"'{local_file}' is in sync with schema."
         return False, diff.summary()
@@ -299,6 +300,13 @@ def _check_example_file_sync(service_name: str):
 
     missing = schema_vars - example_vars
     extra = example_vars - schema_vars
+    if extra:
+        # A variable another service sharing this example file receives
+        # belongs there (the physical-file contract).
+        try:
+            extra -= config_manager.get_file_contract_vars(service_name, example_file)
+        except EnvShieldException as e:
+            return False, str(e)
     if not missing and not extra:
         return True, f"'{example_file}' is in sync with schema."
 

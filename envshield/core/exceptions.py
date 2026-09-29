@@ -179,3 +179,26 @@ class SharedSchemaWriteRefusedError(EnvShieldException):
             "undeclared' and 'envshield explain' show what's missing."
         )
         super().__init__(self.message)
+
+
+class FileContractConflictError(EnvShieldException):
+    """
+    Raised when services sharing one physical env file (local_file or
+    example_file) receive the same variable with different effective
+    definitions -- e.g. different per-service defaultValue -- so there's no
+    single definition that file can be materialized from. Never echoes the
+    differing values themselves, only which attributes differ.
+    """
+
+    def __init__(
+        self, file_path: str, var: str, first: str, second: str, attributes: list
+    ):
+        self.message = (
+            f"'{file_path}' is shared by services that define '{var}' "
+            f"differently ({first} and {second} differ in "
+            f"{', '.join(attributes)}). A shared file holds one definition per "
+            "variable, so EnvShield won't pick one. Make the definitions match, "
+            "or give the services separate files ('local_file'/'example_file' "
+            "in envshield.yml)."
+        )
+        super().__init__(self.message)

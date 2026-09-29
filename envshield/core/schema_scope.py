@@ -32,7 +32,11 @@ view (and never mutate the input).
 from dataclasses import dataclass
 from typing import Any, Dict, FrozenSet, Iterable, List, Optional, Sequence, Tuple
 
-from .exceptions import SchemaScopeError, SecretDefaultConflictError
+from .exceptions import (
+    FileContractConflictError,
+    SchemaScopeError,
+    SecretDefaultConflictError,
+)
 
 SCOPE_KEY = "services"
 OVERRIDABLE_KEYS = frozenset({"defaultValue", "description"})
@@ -247,3 +251,46 @@ def project(
         grants=grants,
         users=tuple(sorted(user_set)),
     )
+
+
+def union_fields(views: Sequence[ServiceSchemaView], file_path: str) -> Dict[str, Any]:
+    """
+    The physical-file contract: the union of the effective fields of every
+    service whose env file is the same physical `file_path`. Views are taken
+    in service-name order, so envshield.yml order never changes the result.
+
+    A variable more than one service receives must have the same effective
+    definition in each -- e.g. two different per-service defaultValues
+    raise FileContractConflictError instead of one being picked. The one
+    exception is `description`, service-level metadata: when sharing
+    services' descriptions differ, the union carries none rather than
+    choosing one. File-level only: it grants no service anything; each
+    service's own view is unchanged.
+    """
+    fields: Dict[str, Any] = {}
+    owner: Dict[str, str] = {}
+    for view in sorted(views, key=lambda v: v.service):
+        for key, details in view.fields.items():
+            if key not in fields:
+                fields[key] = details
+                owner[key] = view.service
+                continue
+            first = fields[key]
+            if not (isinstance(first, dict) and isinstance(details, dict)):
+                if first != details:
+                    raise FileContractConflictError(
+                        file_path, key, owner[key], view.service, ["definition"]
+                    )
+                continue
+            differing = sorted(
+                k
+                for k in set(first) | set(details)
+                if k != "description" and first.get(k) != details.get(k)
+            )
+            if differing:
+                raise FileContractConflictError(
+                    file_path, key, owner[key], view.service, differing
+                )
+            if first.get("description") != details.get("description"):
+                fields[key] = {k: v for k, v in first.items() if k != "description"}
+    return fields
