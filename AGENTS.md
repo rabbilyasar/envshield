@@ -12,7 +12,10 @@ findings, limitations, and their reproduction evidence — see
 not*; ROADMAP.md says what's *done*, *in progress*, and *next*; BACKLOG.md
 is the operational record behind both.
 
-Last revised: 2026-08-30 (third same-day revision). Same-day follow-up:
+Last revised: 2026-09-29: added the "Shared system schema (operational
+rules)" subsection under Target architecture and a current-phase update
+to §19; no principle changed. Previous revision: 2026-08-30 (third
+same-day revision). Same-day follow-up:
 added §3 principle 7 (a broad architectural expansion is a separate
 decision from the narrow fix that surfaces it, not an automatic extension
 of it) after a Zeus real-world dogfooding pass produced three validated,
@@ -393,6 +396,38 @@ precedent: it deliberately calls `config_manager`, `discovery`, and
 `parsers.factory` directly rather than importing `explain.py`'s private
 `_discover_current_usages`/`_manifest_references`, because `explain.py` is
 a peer consumer of the domain layer, not itself part of it.
+
+### Shared system schema (operational rules)
+
+Shared schema projection is the canonical schema architecture. A schema
+with one registered user is its degenerate case and keeps legacy behavior.
+Full model, scope rules, valid TOML, and directory semantics:
+[docs/architecture/shared-system-schema.md](docs/architecture/shared-system-schema.md).
+Phase status: [progress.md](progress.md).
+
+- Keep three things distinct: the **system schema** (the merged file, i.e.
+  what exists), the **service projection** (what one logical service
+  receives, which is what `load_schema(service)` returns), and the
+  **physical-file contract** (the union of the projections that
+  materialize into one `.env`/`.env.example`; derived, never a separate
+  schema).
+- Do not reintroduce one-schema-one-service assumptions (e.g. keying by
+  schema path, or deriving a service from its schema file).
+- Do not write command-specific projection logic. `schema_scope.project()`
+  is the only interpreter of `services`. Reach it through `load_schema` /
+  `load_schema_view` (live) or `schema_snapshot.load_schema_for_diff` /
+  `load_schema_view_for_diff` (revision).
+- Resolve topology centrally: `get_service_dir()` for a service's
+  directory, `get_schema_users()` for who shares a schema.
+- Never broaden a secret's scope, whether silently, as a fallback, or for
+  convenience. In a shared schema an unscoped secret is an error, and
+  that stays fail-closed.
+- Do not rewrite a shared or scoped hand-maintained schema. Writers go
+  through `schema_manager.assert_schema_rewritable()`.
+- Operations on a physical file shared by several services use the union
+  contract.
+- A logical service is not a container or process.
+- Preserve backward compatibility for unique (single-user) schemas.
 
 ---
 
@@ -783,6 +818,13 @@ backlog (revision-aware service-directory resolution for the explicit
 two-revision form, discovered-file size cap, `DEFAULT_EXCLUDED_DIRS`-style
 pruning) — none are blockers, and none require another Phase 2C milestone.
 
+**Current phase (updated 2026-09-29): Shared System Schema.** Latest
+release tag is `v4.7.4`. Phase 1 (shared schema projection) is committed as
+`f34bfb9`, unreleased. Phase 2 (explicit service `dir`) is implemented in the
+working tree and pending approval. See [progress.md](progress.md) for phase
+status; the next approved action is Phase 2 review, not Phase 3. The
+paragraphs below are the post-`v4.6.1` record, kept as history.
+
 **Current phase: post-`v4.6.1`. Every release blocker in BACKLOG.md's Part 0
 is fixed and shipped; the next implementation direction is an open decision.**
 A 2026-08-21 release-readiness and marketing-claim audit reviewed the full
@@ -923,7 +965,8 @@ ROADMAP.md describe product/engineering direction only.
 `envshield/config/manager.py`, `envshield/core/setup_manager.py`,
 `envshield/core/generator.py`, `envshield/parsers/_kubernetes.py`,
 `envshield/parsers/_docker_compose.py`, `envshield/core/dependency_snapshot.py`,
-`envshield/core/dependency_diff.py`, `envshield/utils/git_utils.py`.
+`envshield/core/dependency_diff.py`, `envshield/utils/git_utils.py`,
+`envshield/core/schema_scope.py`, `envshield/core/schema_snapshot.py`.
 
 See ROADMAP.md for the full phase-status table, release-blocker history,
 and Phase 2C backlog.

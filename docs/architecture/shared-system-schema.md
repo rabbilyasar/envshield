@@ -1,0 +1,231 @@
+# Shared System Schema
+
+How one hand-maintained `env.schema.toml` serves several logical services.
+This is the canonical schema architecture: a schema with exactly one user
+is simply the degenerate case of it, and behaves exactly as it always did.
+
+Status and phase tracking live in [progress.md](../../progress.md);
+individual findings live in [BACKLOG.md](../../BACKLOG.md) (Part 5b).
+Implementation: `envshield/core/schema_scope.py` (projection),
+`envshield/config/manager.py` (live loading, schema users, service
+directory), `envshield/core/schema_snapshot.py` (revision loading).
+
+---
+
+## 1. The model
+
+```text
+envshield.yml
+    ↓
+registered logical services
+    ↓
+schema users              (services whose `schema:` resolves to the same file)
+    ↓
+merged system schema      (the file, with its `extends` chain merged)
+    ↓
+service projection        (schema_scope.project)
+    ↓
+effective service schema  (what load_schema(service) returns)
+    ↓
+physical-file contract    (union of projections that share one .env/.env.example)
+```
+
+Three distinct things, never to be conflated:
+
+### System schema
+
+The complete configuration contract: the merged `env.schema.toml`.
+
+> What configuration exists in this system?
+
+`ServiceSchemaView.system` — every variable the file defines, `services`
+stripped, no per-service overrides applied.
+
+### Service schema projection
+
+A service-specific view of the system schema.
+
+> What configuration does this logical service receive?
+
+`ServiceSchemaView.fields` — only the variables granted to the service,
+with that service's overrides applied. `load_schema(service)` returns
+exactly this, so every existing caller keeps its interface.
+`load_schema_view(service)` returns the whole `ServiceSchemaView` for
+callers that must distinguish *defined but not granted to this service*
+(`status(var) == "out_of_scope"`) from *not defined at all*
+(`"undefined"`).
+
+### Physical-file contract
+
+When several service projections materialize into the same physical
+`.env` or `.env.example`, that file's contract is the **union** of those
+projections.
+
+> What configuration must coexist in this physical file?
+
+This is not another schema. It is derived, never declared, and never
+stored. Any operation that rewrites or validates a shared physical file
+must use the union, or it will drop or misreport another service's
+variables.
+
+### Logical service ≠ container/process
+
+A registered service is a logical consumer of configuration: a unit that
+is granted variables. It is not a container, a process, or a deployment
+unit. One container may run several logical services, and one logical
+service may run as several processes. Deployment manifests map containers
+to services separately (`manifests:` in `envshield.yml`).
+
+---
+
+## 2. Scope semantics
+
+Schema users are computed by `config_manager.get_schema_users(schema_path)`
+(compared by resolved real path, so `./env.schema.toml` and a symlink to it
+both count). At a git revision, `schema_snapshot` computes users from
+`envshield.yml` *at that revision*, lexically, never from the live tree.
+
+| Rule | Behavior |
+|---|---|
+| Schema used by exactly one registered service | Legacy behavior, unchanged. |
+| Schema used by several registered services | Shared system schema; the rules below apply. |
+| Unscoped non-secret variable | Global: every user receives it. |
+| Unscoped secret in a **shared** schema | Error. A shared schema never grants a secret to every service implicitly. |
+| Secret in a shared schema | Must declare `services` naming exactly which services receive it. |
+| `services` | Reserved attribute name on a variable. It can't be used as a field attribute for anything else. |
+| Service named in `services` that isn't a user of this schema | Error (message distinguishes "not registered" from "registered, but uses a different schema file"). |
+| Empty `services` (`[]` or no override tables) | Error. Fails closed; it never means "everyone". |
+| Same service listed twice | Error. |
+| Per-service override keys | Only `defaultValue` and `description`. |
+| `type`, `secret`, `enum`, `pattern`, `requiredIf` | System-wide. Setting any of them per service is an error. |
+| Secret with a non-empty per-service `defaultValue` | Error (`SecretDefaultConflictError`), same rule as a system-level secret default. |
+| `requiredIf` dependency | Must be granted to every service its dependent field is granted to. Otherwise, error. |
+| `requiredIf` naming an *undefined* variable | Not validated (legacy semantics retained; see `BL-140`). |
+
+Validation is whole-system and fail-closed: `project()` validates every
+variable against every user, not just the requested service, so a defect
+affecting one service fails every service's load. A registered service
+whose entry is too broken to tell which schema it uses raises
+`ServiceConfigError` rather than being skipped, because silently dropping
+it could make a shared schema look single-user and so exempt its secrets
+from scoping.
+
+### Valid TOML
+
+```toml
+[LOG_LEVEL]                         # unscoped non-secret: global
+type = "string"
+defaultValue = "info"
+
+[DATABASE_URL]                      # grant only
+secret = true
+services = ["api", "worker"]
+
+[PORT]                              # grant + per-service overrides
+type = "port"
+[PORT.services.api]
+defaultValue = "8000"
+[PORT.services.worker]
+defaultValue = "9000"
+description = "Worker health-check port"
+
+[TIMEOUT]                           # same, as a single-line inline table
+services = { api = { defaultValue = "30" }, worker = {} }
+```
+
+A table form grants the variable to exactly the services it names; an
+empty override table (`worker = {}`) is a grant with no overrides.
+
+Not valid:
+
+- **A multiline inline table.** TOML inline tables must fit on one line;
+  the installed `toml` parser rejects
+  `services = {\n  api = { ... },\n}` with a decode error. Use
+  `[VAR.services.NAME]` sub-tables instead.
+- **`services = [...]` together with `[VAR.services.NAME]`.** This defines
+  one key twice with incompatible types. The `toml` library crashes on it
+  with a bare `TypeError`/`IndexError`; EnvShield reports it as a
+  `SchemaParseError`. Use the table form alone when overrides are needed.
+
+### Loading and writing
+
+- `load_bare_schema()` (no service context) refuses any schema that
+  contains `services`, since it can't know which services exist.
+- `schema_manager.assert_schema_rewritable()` refuses a wholesale rewrite
+  of a schema that is shared by more than one service or uses `services`
+  at all. `import` and `init --force` both call it. These schemas are
+  hand-maintained, and regenerating them would discard comments and scope
+  layout.
+
+---
+
+## 3. Directory semantics
+
+A service's directory is where EnvShield treats "this service's code" as
+living: env-file defaults, discovery, scan routing, and invocation-directory
+inference. `config_manager.get_service_dir()` is the single source of
+truth. Do not derive a service directory from the schema path anywhere
+else.
+
+### Single-user schema
+
+If `dir` is absent:
+
+```text
+service directory = schema parent
+```
+
+Legacy behavior, preserved. An explicit `dir` still wins if present.
+
+### Shared schema
+
+Every registered service using a shared schema must have an explicit
+`dir`. A shared service's directory is never inferred from the schema
+parent. Doing so would give every sharing service the same directory
+(typically the project root), and each would silently claim the others'
+code. A missing `dir` on a shared-schema service is a `ServiceConfigError`.
+`dir` must be a non-empty path inside the project (validated by the same
+containment check as other `envshield.yml` paths).
+
+### `service add`
+
+`service add NAME DIRECTORY [--schema PATH]` persists `DIRECTORY` as `dir`
+when the schema's location wouldn't imply it:
+
+- the schema lives outside `DIRECTORY` (e.g. `--schema` pointing at a root
+  schema), or
+- other services already use the schema. **Joining an existing shared
+  schema always persists `dir`, even when `DIRECTORY` equals the schema's
+  parent.**
+
+The legacy shape (`DIRECTORY/env.schema.toml`, sole user) is written
+exactly as before, with no `dir`.
+
+When a join makes a schema shared, existing users that lack `dir` are
+**not** backfilled automatically. `service add` warns and names them
+instead: their commands fail with `ServiceConfigError` until `dir` is set,
+which an explicit re-run of `service add` does.
+
+### Equal directories
+
+Two services may legitimately declare the same `dir`. What that means for
+directory-routed operations (scan routing, discovery) is intentionally
+unresolved: nothing rejects it. Scan routing currently breaks the tie
+silently by service name order, so the alphabetically-first service's
+projection judges every file in that directory. This is a known defect,
+not intended semantics, and Phase 2 deliberately leaves it as is. See
+`BL-137`.
+
+---
+
+## 4. Rules for code that consumes schemas
+
+- Get a service's fields from `load_schema` / `load_schema_view` (live) or
+  `schema_snapshot.load_schema_for_diff` / `load_schema_view_for_diff`
+  (revision). Never re-read `env.schema.toml` and interpret `services`
+  yourself. `schema_scope.project()` is the only interpreter.
+- Get a service's directory from `get_service_dir()`. Get the services
+  sharing a schema from `get_schema_users()`.
+- Operations on a physical file shared by several services must use the
+  union of their projections.
+- Never widen a secret's grant as a fallback or convenience.

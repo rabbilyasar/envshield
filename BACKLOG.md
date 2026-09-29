@@ -1056,6 +1056,95 @@ Type: `ARCHITECTURE` · Evidence: `STRATEGIC` · Priority: `EXPLORING`, explicit
 
 ---
 
+## Part 5b — Shared system schema
+
+Findings from the shared-system-schema design and implementation work
+(one hand-maintained `env.schema.toml` projected per logical service). The
+architecture itself is documented in
+[docs/architecture/shared-system-schema.md](docs/architecture/shared-system-schema.md);
+phase status is in [progress.md](progress.md). Phase 1 is committed as
+`f34bfb9`. Phase 2 (explicit service `dir`) is in the working tree,
+uncommitted and pending approval, as of 2026-09-29.
+
+### BL-135 — `service add --schema` discarded the `DIRECTORY` argument
+
+Type: `BUG` · Evidence: `CONFIRMED` (code reading at `f34bfb9`: `cli.py::service_add` used `DIRECTORY` only for the existence check and compose-file discovery) · Priority: **P1** (blocks shared schemas: sharing services had no way to record distinct directories) · Status: **fixed in the Phase 2 working tree, tested, not committed**
+Source: shared-schema design work, 2026-09.
+Component: `cli.py::service_add`, `config/manager.py::add_service`, `config/manager.py::get_service_dir`
+
+- **Problem:** with `--schema`, the service's own directory was never persisted, and `get_service_dir` always returned the schema's parent. Every service registered against a root schema therefore resolved to `.` and claimed the whole repository.
+- **Fix (Phase 2, uncommitted):** `service add` persists `DIRECTORY` as `dir` when the schema lives outside it, or when other services already use the schema, even if `DIRECTORY` equals the schema's parent. `get_service_dir` honours an explicit `dir`, keeps the schema-parent fallback for single-user schemas, and raises `ServiceConfigError` for a shared-schema service with no `dir`. Existing users missing `dir` are warned about, not backfilled.
+- **Tests:** 22 new across `test_config_manager.py`, `test_service_cli.py`, `tests/core/test_service_manager.py`; no existing test modified. Suite: 1526 passed.
+- **Decision:** awaiting review and approval of Phase 2.
+
+### BL-136 — Hook generation collapses services that share one schema path
+
+Type: `BUG` · Evidence: `CONFIRMED` (code reading: `scanner.py::_generate_pre_commit_hook_content` and `_generate_post_merge_hook_content` build `schema_to_service = {schema: name ...}`, a dict keyed by schema path) · Priority: **P2** · Status: **open**
+Source: shared-schema design work, 2026-09.
+Component: `core/scanner.py` hook generators; indirectly `core/hooks_manager.py` stale detection (`BL-134`)
+
+- **Current behavior:** when several services share a schema, only the last one in `envshield.yml` order gets a per-service block. The pre-commit template-sync check and the post-merge `doctor` run skip every other sharing service.
+- **Expected behavior:** one block per registered service, gated on its schema path.
+- **Note:** `BL-134`'s stale-hook check compares against the same generator, so it can't flag this.
+- **Decision:** not addressed in Phase 1 or Phase 2; needs its own authorized fix.
+
+### BL-137 — Scan routing is ambiguous when two services declare the same directory
+
+Type: `LIMITATION` · Evidence: `CONFIRMED` (code reading: `scanner.py` compliance resolver sorts `(service_dir, schema_vars)` by directory length and returns the first containing match) · Priority: **P2** · Status: **open, intentionally undecided**
+Source: shared-schema design work, 2026-09.
+Component: `core/scanner.py` undeclared-variable routing
+
+- **Current behavior:** services with an identical `dir` tie on length; the stable sort leaves them in name order, so the alphabetically-first service's projection silently judges every file in that directory. The other service's schema is never consulted there.
+- **Expected behavior:** undecided. The options are the union of the tied projections, an explicit error, or a prompt. Phase 2 deliberately does not reject equal directories in `service add`.
+- **Decision:** leave open until equal-directory semantics are decided.
+
+### BL-138 — `setup` may drop another service's values from a shared physical dotenv file
+
+Type: `BUG` · Evidence: `NEEDS_EVIDENCE` · Priority: **P1 if confirmed** (data loss) · Status: **open**
+Source: reported during shared-schema design work, 2026-09. Not reproduced in the 2026-09-29 documentation pass.
+Component: `core/setup_manager.py::run_setup` / `_write_dotenv_local_file`
+
+- **Claim:** when two services materialize into the same `.env`, running `setup` for one can wipe the other's values, because the dotenv path is a full rewrite driven by one service's projection.
+- **Counter-evidence from code reading:** keys already present in an existing local file are carried over (`setup_manager.py`, `all_keys = schema keys + seed keys`), so the straightforward path preserves them. The failing path, if one exists, must be reproduced before this is marked `CONFIRMED`. Candidates include seeding from `.env.example` when the local file is absent, and a union-mode (`BL-030`) multi-source layout.
+- **Expected behavior:** any write to a shared physical file uses the union contract of every service projection materialized into it.
+
+### BL-139 — `init --force` rewrites `envshield.yml` down to one service
+
+Type: `BUG` · Evidence: `CONFIRMED` (code reading: `cli.py::init` writes `generate_default_config_content` over `envshield.yml` after a confirmation prompt) · Priority: **P2** · Status: **partially mitigated in Phase 1 (`f34bfb9`)**
+Source: shared-schema design work, 2026-09.
+Component: `cli.py::init`, `core/schema_manager.py::assert_schema_rewritable`
+
+- **Mitigated:** `init --force` now refuses outright when the root schema is shared or uses `services` scoping (`SharedSchemaWriteRefusedError`).
+- **Still open:** in a multi-service project whose root schema is single-user or unused, `init --force` still replaces the whole `envshield.yml` with a one-service config. The only guard is an interactive "cannot be undone" confirmation.
+- **Decision:** record. Whether a confirmed overwrite is acceptable is a separate decision.
+
+### BL-140 — `requiredIf` naming an undefined variable is not validated
+
+Type: `BUG` · Evidence: `CONFIRMED` (code reading: `schema_scope.project` skips a dependency not in the system schema, commented "undefined dependency: unchanged legacy semantics"; no other load-time check exists) · Priority: **P2** (a typo in `requiredIf.var` makes the field silently never required, a false-clean class) · Status: **open**
+Source: shared-schema implementation, Phase 1.
+Component: `core/schema_scope.py`, `config/manager.py`
+
+- **Current behavior:** a `requiredIf` whose `var` is undefined loads without error. Phase 1 only validates *scope* consistency of dependencies that exist.
+- **Expected behavior:** a load-time `SchemaParseError` naming the undefined dependency. This is a behavior change for existing single-user schemas, so it needs its own compatibility decision.
+
+### BL-141 — Proposed multiline inline-table `services` syntax was invalid TOML; mixed forms crashed the parser
+
+Type: `DOCS` + `BUG` · Evidence: `CONFIRMED` (live: the installed `toml` parser raises `TomlDecodeError` on a multiline inline table; `services = [...]` alongside `[VAR.services.NAME]` raises a bare `TypeError`/`IndexError`) · Priority: **P2** · Status: **fixed in Phase 1 (`f34bfb9`)**
+Source: shared-schema implementation, Phase 1.
+Component: `config/manager.py::load_toml_schema`, `core/schema_snapshot.py`
+
+- **Design finding:** the originally proposed `services = {\n  api = {...},\n}` form isn't valid TOML (inline tables must be single-line). The supported forms are `services = [...]`, `[VAR.services.NAME]` sub-tables, and a single-line inline table. See the architecture doc.
+- **Fix:** both live and revision loaders convert the parser's `TypeError`/`IndexError` into a `SchemaParseError` with a message pointing to the table form.
+
+### BL-142 — `services` is now a reserved schema attribute
+
+Type: `COMPATIBILITY` · Evidence: `CONFIRMED` (Phase 1, `f34bfb9`) · Priority: **P3** · Status: **by design; record only**
+Component: `core/schema_scope.py` (`SCOPE_KEY`)
+
+- Any variable-level `services` key is now interpreted as a scope grant and validated. A pre-existing schema that used `services` as a free-form attribute would now fail to load with a `SchemaScopeError`, and `load_bare_schema` refuses any schema that contains it. No such use is known. Recorded so that a report of it is recognized as this change.
+
+---
+
 ## Part 6 — AI-Agent-Friendly EnvShield (strategic direction)
 
 **Umbrella direction, not a single feature.** Do not implement MCP or any agent
