@@ -139,6 +139,40 @@ These keys appear only when a variable really is out of scope. A
 single-user schema can't have out-of-scope variables, so its output is
 unchanged.
 
+### Hook coverage
+
+Hooks enforce the configuration contract; they don't authorize services.
+They decide which services to check, never what any service is granted.
+
+```text
+constant hook shim            (installed bytes: no service names, paths, or topology)
+    ↓
+runtime topology resolution   (the current envshield.yml, when the hook runs)
+    ↓
+changed files                 (staged for pre-commit, the merge for post-merge)
+    ↓
+schema dependency closure     (each schema plus every file in its extends chain)
+    ↓
+registered schema users       (get_schema_users: every service on that schema)
+    ↓
+existing per-service checks   (template sync for pre-commit, doctor for post-merge)
+```
+
+- A shared schema is resolved to all of its registered users when the
+  hook runs. Each user is checked through its own projection.
+- A change to any file in a schema's `extends` chain affects that
+  schema's users.
+- A change to `envshield.yml` conservatively affects every registered
+  service.
+- Pre-commit fails closed when it can't resolve the topology. Post-merge
+  never blocks; it only warns.
+- `hook status` reports live coverage: each schema, its users, and its
+  `extends` files.
+- Installed hooks don't go stale when `envshield.yml` changes. Ownership
+  and overwrite protections are unchanged: EnvShield replaces or removes
+  a hook only on an exact content match; otherwise it asks, or, without a
+  terminal, leaves the hook alone.
+
 ### Logical service ≠ container/process
 
 A registered service is a logical consumer of configuration: a unit that
@@ -305,3 +339,5 @@ not intended semantics, and Phase 2 deliberately leaves it as is. See
   (or `schema_manager.mark_out_of_scope()` / `system_only_vars()` for a
   `SchemaDiff`). Report the difference; never accept an out-of-scope
   variable because of it.
+- Never embed project topology in an installed hook. Resolve coverage when
+  the hook runs; a schema's files come from `get_schema_files()`.

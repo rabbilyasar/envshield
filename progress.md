@@ -18,10 +18,10 @@ Findings: BACKLOG.md Part 5b (`BL-135` to `BL-142`).
 | Phase 2 | Complete (committed `a2be864`) |
 | Phase 3 | Complete (committed `e336812`) |
 | Phase 4 | Complete (committed `5a2c61e`) |
-| Phase 5 | Not started |
+| Phase 5 | Complete (committed `50720ad`) |
 | Phase 6 | Not started |
 
-**Next phase: Phase 5, hooks (not started).**
+**Next phase: Phase 6 (not started).**
 
 The scope of Phases 3–6 is not recorded in this repository. Define each
 one here before starting it; don't infer it.
@@ -131,6 +131,40 @@ Verified 2026-09-30 before committing `5a2c61e`:
 1569 tests passing
 1548 existing + 21 new
 0 existing tests modified
+ruff check passes
+formatting passes
+```
+
+### Phase 5: hooks (complete)
+
+Commit `50720ad`, "feat: resolve hook coverage at runtime". Unreleased.
+
+- The installed pre-commit and post-merge hooks are a constant shim
+  (`envshield hook run <event>`). They contain no service names, paths,
+  or other project topology, so installing them no longer embeds the
+  project's shape, and they don't go stale when `envshield.yml` changes.
+- Coverage is resolved when the hook runs, from the current
+  `envshield.yml`: changed files → each schema's dependency closure (the
+  schema plus its `extends` chain, `config_manager.get_schema_files`) →
+  every registered user of that schema (`get_schema_users`) → the existing
+  per-service checks. A changed `envshield.yml` affects every service.
+- Shared-schema users are all checked (fixes `BL-136`). Each is checked
+  through its own projection; nothing is merged or granted.
+- The `extends` walk is now one shared generator
+  (`config_manager._iter_schema_chain`), used by schema loading,
+  provenance, and the dependency closure.
+- `hook status` reports live coverage and labels older EnvShield hooks.
+  Ownership and overwrite rules are unchanged (exact content match).
+- Pre-commit fails closed when topology can't be resolved; post-merge
+  stays non-blocking.
+
+Verified 2026-09-30 before committing `50720ad`:
+
+```text
+1608 tests passing
+1569 existing + 43 new - 4 obsolete
+17 existing tests rewritten or merged: they asserted the old generated-hook
+  layout or the old stale-after-config-change behavior
 ruff check passes
 formatting passes
 ```

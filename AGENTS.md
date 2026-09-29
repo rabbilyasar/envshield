@@ -419,6 +419,11 @@ Phase status: [progress.md](progress.md).
   `load_schema_view_for_diff` (revision).
 - Resolve topology centrally: `get_service_dir()` for a service's
   directory, `get_schema_users()` for who shares a schema.
+- Hooks contain no project topology; coverage is resolved from the current
+  project configuration when the hook runs (`envshield hook run`). A
+  schema's coverage includes its `extends` chain
+  (`config_manager.get_schema_files()`). Hooks choose which services to
+  check; they never grant anything.
 - Never broaden a secret's scope, whether silently, as a fallback, or for
   convenience. In a shared schema an unscoped secret is an error, and
   that stays fail-closed.
@@ -829,10 +834,10 @@ pruning) — none are blockers, and none require another Phase 2C milestone.
 **Current phase (updated 2026-09-30): Shared System Schema.** Latest
 release tag is `v4.7.4`. Phase 1 (shared schema projection) is committed as
 `f34bfb9`, Phase 2 (explicit service `dir`) as `a2be864`, Phase 3
-(physical-file contracts) as `e336812`, and Phase 4 (out-of-scope
-reporting) as `5a2c61e`, all unreleased; 1569 tests passing. See
-[progress.md](progress.md) for phase status; Phase 5 (hooks) is the next
-phase and has not started. The
+(physical-file contracts) as `e336812`, Phase 4 (out-of-scope
+reporting) as `5a2c61e`, and Phase 5 (hooks) as `50720ad`, all
+unreleased; 1608 tests passing. See [progress.md](progress.md) for phase
+status; Phase 6 is the next phase and has not started. The
 paragraphs below are the post-`v4.6.1` record, kept as history.
 
 **Current phase: post-`v4.6.1`. Every release blocker in BACKLOG.md's Part 0
