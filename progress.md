@@ -16,12 +16,12 @@ Findings: BACKLOG.md Part 5b (`BL-135` to `BL-142`).
 |---|---|
 | Phase 1 | Complete (committed `f34bfb9`) |
 | Phase 2 | Complete (committed `a2be864`) |
-| Phase 3 | Not started |
+| Phase 3 | Complete (committed `e336812`) |
 | Phase 4 | Not started |
 | Phase 5 | Not started |
 | Phase 6 | Not started |
 
-**Next phase: Phase 3 (not started).**
+**Next phase: Phase 4 (not started).**
 
 The scope of Phases 3–6 is not recorded in this repository. Define each
 one here before starting it; don't infer it.
@@ -77,6 +77,31 @@ Verified 2026-09-29 before committing `a2be864`:
 ```text
 1527 tests passing
 1504 existing + 23 new
+0 existing tests modified
+ruff check passes
+formatting passes
+```
+
+### Phase 3: physical-file contracts (complete)
+
+Commit `e336812`, "feat: support shared physical file contracts". Unreleased.
+
+- Services whose `.env` (or `.env.example`) resolves to the same physical
+  file use the union of their projections for that file
+  (`config_manager.get_file_peers` / `load_file_contract`,
+  `schema_scope.union_fields`). `schema sync` and `setup` write from it;
+  `check`/`doctor` don't report a peer's variables as extra.
+- `.env` and `.env.example` peers are resolved independently.
+- Conflicting definitions in a shared file (e.g. different per-service
+  defaults) fail closed with `FileContractConflictError`. Differing
+  descriptions are not a conflict.
+- The union doesn't widen any service's grants; secrets stay scoped.
+
+Verified 2026-09-29 before committing `e336812`:
+
+```text
+1548 tests passing
+1527 existing + 21 new
 0 existing tests modified
 ruff check passes
 formatting passes

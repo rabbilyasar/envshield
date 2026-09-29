@@ -1063,7 +1063,8 @@ Findings from the shared-system-schema design and implementation work
 architecture itself is documented in
 [docs/architecture/shared-system-schema.md](docs/architecture/shared-system-schema.md);
 phase status is in [progress.md](progress.md). Phase 1 is committed as
-`f34bfb9`. Phase 2 (explicit service `dir`) is committed as `a2be864`.
+`f34bfb9`, Phase 2 (explicit service `dir`) as `a2be864`, and Phase 3
+(physical-file contracts) as `e336812`.
 
 ### BL-135 — `service add --schema` discarded the `DIRECTORY` argument
 
@@ -1106,6 +1107,7 @@ Component: `core/setup_manager.py::run_setup` / `_write_dotenv_local_file`
 - **Claim:** when two services materialize into the same `.env`, running `setup` for one can wipe the other's values, because the dotenv path is a full rewrite driven by one service's projection.
 - **Counter-evidence from code reading:** keys already present in an existing local file are carried over (`setup_manager.py`, `all_keys = schema keys + seed keys`), so the straightforward path preserves them. The failing path, if one exists, must be reproduced before this is marked `CONFIRMED`. Candidates include seeding from `.env.example` when the local file is absent, and a union-mode (`BL-030`) multi-source layout.
 - **Expected behavior:** any write to a shared physical file uses the union contract of every service projection materialized into it.
+- **Update (`e336812`, Phase 3):** `setup` now writes a shared local file from the union of every sharing service's projection (`config_manager.load_file_contract`). The originally reported data-loss path is still not reproduced, so the evidence status is unchanged.
 
 ### BL-139 — `init --force` rewrites `envshield.yml` down to one service
 

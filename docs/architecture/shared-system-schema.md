@@ -68,6 +68,35 @@ stored. Any operation that rewrites or validates a shared physical file
 must use the union, or it will drop or misreport another service's
 variables.
 
+Implemented by `config_manager.load_file_contract(service, key)`:
+
+- **Peers** (`get_file_peers`) are the registered services whose
+  `local_file` (or `example_file`) resolves to the same physical path.
+  The two keys are resolved independently: sharing `.env` says nothing
+  about sharing `.env.example`.
+- **Union** (`schema_scope.union_fields`) is deterministic: projections
+  are taken in service-name order, so `envshield.yml` order never
+  changes it.
+- **Conflicts fail closed.** A variable several peers receive must have
+  the same effective definition in each. Different per-service
+  `defaultValue`s raise `FileContractConflictError` rather than one being
+  chosen. Differing `description`s are not a conflict; the shared file's
+  entry simply carries none.
+- **No grant is widened.** The union is for the file only. Each service's
+  projection (`load_schema`) and grants are unchanged, so a secret stays
+  out of scope for a service that merely shares a file holding it.
+- **Single-service files** are unchanged: their contract is exactly
+  `load_schema(service)`.
+- **Writers vs. validators.** `schema sync` and `setup` write a shared
+  file from the union. `check` and `doctor` still judge a service's own
+  requirements against its projection, and only stop reporting a peer's
+  variables as extra.
+- **Unresolved peers.** A registered service whose paths can't be
+  resolved (e.g. a shared-schema service without `dir`) is skipped only
+  when it provably can't use the file: its own file override points
+  elsewhere, or, without one, its default file next to its schema isn't
+  this file. Otherwise the operation fails with `ServiceConfigError`.
+
 ### Logical service ≠ container/process
 
 A registered service is a logical consumer of configuration: a unit that
@@ -227,5 +256,6 @@ not intended semantics, and Phase 2 deliberately leaves it as is. See
 - Get a service's directory from `get_service_dir()`. Get the services
   sharing a schema from `get_schema_users()`.
 - Operations on a physical file shared by several services must use the
-  union of their projections.
+  union of their projections, via `load_file_contract()` (or
+  `get_file_contract_vars()` for names only).
 - Never widen a secret's grant as a fallback or convenience.
