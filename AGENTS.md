@@ -429,6 +429,11 @@ Phase status: [progress.md](progress.md).
   `get_file_contract_vars()` for names only), never by merging projections
   yourself. It's for the file only, never a service's grants, which remain
   `load_schema()`.
+- For one service a variable is `in_scope`, `out_of_scope` (defined,
+  granted only to other services), or `undefined`
+  (`ServiceSchemaView.status()`). Out-of-scope is a reporting distinction,
+  not an authorization grant: never add it to `load_schema()` or treat it
+  as valid, and never soften a failure because of it.
 - A logical service is not a container or process.
 - Preserve backward compatibility for unique (single-user) schemas.
 
@@ -821,12 +826,13 @@ backlog (revision-aware service-directory resolution for the explicit
 two-revision form, discovered-file size cap, `DEFAULT_EXCLUDED_DIRS`-style
 pruning) — none are blockers, and none require another Phase 2C milestone.
 
-**Current phase (updated 2026-09-29): Shared System Schema.** Latest
+**Current phase (updated 2026-09-30): Shared System Schema.** Latest
 release tag is `v4.7.4`. Phase 1 (shared schema projection) is committed as
-`f34bfb9`, Phase 2 (explicit service `dir`) as `a2be864`, and Phase 3
-(physical-file contracts) as `e336812`, all unreleased; 1548 tests passing.
-See [progress.md](progress.md) for phase status; Phase 4 is the next phase
-and has not started. The
+`f34bfb9`, Phase 2 (explicit service `dir`) as `a2be864`, Phase 3
+(physical-file contracts) as `e336812`, and Phase 4 (out-of-scope
+reporting) as `5a2c61e`, all unreleased; 1569 tests passing. See
+[progress.md](progress.md) for phase status; Phase 5 (hooks) is the next
+phase and has not started. The
 paragraphs below are the post-`v4.6.1` record, kept as history.
 
 **Current phase: post-`v4.6.1`. Every release blocker in BACKLOG.md's Part 0

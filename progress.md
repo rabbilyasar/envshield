@@ -3,7 +3,7 @@
 Internal status of in-flight multi-phase work. Public direction lives in
 [ROADMAP.md](ROADMAP.md); individual findings in [BACKLOG.md](BACKLOG.md).
 
-Last updated: 2026-09-29.
+Last updated: 2026-09-30.
 
 ---
 
@@ -17,11 +17,11 @@ Findings: BACKLOG.md Part 5b (`BL-135` to `BL-142`).
 | Phase 1 | Complete (committed `f34bfb9`) |
 | Phase 2 | Complete (committed `a2be864`) |
 | Phase 3 | Complete (committed `e336812`) |
-| Phase 4 | Not started |
+| Phase 4 | Complete (committed `5a2c61e`) |
 | Phase 5 | Not started |
 | Phase 6 | Not started |
 
-**Next phase: Phase 4 (not started).**
+**Next phase: Phase 5, hooks (not started).**
 
 The scope of Phases 3–6 is not recorded in this repository. Define each
 one here before starting it; don't infer it.
@@ -102,6 +102,34 @@ Verified 2026-09-29 before committing `e336812`:
 ```text
 1548 tests passing
 1527 existing + 21 new
+0 existing tests modified
+ruff check passes
+formatting passes
+```
+
+### Phase 4: out-of-scope reporting (complete)
+
+Commit `5a2c61e`, "feat: distinguish out of scope variables". Unreleased.
+
+- Reporting distinguishes `out_of_scope` (defined in the system schema,
+  not granted to this service) from `undefined`, via
+  `ServiceSchemaView.status()`: `undeclared` (JSON/SARIF), `scan --json`,
+  `explain` (`scope`, `granted_to`), `check --json` (`out_of_scope`, a
+  subset of `extra`), `doctor` messages, and `schema diff` (grant
+  revoked/added, per revision).
+- Reporting only. Out-of-scope variables stay out of `load_schema()`, and
+  every failure is unchanged: still `missing_declaration`, undeclared,
+  `extra`, or `found: false`.
+- New JSON keys appear only when a variable is out of scope, so ordinary
+  and single-user payloads are unchanged.
+- A peer's variable in a shared physical file is still not reported (the
+  Phase 3 file contract allows it).
+
+Verified 2026-09-30 before committing `5a2c61e`:
+
+```text
+1569 tests passing
+1548 existing + 21 new
 0 existing tests modified
 ruff check passes
 formatting passes

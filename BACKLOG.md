@@ -1063,8 +1063,9 @@ Findings from the shared-system-schema design and implementation work
 architecture itself is documented in
 [docs/architecture/shared-system-schema.md](docs/architecture/shared-system-schema.md);
 phase status is in [progress.md](progress.md). Phase 1 is committed as
-`f34bfb9`, Phase 2 (explicit service `dir`) as `a2be864`, and Phase 3
-(physical-file contracts) as `e336812`.
+`f34bfb9`, Phase 2 (explicit service `dir`) as `a2be864`, Phase 3
+(physical-file contracts) as `e336812`, and Phase 4 (out-of-scope
+reporting) as `5a2c61e`.
 
 ### BL-135 — `service add --schema` discarded the `DIRECTORY` argument
 
@@ -1097,6 +1098,7 @@ Component: `core/scanner.py` undeclared-variable routing
 - **Current behavior:** services with an identical `dir` tie on length; the stable sort leaves them in name order, so the alphabetically-first service's projection silently judges every file in that directory. The other service's schema is never consulted there.
 - **Expected behavior:** undecided. The options are the union of the tied projections, an explicit error, or a prompt. Phase 2 deliberately does not reject equal directories in `service add`.
 - **Decision:** leave open until equal-directory semantics are decided.
+- **Update (`5a2c61e`, Phase 4):** `scan` now labels an undeclared read `out_of_scope` when the system schema defines it. With tied directories, that label is also judged against the name-order-first service's projection, so a read the other tied service is granted can show as out of scope. Same root cause; no separate finding.
 
 ### BL-138 — `setup` may drop another service's values from a shared physical dotenv file
 

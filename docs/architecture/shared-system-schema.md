@@ -97,6 +97,48 @@ Implemented by `config_manager.load_file_contract(service, key)`:
   elsewhere, or, without one, its default file next to its schema isn't
   this file. Otherwise the operation fails with `ServiceConfigError`.
 
+### Scope status: in_scope, out_of_scope, undefined
+
+For one service, every variable name falls in exactly one state
+(`ServiceSchemaView.status(var)`):
+
+```text
+system schema
+    ↓
+service projection
+    ├── in_scope       defined and granted to this service
+    └── out_of_scope   defined, but granted only to other services
+(absent)               undefined: not in the system schema at all
+```
+
+**Out-of-scope is a reporting distinction, not an authorization grant.**
+An out-of-scope variable is never added to `load_schema(service)` and
+never counts as valid for that service because it exists elsewhere in the
+system. Every check that failed for an undefined variable still fails for
+an out-of-scope one; only the wording and the suggested fix differ
+("grant it via `services`", not "declare it").
+
+The physical-file contract is a separate question. A variable can be out
+of scope for a service and still legitimately sit in a `.env` that service
+shares with the peer that receives it. There, `check`/`doctor` don't
+report it at all, because the file contract allows it. Elsewhere (an
+unshared file, a deployment manifest, source code) it's reported as out of
+scope.
+
+Where it's reported:
+
+| Surface | Out-of-scope reporting |
+|---|---|
+| `undeclared` | Still `missing_declaration` (exit 1). JSON/SARIF add `scope: "out_of_scope"`. Judged against the projection at `REV_B`, using `envshield.yml` at that revision. |
+| `scan` | Still an undeclared finding. JSON adds `scope: "out_of_scope"`. Routed to a service by directory, as before (see `BL-137`). |
+| `explain` | Still `found: false` (exit 1). JSON adds `scope: "out_of_scope"` and `granted_to` (service names). |
+| `check` / `doctor` | Still `extra` (not clean). `check --json` adds `out_of_scope`, the subset of `extra`. Human output labels those rows separately. |
+| `schema diff` | Category unchanged. A revoked grant reports `detail.scope: "out_of_scope"` rather than a removal from the system. A new grant of an existing variable adds `detail.scope_before: "out_of_scope"`. Each side uses its own revision's topology. |
+
+These keys appear only when a variable really is out of scope. A
+single-user schema can't have out-of-scope variables, so its output is
+unchanged.
+
 ### Logical service ≠ container/process
 
 A registered service is a logical consumer of configuration: a unit that
@@ -259,3 +301,7 @@ not intended semantics, and Phase 2 deliberately leaves it as is. See
   union of their projections, via `load_file_contract()` (or
   `get_file_contract_vars()` for names only).
 - Never widen a secret's grant as a fallback or convenience.
+- To tell out-of-scope from undefined, use `ServiceSchemaView.status()`
+  (or `schema_manager.mark_out_of_scope()` / `system_only_vars()` for a
+  `SchemaDiff`). Report the difference; never accept an out-of-scope
+  variable because of it.
