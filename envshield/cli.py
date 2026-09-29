@@ -2265,16 +2265,55 @@ def service_add(
                 console.print(
                     f"[dim]Found deployment manifest {deployment_manifest} -- registering it too.[/dim]"
                 )
+        # DIRECTORY is persisted as the service's explicit 'dir' whenever
+        # the schema's own location wouldn't imply it: a schema outside
+        # DIRECTORY (--schema), or a schema other services already use --
+        # a shared schema never falls back to its parent directory (see
+        # config_manager.get_service_dir). The legacy 'DIRECTORY/
+        # env.schema.toml' shape is written exactly as before, with no 'dir'.
+        # An entry that already has a 'dir' always gets DIRECTORY written
+        # over it -- add_service merges, so omitting it would keep a stale
+        # one.
+        other_users = [
+            user
+            for user in config_manager.get_schema_users(schema_path)
+            if user != name
+        ]
+        existing = config_manager.get_services().get(name)
+        schema_parent = os.path.dirname(schema_path) or "."
+        service_dir = (
+            os.path.normpath(directory)
+            if other_users
+            or (isinstance(existing, dict) and "dir" in existing)
+            or os.path.normpath(directory) != os.path.normpath(schema_parent)
+            else None
+        )
         config_manager.add_service(
             name,
             schema_path,
             local_file=local_file,
             example_file=example_file,
             description=description,
+            service_dir=service_dir,
         )
         console.print(
             f"[bold green]✓[/bold green] Registered service [bold cyan]{name}[/bold cyan] → {schema_path}"
         )
+        services = config_manager.get_services()
+        missing_dir = [
+            user
+            for user in other_users
+            if isinstance(services.get(user), dict) and "dir" not in services[user]
+        ]
+        if missing_dir:
+            console.print(
+                f"[yellow]'{schema_path}' is now shared, and "
+                f"{', '.join(missing_dir)} ha{'s' if len(missing_dir) == 1 else 've'} "
+                "no 'dir:' -- commands for "
+                f"{'it' if len(missing_dir) == 1 else 'them'} will fail until you "
+                "set one. Re-run 'envshield service add <name> <directory> "
+                f"--schema {schema_path}' for each.[/yellow]"
+            )
         if deployment_manifest:
             config_manager.add_manifest(
                 deployment_manifest, {manifest_container or name: name}

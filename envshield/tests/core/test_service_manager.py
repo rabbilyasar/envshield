@@ -324,3 +324,86 @@ class TestInferFromInvocationDirGitBoundary:
         )
 
         assert inferred == "alpha"
+
+
+class TestInferenceWithExplicitDirs:
+    """Phase 2: invocation-dir inference uses the persisted `dir` and keeps
+    today's ambiguity rule -- more than one match -> no inference (the
+    caller then prompts, or runs every target without a TTY)."""
+
+    SHARED = "services:\n  api:\n    schema: env.schema.toml\n    dir: {api}\n  worker:\n    schema: env.schema.toml\n    dir: {worker}\n"
+
+    def _setup(self, tmp_path, monkeypatch, api, worker):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "envshield.yml").write_text(
+            self.SHARED.format(api=api, worker=worker)
+        )
+        for d in {api, worker}:
+            (tmp_path / d).mkdir(parents=True, exist_ok=True)
+
+    def test_distinct_explicit_dirs_infer_the_right_service(
+        self, tmp_path, monkeypatch
+    ):
+        self._setup(tmp_path, monkeypatch, "api", "worker")
+        infer = service_manager._infer_from_invocation_dir
+        assert infer(["api", "worker"], str(tmp_path / "worker")) == "worker"
+        assert infer(["api", "worker"], str(tmp_path / "api")) == "api"
+        assert infer(["api", "worker"], str(tmp_path)) is None
+
+    def test_equal_dirs_do_not_infer(self, tmp_path, monkeypatch):
+        self._setup(tmp_path, monkeypatch, "app", "app")
+        assert (
+            service_manager._infer_from_invocation_dir(
+                ["api", "worker"], str(tmp_path / "app")
+            )
+            is None
+        )
+
+    def test_equal_dirs_prompt_when_resolving(self, mocker, tmp_path, monkeypatch):
+        self._setup(tmp_path, monkeypatch, "app", "app")
+        mocker.patch(
+            "envshield.core.service_manager._is_interactive", return_value=True
+        )
+        select = mocker.patch("questionary.select")
+        select.return_value.ask.return_value = "worker"
+        assert (
+            service_manager.resolve_service(invocation_dir=str(tmp_path / "app"))
+            == "worker"
+        )
+        select.assert_called_once()
+
+    def test_nested_dirs_are_ambiguous_inside_the_inner_one(
+        self, tmp_path, monkeypatch
+    ):
+        self._setup(tmp_path, monkeypatch, "app", "app/worker")
+        infer = service_manager._infer_from_invocation_dir
+        assert infer(["api", "worker"], str(tmp_path / "app" / "worker")) is None
+        assert infer(["api", "worker"], str(tmp_path / "app")) == "api"
+
+    def test_overlapping_prefix_names_are_not_nested(self, tmp_path, monkeypatch):
+        self._setup(tmp_path, monkeypatch, "app", "app-worker")
+        infer = service_manager._infer_from_invocation_dir
+        assert infer(["api", "worker"], str(tmp_path / "app-worker")) == "worker"
+        assert infer(["api", "worker"], str(tmp_path / "app")) == "api"
+
+    def test_shared_schema_missing_dir_is_skipped_not_inferred(
+        self, tmp_path, monkeypatch
+    ):
+        """A service whose dir can't be resolved never becomes the inferred
+        target -- inference already skips an EnvShieldException."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "envshield.yml").write_text(
+            "services:\n  api:\n    schema: env.schema.toml\n    dir: api\n"
+            "  worker:\n    schema: env.schema.toml\n"
+        )
+        (tmp_path / "api").mkdir()
+        assert (
+            service_manager._infer_from_invocation_dir(
+                ["api", "worker"], str(tmp_path / "api")
+            )
+            == "api"
+        )
+        assert (
+            service_manager._infer_from_invocation_dir(["api", "worker"], str(tmp_path))
+            is None
+        )

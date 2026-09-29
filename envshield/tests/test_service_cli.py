@@ -561,3 +561,101 @@ class TestPythonLocalFileSurfaceIsDefinedOnce:
 
             assert schema["API_ADMIN_TOKEN"]["secret"] is True
             assert "defaultValue" not in schema["API_ADMIN_TOKEN"]
+
+
+# --- Shared system schema, Phase 2: 'service add' must persist DIRECTORY.
+
+
+def test_service_add_with_shared_schema_persists_the_directory(tmp_path):
+    """Real bug: DIRECTORY was only used for an existence check and the
+    default schema path -- with --schema it was silently discarded."""
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.makedirs("api")
+        os.makedirs("worker")
+        with open("env.schema.toml", "w") as f:
+            f.write("[LOG_LEVEL]\n")
+
+        for name in ("api", "worker"):
+            result = runner.invoke(
+                app, ["service", "add", name, name, "--schema", "env.schema.toml"]
+            )
+            assert result.exit_code == 0, result.stdout
+
+        services = config_manager.get_services()
+        assert services["api"]["dir"] == "api"
+        assert services["worker"]["dir"] == "worker"
+        assert config_manager.get_service_dir("worker") == "worker"
+        assert config_manager.get_env_paths("worker")["local_file"] == os.path.join(
+            "worker", ".env"
+        )
+
+
+def test_service_add_default_schema_path_writes_no_dir_key(tmp_path):
+    """Legacy shape stays byte-for-byte: DIRECTORY == schema parent."""
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.makedirs("alpha")
+        runner.invoke(app, ["service", "add", "alpha", "alpha"])
+        runner.invoke(
+            app,
+            ["service", "add", "beta", "alpha", "--schema", "alpha/other.schema.toml"],
+        )
+        services = config_manager.get_services()
+        assert services["alpha"] == {"schema": "alpha/env.schema.toml"}
+        assert "dir" not in services["beta"]
+
+
+def test_service_add_joining_a_schema_persists_dir_even_when_it_equals_the_parent(
+    tmp_path,
+):
+    """Joining an existing schema makes it shared -- the new service's dir
+    must be explicit even if it happens to match the schema's parent."""
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.makedirs("api")
+        with open("env.schema.toml", "w") as f:
+            f.write("[LOG_LEVEL]\n")
+        runner.invoke(
+            app, ["service", "add", "api", "api", "--schema", "env.schema.toml"]
+        )
+        result = runner.invoke(
+            app, ["service", "add", "web", ".", "--schema", "env.schema.toml"]
+        )
+        assert result.exit_code == 0, result.stdout
+        assert config_manager.get_services()["web"]["dir"] == "."
+
+
+def test_service_add_re_add_replaces_a_stale_dir_with_the_schema_parent(tmp_path):
+    """Re-adding with DIRECTORY equal to the schema's parent must not keep
+    a previously persisted, different 'dir' (add_service merges)."""
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.makedirs("api")
+        os.makedirs("old")
+        with open("api/env.schema.toml", "w") as f:
+            f.write("[LOG_LEVEL]\n")
+        args = ["service", "add", "api"]
+        schema = ["--schema", "api/env.schema.toml"]
+        assert runner.invoke(app, [*args, "old", *schema]).exit_code == 0
+        assert config_manager.get_services()["api"]["dir"] == "old"
+
+        result = runner.invoke(app, [*args, "api", *schema])
+        assert result.exit_code == 0, result.stdout
+        assert config_manager.get_services()["api"].get("dir") != "old"
+        assert config_manager.get_service_dir("api") == "api"
+
+
+def test_service_add_warns_when_another_user_of_the_schema_lacks_a_dir(tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.makedirs("worker")
+        with open("env.schema.toml", "w") as f:
+            f.write("[LOG_LEVEL]\n")
+        runner.invoke(
+            app, ["service", "add", "api", ".", "--schema", "env.schema.toml"]
+        )
+        assert "dir" not in config_manager.get_services()["api"]
+
+        result = runner.invoke(
+            app, ["service", "add", "worker", "worker", "--schema", "env.schema.toml"]
+        )
+        assert result.exit_code == 0, result.stdout
+        assert "api" in result.stdout and "dir" in result.stdout
+        # Not silently backfilled -- the user must choose api's directory.
+        assert "dir" not in config_manager.get_services()["api"]

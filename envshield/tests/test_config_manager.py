@@ -1499,3 +1499,106 @@ class TestLoadBareSchemaScope:
         (tmp_path / "env.schema.toml").write_text('[A]\nservices = ["api"]\n')
         with pytest.raises(SchemaScopeError, match="--service"):
             config_manager.load_bare_schema()
+
+
+class TestExplicitServiceDir:
+    """Phase 2: a persisted `dir` wins; single-user schemas keep falling
+    back to the schema's parent; a shared schema never falls back."""
+
+    def _yml(self, tmp_path, monkeypatch, yml):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "envshield.yml").write_text(yml)
+
+    def test_explicit_dir_wins_over_schema_parent(self, tmp_path, monkeypatch):
+        self._yml(
+            tmp_path,
+            monkeypatch,
+            "services:\n  api:\n    schema: env.schema.toml\n    dir: services/api/\n",
+        )
+        assert config_manager.get_service_dir("api") == os.path.join("services", "api")
+        assert config_manager.get_env_paths("api") == {
+            "example_file": os.path.join("services", "api", ".env.example"),
+            "local_file": os.path.join("services", "api", ".env"),
+        }
+
+    def test_explicit_dot_dir_is_the_project_root(self, tmp_path, monkeypatch):
+        self._yml(
+            tmp_path,
+            monkeypatch,
+            "services:\n  api:\n    schema: api/env.schema.toml\n    dir: ./\n",
+        )
+        assert config_manager.get_service_dir("api") == "."
+
+    def test_single_user_schema_falls_back_to_schema_parent(
+        self, tmp_path, monkeypatch
+    ):
+        self._yml(
+            tmp_path,
+            monkeypatch,
+            "services:\n  api:\n    schema: services/api/env.schema.toml\n"
+            "  web:\n    schema: env.schema.toml\n",
+        )
+        assert config_manager.get_service_dir("api") == "services/api"
+        assert config_manager.get_service_dir("web") == "."
+
+    def test_shared_schema_without_dir_fails(self, tmp_path, monkeypatch):
+        self._yml(
+            tmp_path,
+            monkeypatch,
+            "services:\n  api:\n    schema: env.schema.toml\n    dir: api\n"
+            "  worker:\n    schema: env.schema.toml\n",
+        )
+        assert config_manager.get_service_dir("api") == "api"
+        with pytest.raises(ServiceConfigError) as exc:
+            config_manager.get_service_dir("worker")
+        message = str(exc.value)
+        assert "api, worker" in message and "dir:" in message
+        with pytest.raises(ServiceConfigError):
+            config_manager.get_env_paths("worker")
+
+    def test_equal_explicit_dirs_are_allowed(self, tmp_path, monkeypatch):
+        self._yml(
+            tmp_path,
+            monkeypatch,
+            "services:\n  web:\n    schema: env.schema.toml\n    dir: .\n"
+            "  worker:\n    schema: env.schema.toml\n    dir: .\n",
+        )
+        assert config_manager.get_service_dir("web") == "."
+        assert config_manager.get_service_dir("worker") == "."
+
+    def test_dir_escaping_the_project_is_rejected(self, tmp_path, monkeypatch):
+        self._yml(
+            tmp_path,
+            monkeypatch,
+            "services:\n  api:\n    schema: env.schema.toml\n    dir: ../outside\n",
+        )
+        with pytest.raises(UnsafePathError):
+            config_manager.get_service_dir("api")
+
+    @pytest.mark.parametrize("value", ['""', "3", "[api]"])
+    def test_malformed_dir_is_a_config_error(self, tmp_path, monkeypatch, value):
+        self._yml(
+            tmp_path,
+            monkeypatch,
+            f"services:\n  api:\n    schema: env.schema.toml\n    dir: {value}\n",
+        )
+        with pytest.raises(ServiceConfigError, match="dir"):
+            config_manager.get_service_dir("api")
+
+    def test_add_service_persists_and_preserves_dir(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        config_manager.add_service("api", "env.schema.toml", service_dir="api")
+        assert config_manager.get_services()["api"]["dir"] == "api"
+        # A later add without a dir keeps the persisted one (merge semantics).
+        config_manager.add_service("api", "env.schema.toml", description="d")
+        assert config_manager.get_services()["api"]["dir"] == "api"
+
+    def test_add_service_without_dir_writes_no_dir_key(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        config_manager.add_service("api", "api/env.schema.toml")
+        assert "dir" not in config_manager.get_services()["api"]
+
+    def test_add_service_rejects_dir_escaping_project(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(UnsafePathError):
+            config_manager.add_service("api", "env.schema.toml", service_dir="../x")

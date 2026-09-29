@@ -469,6 +469,7 @@ def add_service(
     example_file: Optional[str] = None,
     description: Optional[str] = None,
     config_source: Optional[str] = None,
+    service_dir: Optional[str] = None,
 ) -> None:
     """
     Adds (or updates) one service entry in envshield.yml, creating the file
@@ -494,6 +495,10 @@ def add_service(
     re-running auto-detection, which could silently pick a different file
     (e.g. a locally-drifted '.env') and regress the schema based on it.
 
+    `service_dir`, when given, is persisted as the service's explicit
+    `dir` (see get_service_dir) -- required for every service sharing a
+    schema file, optional otherwise.
+
     Note: envshield.yml is rewritten via a full YAML re-serialization, so
     any hand-written comments in an existing file won't survive.
     """
@@ -504,6 +509,8 @@ def add_service(
         example_file = _ensure_within_project(
             example_file, f"service '{name}' example_file"
         )
+    if service_dir:
+        service_dir = _ensure_within_project(service_dir, f"service '{name}' dir")
 
     config = load_config()
     services = config.get("services")
@@ -522,6 +529,8 @@ def add_service(
         entry["example_file"] = example_file
     if config_source:
         entry["config_source"] = config_source
+    if service_dir:
+        entry["dir"] = service_dir
     services[name] = entry
 
     if (
@@ -799,15 +808,47 @@ def get_deployment_manifests(service_name: str) -> List[Dict[str, Any]]:
 
 def get_service_dir(service_name: str) -> str:
     """
-    Returns the directory a service's schema lives in -- treated throughout
-    EnvShield as that service's root (e.g. 'alpha' for a schema at
-    'alpha/env.schema.toml'). Raises SchemaNotFoundError if the service
-    isn't declared in envshield.yml.
+    Returns the service's root directory -- the one EnvShield treats as
+    "this service's code" throughout (env file defaults, discovery, scan
+    routing, invocation-dir inference).
+
+    An explicit `dir` in envshield.yml always wins. Without one, a schema
+    used by exactly one service falls back to the directory that schema
+    lives in (e.g. 'alpha' for 'alpha/env.schema.toml') -- the original
+    behavior, unchanged. A schema shared by several services never falls
+    back: every sharing service would get the same directory (typically the
+    project root), silently claiming each other's code -- so a missing
+    `dir` there is a ServiceConfigError instead.
+
+    Raises SchemaNotFoundError if the service isn't declared in
+    envshield.yml.
     """
     schema_path = get_service_schema_path(service_name)
     if not schema_path:
         raise SchemaNotFoundError(
             f"Service '{service_name}' not found in configuration."
+        )
+    entry = get_services()[service_name]
+    if "dir" in entry:
+        explicit = entry["dir"]
+        if not isinstance(explicit, str) or not explicit:
+            raise ServiceConfigError(
+                f"Service '{service_name}' has an invalid 'dir:' in "
+                f"{CONFIG_FILE_NAME} -- it must be a directory path relative to "
+                "the project root (use '.' for the root itself)."
+            )
+        return os.path.normpath(
+            _ensure_within_project(explicit, f"service '{service_name}' dir")
+        )
+
+    users = get_schema_users(schema_path)
+    if len(users) > 1:
+        raise ServiceConfigError(
+            f"Services {', '.join(users)} share '{schema_path}', so EnvShield "
+            f"can't tell their code apart by where the schema lives. Add 'dir:' "
+            f"to '{service_name}' (and every service sharing that schema) in "
+            f"{CONFIG_FILE_NAME} -- e.g. 'envshield service add {service_name} "
+            f"<directory> --schema {schema_path}'."
         )
     return os.path.dirname(schema_path) or "."
 
