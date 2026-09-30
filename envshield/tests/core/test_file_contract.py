@@ -49,11 +49,15 @@ SEPARATE = (
     "  api:\n    schema: env.schema.toml\n    dir: api\n"
     "  worker:\n    schema: env.schema.toml\n    dir: worker\n"
 )
-# Same directory -> both default files are shared.
+# Both files shared, through explicit overrides. (Before Phase 6 this was
+# expressed as two services with the same `dir`; that topology is now
+# invalid -- BL-137 -- so sharing a physical file is always explicit.)
 SAME_DIR = (
     "services:\n"
-    "  api:\n    schema: env.schema.toml\n    dir: app\n"
-    "  worker:\n    schema: env.schema.toml\n    dir: app\n"
+    "  api:\n    schema: env.schema.toml\n    dir: api\n"
+    "    local_file: app/.env\n    example_file: app/.env.example\n"
+    "  worker:\n    schema: env.schema.toml\n    dir: worker\n"
+    "    local_file: app/.env\n    example_file: app/.env.example\n"
 )
 
 
@@ -66,6 +70,27 @@ class TestPeersAndUnion:
         contract = config_manager.load_file_contract("api", "local_file")
         assert set(contract) == {"LOG_LEVEL", "API_TOKEN", "QUEUE_URL"}
         assert contract == config_manager.load_file_contract("worker", "local_file")
+
+    def test_an_override_can_share_another_services_default_file(
+        self, tmp_path, monkeypatch
+    ):
+        # Coverage SAME_DIR used to give implicitly: a default-path file
+        # (api's app/.env) takes part in peer matching like an override.
+        _project(
+            tmp_path,
+            monkeypatch,
+            "services:\n"
+            "  api:\n    schema: env.schema.toml\n    dir: app\n"
+            "  worker:\n    schema: env.schema.toml\n    dir: worker\n"
+            "    local_file: ./app/.env\n    example_file: app/.env.example\n",
+        )
+        for key in ("local_file", "example_file"):
+            assert config_manager.get_file_peers("api", key) == ["api", "worker"]
+            assert set(config_manager.load_file_contract("api", key)) == {
+                "LOG_LEVEL",
+                "API_TOKEN",
+                "QUEUE_URL",
+            }
 
     def test_separate_files_are_not_unioned(self, tmp_path, monkeypatch):
         _project(tmp_path, monkeypatch, SEPARATE)
@@ -323,3 +348,99 @@ class TestPeerResolutionBoundary:
         # Its example_file has no override, so that one still fails closed.
         with pytest.raises(ServiceConfigError):
             config_manager.get_file_peers("web", "example_file")
+
+
+# BL-138 reproduction: every candidate path by which 'setup' for one service
+# could drop another service's values from a shared dotenv file. Each seeds
+# the shared '.env' with the peer's values first and asserts they survive
+# byte-for-byte after the other service's setup rewrites the file.
+PEER_VALUES = {"QUEUE_URL": "amqp://peer-only", "PEER_EXTRA": "kept-by-hand"}
+SEPARATE_SCHEMAS_SHARED_LOCAL = (
+    "services:\n"
+    "  api:\n    schema: api/env.schema.toml\n    local_file: .env\n"
+    "  worker:\n    schema: worker/env.schema.toml\n    local_file: .env\n"
+)
+
+
+class TestSetupPreservesPeerValues:
+    @pytest.fixture(autouse=True)
+    def _answers(self, mocker):
+        mocker.patch(
+            "envshield.core.setup_manager.Prompt.ask", side_effect=lambda *a, **k: "v"
+        )
+        mocker.patch("questionary.confirm").return_value.ask.return_value = True
+
+    def _seed_shared_env(self, tmp_path, extra=""):
+        (tmp_path / ".env").write_text(
+            "LOG_LEVEL=debug\n"
+            + "".join(f"{k}={v}\n" for k, v in PEER_VALUES.items())
+            + extra
+        )
+
+    def _assert_peer_values_survive(self, tmp_path):
+        from envshield.parsers.factory import get_parser
+
+        written = get_parser(".env").get_vars(".env", get_values=True)
+        for key, value in PEER_VALUES.items():
+            assert written.get(key) == value, (key, written)
+        assert written["LOG_LEVEL"] == "debug"
+
+    def test_shared_schema_existing_shared_file(self, tmp_path, monkeypatch):
+        _project(tmp_path, monkeypatch, SHARED_LOCAL)
+        self._seed_shared_env(tmp_path)
+        assert setup_manager.run_setup("api")
+        self._assert_peer_values_survive(tmp_path)
+
+    def test_separate_schemas_sharing_one_file(self, tmp_path, monkeypatch):
+        _project(tmp_path, monkeypatch, SEPARATE_SCHEMAS_SHARED_LOCAL)
+        (tmp_path / "api" / "env.schema.toml").write_text(
+            '[LOG_LEVEL]\ndefaultValue = "info"\n[API_TOKEN]\nsecret = true\n'
+        )
+        (tmp_path / "worker" / "env.schema.toml").write_text("[QUEUE_URL]\n")
+        self._seed_shared_env(tmp_path)
+        assert setup_manager.run_setup("api")
+        self._assert_peer_values_survive(tmp_path)
+
+    def test_explicit_output_path_spelled_differently(self, tmp_path, monkeypatch):
+        _project(tmp_path, monkeypatch, SHARED_LOCAL)
+        self._seed_shared_env(tmp_path)
+        assert setup_manager.run_setup("api", output_file="./api/../.env")
+        self._assert_peer_values_survive(tmp_path)
+
+    def test_this_services_schema_is_unloadable(self, tmp_path, monkeypatch):
+        _project(tmp_path, monkeypatch, SEPARATE_SCHEMAS_SHARED_LOCAL)
+        (tmp_path / "api" / "env.schema.toml").write_text("[BROKEN\n")
+        (tmp_path / "worker" / "env.schema.toml").write_text("[QUEUE_URL]\n")
+        self._seed_shared_env(tmp_path)
+        assert setup_manager.run_setup("api")
+        self._assert_peer_values_survive(tmp_path)
+
+    def test_peer_key_with_an_empty_value_is_not_dropped(self, tmp_path, monkeypatch):
+        _project(tmp_path, monkeypatch, SHARED_LOCAL)
+        self._seed_shared_env(tmp_path, extra="PEER_EMPTY=\n")
+        assert setup_manager.run_setup("api")
+        self._assert_peer_values_survive(tmp_path)
+        assert "PEER_EMPTY=" in (tmp_path / ".env").read_text()
+
+    def test_union_completeness_service(self, tmp_path, monkeypatch):
+        _project(
+            tmp_path,
+            monkeypatch,
+            SHARED_LOCAL.replace(
+                "    dir: api\n", "    dir: api\n    completeness: union\n"
+            ),
+        )
+        self._seed_shared_env(tmp_path)
+        assert setup_manager.run_setup("api")
+        self._assert_peer_values_survive(tmp_path)
+
+    def test_absent_shared_file_is_seeded_with_every_peers_variables(
+        self, tmp_path, monkeypatch
+    ):
+        # Nothing to lose, but the file must not come out as api's view only.
+        _project(tmp_path, monkeypatch, SHARED_LOCAL)
+        (tmp_path / "api" / ".env.example").write_text("LOG_LEVEL=\nAPI_TOKEN=\n")
+        assert setup_manager.run_setup("api")
+        body = (tmp_path / ".env").read_text()
+        for var in ("LOG_LEVEL", "API_TOKEN", "QUEUE_URL"):
+            assert f"{var}=" in body

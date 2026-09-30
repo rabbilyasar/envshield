@@ -2333,6 +2333,10 @@ def service_add(
             or os.path.normpath(directory) != os.path.normpath(schema_parent)
             else None
         )
+        if other_users:
+            config_manager.reject_duplicate_dir(
+                name, os.path.normpath(directory), schema_path, legacy_parent=True
+            )
         config_manager.add_service(
             name,
             schema_path,
@@ -2413,6 +2417,38 @@ def service_remove(
         schema_path = None
         local_file = None
 
+    # Who else uses each file (BL-143). None means "can't tell", which is
+    # treated as shared: a file is only ever offered for deletion when no
+    # other registered service provably uses it.
+    def _others(lookup) -> Optional[List[str]]:
+        try:
+            return [user for user in lookup() if user != name]
+        except EnvShieldException:
+            return None
+
+    # A schema is used by every service whose contract includes it: its
+    # direct users, and any service whose schema `extends` it. A peer whose
+    # schema doesn't exist yet can't include anything.
+    def _schema_dependents() -> List[str]:
+        target = os.path.realpath(schema_path)
+        dependents = []
+        for user in config_manager.get_services():
+            if user == name:
+                continue
+            peer_schema = config_manager.get_service_schema_path(user)
+            if os.path.exists(peer_schema) and target in (
+                config_manager.get_schema_files(peer_schema)
+            ):
+                dependents.append(user)
+        return dependents
+
+    schema_others = _others(_schema_dependents) if schema_path else []
+    local_others = (
+        _others(lambda: config_manager.get_file_peers(name, "local_file"))
+        if local_file
+        else []
+    )
+
     try:
         config_manager.remove_service(name)
     except EnvShieldException as e:
@@ -2422,12 +2458,33 @@ def service_remove(
         f"[bold green]✓[/bold green] Removed service [bold cyan]{name}[/bold cyan] from envshield.yml."
     )
 
-    leftover = [p for p in (schema_path, local_file) if p and os.path.exists(p)]
+    leftover = []
+    for path, others in ((schema_path, schema_others), (local_file, local_others)):
+        if not path or not os.path.exists(path):
+            continue
+        if others == []:
+            leftover.append(path)
+        else:
+            users = ", ".join(others) if others else "another registered service"
+            console.print(f"[dim]{path} still used by {users} -- kept.[/dim]")
     if leftover:
         console.print(
             f"[dim]Its files are untouched: {', '.join(leftover)}. Delete them "
             "by hand if you don't want them anymore.[/dim]"
         )
+
+    # Warn and proceed: the removal stands, but if the schema still names
+    # this service (a 'services' grant), every remaining user now fails
+    # closed until that's fixed by hand. The schema is never rewritten.
+    for user in schema_others or []:
+        try:
+            config_manager.load_schema_view(user)
+        except EnvShieldException as e:
+            console.print(
+                f"[yellow]Warning:[/yellow] {e} Until then, commands for "
+                f"{', '.join(schema_others)} will fail."
+            )
+            break
 
     if not config_manager.get_services():
         console.print(

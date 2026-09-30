@@ -490,8 +490,10 @@ class TestRunPreCommit:
         _write(
             "envshield.yml",
             "services:\n"
-            "  api:\n    schema: env.schema.toml\n    dir: app\n"
-            "  worker:\n    schema: env.schema.toml\n    dir: app\n",
+            "  api:\n    schema: env.schema.toml\n    dir: api\n"
+            "    example_file: app/.env.example\n"
+            "  worker:\n    schema: env.schema.toml\n    dir: worker\n"
+            "    example_file: app/.env.example\n",
         )
         _write("env.schema.toml", SHARED_SCHEMA)
         _write("app/.env.example", "LOG_LEVEL=\n")

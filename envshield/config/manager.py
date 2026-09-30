@@ -9,6 +9,7 @@ from envshield.core import schema_scope, schema_types
 from envshield.core.exceptions import (
     ConfigNotFoundError,
     ConfigParseError,
+    DuplicateServiceDirError,
     EnvShieldException,
     InvalidManifestDefinitionError,
     SchemaNotFoundError,
@@ -831,20 +832,14 @@ def get_service_dir(service_name: str) -> str:
         raise SchemaNotFoundError(
             f"Service '{service_name}' not found in configuration."
         )
-    entry = get_services()[service_name]
-    if "dir" in entry:
-        explicit = entry["dir"]
-        if not isinstance(explicit, str) or not explicit:
-            raise ServiceConfigError(
-                f"Service '{service_name}' has an invalid 'dir:' in "
-                f"{CONFIG_FILE_NAME} -- it must be a directory path relative to "
-                "the project root (use '.' for the root itself)."
-            )
-        return os.path.normpath(
-            _ensure_within_project(explicit, f"service '{service_name}' dir")
-        )
-
+    services = get_services()
+    explicit = _explicit_service_dir(service_name, services[service_name])
     users = get_schema_users(schema_path)
+    if explicit is not None:
+        if len(users) > 1:
+            reject_duplicate_dir(service_name, explicit, schema_path)
+        return explicit
+
     if len(users) > 1:
         raise ServiceConfigError(
             f"Services {', '.join(users)} share '{schema_path}', so EnvShield "
@@ -854,6 +849,63 @@ def get_service_dir(service_name: str) -> str:
             f"<directory> --schema {schema_path}'."
         )
     return os.path.dirname(schema_path) or "."
+
+
+def _explicit_service_dir(service_name: str, entry: Any) -> Optional[str]:
+    """A service's explicit, validated `dir`, or None when it has none."""
+    if not isinstance(entry, dict) or "dir" not in entry:
+        return None
+    explicit = entry["dir"]
+    if not isinstance(explicit, str) or not explicit:
+        raise ServiceConfigError(
+            f"Service '{service_name}' has an invalid 'dir:' in "
+            f"{CONFIG_FILE_NAME} -- it must be a directory path relative to "
+            "the project root (use '.' for the root itself)."
+        )
+    return os.path.normpath(
+        _ensure_within_project(explicit, f"service '{service_name}' dir")
+    )
+
+
+def reject_duplicate_dir(
+    service_name: str,
+    service_dir: str,
+    schema_path: str,
+    legacy_parent: bool = False,
+) -> None:
+    """
+    BL-137: two users of one shared schema can't declare the same directory.
+    Used both when resolving a service's directory and when registering one
+    (`service add`), so a hand-edited envshield.yml and a CLI registration
+    are held to one rule.
+    Directory-routed operations (scan routing, discovery) would otherwise
+    judge that code by whichever service sorts first. A peer whose own `dir`
+    is invalid is skipped: it fails its own commands, and a path that isn't
+    a valid in-project directory can't equal this one.
+
+    `legacy_parent` (registration only): a peer with no explicit `dir`
+    counts as living in the schema's parent directory, where it resolved
+    while it was the schema's only user -- so joining it there is caught
+    too, instead of leaving it with a `dir` that can never be set.
+    """
+    services = get_services()
+    for user in get_schema_users(schema_path):
+        if user == service_name:
+            continue
+        try:
+            other = _explicit_service_dir(user, services.get(user))
+        except EnvShieldException:
+            continue
+        if other is None and legacy_parent:
+            other = os.path.dirname(schema_path) or "."
+        if other is not None and same_physical_file(other, service_dir):
+            first, second = sorted((service_name, user))
+            raise DuplicateServiceDirError(
+                f"Services '{first}' and '{second}' share '{schema_path}' and "
+                f"both declare dir '{service_dir}' in {CONFIG_FILE_NAME}. One "
+                "directory of code is one logical service: merge them into one "
+                "service, or give each its own directory."
+            )
 
 
 def normalize_path_for_service_match(file_path: str) -> str:

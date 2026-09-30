@@ -10,7 +10,7 @@ Last updated: 2026-09-30.
 ## Shared System Schema
 
 Architecture: [docs/architecture/shared-system-schema.md](docs/architecture/shared-system-schema.md).
-Findings: BACKLOG.md Part 5b (`BL-135` to `BL-142`).
+Findings: BACKLOG.md Part 5b (`BL-135` to `BL-147`).
 
 | Phase | Status |
 |---|---|
@@ -19,9 +19,9 @@ Findings: BACKLOG.md Part 5b (`BL-135` to `BL-142`).
 | Phase 3 | Complete (committed `e336812`) |
 | Phase 4 | Complete (committed `5a2c61e`) |
 | Phase 5 | Complete (committed `50720ad`) |
-| Phase 6 | Not started |
+| Phase 6 | Implemented in the working tree, uncommitted; pending review |
 
-**Next phase: Phase 6 (not started).**
+**Current: Phase 6 implemented, pending review before commit.**
 
 The scope of Phases 3–6 is not recorded in this repository. Define each
 one here before starting it; don't infer it.
@@ -168,3 +168,104 @@ Verified 2026-09-30 before committing `50720ad`:
 ruff check passes
 formatting passes
 ```
+
+### Phase 6: lifecycle acceptance (implemented, uncommitted)
+
+Objective: show, with repeatable tests, that the Phase 1-5 architecture
+holds across the whole lifecycle (register → setup → sync → check/doctor →
+scan → hooks → topology change → continued development) for every topology
+the five real projects use. Fix only what blocks that. No new capability.
+
+Acceptance criteria:
+
+| # | Criterion | Pass condition |
+|---|---|---|
+| A1 | Single service | Semantic backward compatibility. Legacy shapes give structurally identical `check`/`doctor`/`explain` JSON, `scan --json`, sync results, and generated templates to `v4.7.4` (pre-Phase-1). Intentional differences are documented. |
+| A2 | Separate schemas | Each service in its own directory is independently scoped; nested directories route `scan` to the deepest service. (Two separate schemas in *one* directory: see A12's limitation.) |
+| A3 | Shared schema | Every user is discovered; each is checked through its own projection. |
+| A4 | Shared physical file | `sync`/`setup` write the union; peers' variables aren't extras; no grant is widened. |
+| A5 | One schema, separate files | Each file's contract is its own projection; no union. |
+| A6 | `extends` | A base-only change reaches loading, `schema diff`, and hooks for every leaf schema's users; a scoped base shared across schemas fails closed. |
+| A7 | Topology change | Adding/removing/re-pointing services, including by hand-editing `envshield.yml` after hook install, needs no hook reinstall; hook bytes never change. |
+| A8 | Scope reporting | `out_of_scope` and undefined stay distinct; both still fail. |
+| A9 | Hooks | Pre-commit fails closed on invalid topology; post-merge warns, never blocks. |
+| A10 | Lifecycle safety | No lifecycle command drops, rewrites, or offers for deletion another service's values, schema, or file. |
+| A11 | Opt-out | A project with little EnvShield-managed config keeps its legacy shape; nothing forces `dir`/`services`/manifests. |
+| A12 | Shared-schema directory ambiguity fails closed | Two users of one shared schema in one directory are rejected at registration and fail closed when hand-written (BL-137, option a). Does **not** cover two separate schemas in one directory: that stays a documented legacy limitation (BL-137 residual, option b), where scan routing breaks the tie by name order. |
+
+Real-project models (`envshield/tests/test_lifecycle_acceptance.py`):
+layouts modelled on the real repositories, contents synthetic. The real
+repositories were not modified.
+
+| Model | Topology | Criteria |
+|---|---|---|
+| Zeus | athena + hermes, separate schemas `extends` one base, Python local files, several containers per service | A1, A2, A6, A7, A9 |
+| KemonChilo | one service at the root, web + worker processes | A1, A7, A11, A12 |
+| JossJobs | root + nested `frontend/`, separate schemas, `.env.local` naming, service added after hook install | A2, A7, A8, A10 |
+| IssueBear | one service, Python local file, three containers → one service | A1, A11 |
+| Portfolio (rabbilyasar.com) | one service, almost no managed config (Worker bindings) | A1, A11 |
+| Synthetic | api + worker share a schema and `.env`; web shares the schema only; jobs added by hand | A3, A4, A5, A7, A8, A9, A10, A12 |
+
+Work:
+
+- `BL-137` (option a): `DuplicateServiceDirError` from `get_service_dir`;
+  `scan` fails closed instead of skipping; `service add` rejects the join
+  (a peer with no `dir` counts as at the schema's parent). The residual
+  case (different schemas, same directory) is decided as a documented
+  legacy limitation (option b), not fixed: single-user schemas keep
+  their behavior.
+- `BL-143`: `service remove` never offers a schema or file another service
+  uses, including a schema another service `extends` (a gap found and
+  fixed in the final acceptance review), and warns (then proceeds) when a
+  `services` grant still names the removed service.
+- `BL-138`: reproduction attempted on seven candidate paths before any
+  change; none lose data; refuted.
+- New follow-ups recorded, not fixed: `BL-144`, `BL-145`, `BL-146`, `BL-147`.
+
+Intentional behavior change: two users of one shared schema can no longer
+share a directory. Phase 3's tests used that as the way to share default
+files; they now share the file through explicit `local_file`/`example_file`
+overrides, with unchanged assertions.
+
+Verified 2026-09-30 (working tree, not committed):
+
+```text
+1639 tests passing
+1608 existing + 32 new - 1 replaced (2 of the new added in the final
+  acceptance review: BL-143 extends-base removal; default-path file
+  sharing, restoring coverage the old equal-directory fixture gave)
+10 existing tests changed: 1 replaced (it asserted equal directories were
+  allowed); 9 moved from the equal-directory fixture to explicit
+  file overrides, assertions unchanged
+lifecycle suite against pre-fix code: exactly the 3 BL-137/BL-143
+  scenarios fail
+A1 structural comparison vs v4.7.4, final working tree: 5 legacy-shape
+  models (Zeus, KemonChilo, JossJobs, IssueBear, Portfolio), 71 surfaces
+  (service add output and envshield.yml; schema sync and sync --check
+  before/after; check, doctor, explain, scan, and undeclared JSON with
+  exit codes; every project file afterwards): 0 differences after
+  normalizing the generated template's timestamp line. 42 commands
+  succeed and 19 fail by design (drift, an extra, undeclared reads), in
+  both trees. A deliberate mutation (check's `extra` emptied) is caught.
+  The earlier 38-surface harness wasn't preserved; this is a
+  reconstruction over the same models and a superset of the A1 surfaces.
+ruff check passes
+formatting passes
+```
+
+Final acceptance matrix (2026-09-30, final working tree):
+
+| # | Result | Notes |
+|---|---|---|
+| A1 | PASS | Final-tree comparison above. |
+| A2 | PASS | Documented limitation: two separate schemas in one directory (`BL-137` residual). Follow-up: `BL-146`. |
+| A3 | PASS | |
+| A4 | PASS | |
+| A5 | PASS | |
+| A6 | PASS | |
+| A7 | PASS | |
+| A8 | PASS | |
+| A9 | PASS | `BL-144` is a presentation follow-up, not a failure. |
+| A10 | PASS | Includes the `BL-143` extends-chain case. `BL-138` refuted. |
+| A11 | PASS | |
+| A12 | PASS within its shared-schema scope | Two separate schemas in one directory are not rejected; that is `BL-137`'s documented legacy limitation. Duplicate directories are not universally rejected. |

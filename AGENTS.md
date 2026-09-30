@@ -440,6 +440,14 @@ Phase status: [progress.md](progress.md).
   not an authorization grant: never add it to `load_schema()` or treat it
   as valid, and never soften a failure because of it.
 - A logical service is not a container or process.
+- One directory of code is one logical service. Enforced for users of
+  one shared schema: they never share a directory
+  (`DuplicateServiceDirError`, BL-137). Not enforced for two separate
+  schemas in one directory: that is a documented legacy limitation
+  (BL-137 residual), kept for single-user compatibility, where scan
+  routing breaks the tie by name order. Don't describe the ambiguity as
+  universally rejected. Sharing a physical file is always explicit,
+  through `local_file`/`example_file`.
 - Preserve backward compatibility for unique (single-user) schemas.
 
 ---
@@ -836,8 +844,9 @@ release tag is `v4.7.4`. Phase 1 (shared schema projection) is committed as
 `f34bfb9`, Phase 2 (explicit service `dir`) as `a2be864`, Phase 3
 (physical-file contracts) as `e336812`, Phase 4 (out-of-scope
 reporting) as `5a2c61e`, and Phase 5 (hooks) as `50720ad`, all
-unreleased; 1608 tests passing. See [progress.md](progress.md) for phase
-status; Phase 6 is the next phase and has not started. The
+unreleased. Phase 6 (lifecycle acceptance) is implemented in the working
+tree and pending review before commit; 1639 tests passing. See
+[progress.md](progress.md) for phase status. The
 paragraphs below are the post-`v4.6.1` record, kept as history.
 
 **Current phase: post-`v4.6.1`. Every release blocker in BACKLOG.md's Part 0

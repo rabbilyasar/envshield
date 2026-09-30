@@ -659,3 +659,192 @@ def test_service_add_warns_when_another_user_of_the_schema_lacks_a_dir(tmp_path)
         assert "api" in result.stdout and "dir" in result.stdout
         # Not silently backfilled -- the user must choose api's directory.
         assert "dir" not in config_manager.get_services()["api"]
+
+
+# BL-143: 'service remove' on shared resources. Removal proceeds with a
+# warning; it never offers a file another registered service still uses for
+# deletion, and the resulting topology still fails closed where invalid.
+SHARED_SCHEMA_YML = (
+    "services:\n"
+    "  api:\n    schema: env.schema.toml\n    dir: api\n"
+    "  worker:\n    schema: env.schema.toml\n    dir: worker\n"
+)
+SCOPED_SCHEMA = (
+    '[LOG_LEVEL]\ndefaultValue = "info"\n'
+    '[DATABASE_URL]\nsecret = true\nservices = ["api", "worker"]\n'
+    '[QUEUE_URL]\nsecret = true\nservices = ["worker"]\n'
+)
+
+
+def _flat(text):
+    return " ".join(text.split())
+
+
+def test_service_remove_never_offers_a_schema_another_service_uses(tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.makedirs("api")
+        os.makedirs("worker")
+        with open("envshield.yml", "w") as f:
+            f.write(SHARED_SCHEMA_YML)
+        with open("env.schema.toml", "w") as f:
+            f.write('[LOG_LEVEL]\ndefaultValue = "info"\n')
+
+        result = runner.invoke(app, ["service", "remove", "worker"])
+
+        out = _flat(result.stdout)
+        assert result.exit_code == 0, out
+        assert "Delete them by hand" not in out
+        assert "env.schema.toml" in out and "still used by api" in out
+        assert os.path.exists("env.schema.toml")
+        assert list(config_manager.get_services()) == ["api"]
+
+
+def test_service_remove_warns_about_grants_naming_the_removed_service(tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.makedirs("api")
+        os.makedirs("worker")
+        with open("envshield.yml", "w") as f:
+            f.write(SHARED_SCHEMA_YML)
+        with open("env.schema.toml", "w") as f:
+            f.write(SCOPED_SCHEMA)
+
+        result = runner.invoke(app, ["service", "remove", "worker"])
+
+        out = _flat(result.stdout)
+        assert result.exit_code == 0, out  # warn and proceed
+        assert "Warning" in out and "worker" in out and "api" in out
+        assert "services" in out  # points at the grants to fix
+        assert list(config_manager.get_services()) == ["api"]
+        with open("env.schema.toml") as f:
+            assert f.read() == SCOPED_SCHEMA  # never rewritten
+
+        # The resulting topology is invalid, so api fails closed.
+        check = runner.invoke(app, ["check", "--service", "api"])
+        assert check.exit_code != 0
+        assert "worker" in _flat(check.stdout)
+
+
+def test_service_remove_with_valid_remaining_topology_does_not_warn(tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.makedirs("api")
+        os.makedirs("worker")
+        with open("envshield.yml", "w") as f:
+            f.write(SHARED_SCHEMA_YML)
+        with open("env.schema.toml", "w") as f:
+            f.write('[LOG_LEVEL]\ndefaultValue = "info"\n')
+
+        result = runner.invoke(app, ["service", "remove", "worker"])
+
+        assert "Warning" not in result.stdout
+
+
+def test_service_remove_never_offers_a_shared_local_file(tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        for d in ("api", "worker"):
+            os.makedirs(d)
+            with open(f"{d}/env.schema.toml", "w") as f:
+                f.write("[LOG_LEVEL]\n")
+        with open("envshield.yml", "w") as f:
+            f.write(
+                "services:\n"
+                "  api:\n    schema: api/env.schema.toml\n    local_file: .env\n"
+                "  worker:\n    schema: worker/env.schema.toml\n    local_file: .env\n"
+            )
+        with open(".env", "w") as f:
+            f.write("LOG_LEVEL=info\n")
+
+        result = runner.invoke(app, ["service", "remove", "worker"])
+
+        out = _flat(result.stdout)
+        assert result.exit_code == 0, out
+        # worker's own schema is still offered; the shared .env is not.
+        assert "Its files are untouched: worker/env.schema.toml." in out
+        assert ".env still used by api" in out
+
+
+def test_service_remove_never_offers_a_schema_another_service_extends(tmp_path):
+    # A root service whose schema is the base a nested service extends: the
+    # file is part of api's contract even though api doesn't register it.
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.makedirs("api")
+        with open("env.schema.toml", "w") as f:
+            f.write("[LOG_LEVEL]\n")
+        with open("api/env.schema.toml", "w") as f:
+            f.write('extends = "../env.schema.toml"\n[API_KEY]\n')
+        with open("envshield.yml", "w") as f:
+            f.write(
+                "services:\n"
+                "  root:\n    schema: env.schema.toml\n"
+                "  api:\n    schema: api/env.schema.toml\n"
+            )
+
+        result = runner.invoke(app, ["service", "remove", "root"])
+
+        out = _flat(result.stdout)
+        assert result.exit_code == 0, out
+        assert "Delete them by hand" not in out
+        assert "env.schema.toml still used by api" in out
+
+
+# BL-137 (option a): two users of one shared schema can't declare the same
+# directory. 'service add' rejects it at registration.
+def test_service_add_rejects_joining_a_shared_schema_at_a_taken_directory(tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.makedirs("app")
+        with open("env.schema.toml", "w") as f:
+            f.write('[LOG_LEVEL]\ndefaultValue = "info"\n')
+        assert (
+            runner.invoke(
+                app, ["service", "add", "web", "app", "--schema", "env.schema.toml"]
+            ).exit_code
+            == 0
+        )
+        before = open("envshield.yml").read()
+
+        result = runner.invoke(
+            app, ["service", "add", "worker", "./app/", "--schema", "env.schema.toml"]
+        )
+
+        out = _flat(result.stdout)
+        assert result.exit_code == 1, out
+        assert "web" in out and "app" in out
+        assert open("envshield.yml").read() == before
+
+
+def test_service_add_re_adding_the_same_service_at_its_own_directory_is_fine(
+    tmp_path,
+):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        os.makedirs("app")
+        os.makedirs("worker")
+        with open("env.schema.toml", "w") as f:
+            f.write('[LOG_LEVEL]\ndefaultValue = "info"\n')
+        for name, d in (("web", "app"), ("worker", "worker"), ("web", "app")):
+            result = runner.invoke(
+                app, ["service", "add", name, d, "--schema", "env.schema.toml"]
+            )
+            assert result.exit_code == 0, result.stdout
+
+
+def test_service_add_rejects_joining_a_legacy_services_schema_at_its_directory(
+    tmp_path,
+):
+    """KemonChilo shape: a legacy root service (no 'dir', resolved to the
+    schema's parent) and a second process registered as its own service in
+    the same directory. The legacy user's directory is the schema parent,
+    so the join claims the same code and is rejected."""
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        with open("env.schema.toml", "w") as f:
+            f.write('[LOG_LEVEL]\ndefaultValue = "info"\n')
+        assert runner.invoke(app, ["service", "add", "app", "."]).exit_code == 0
+        assert "dir" not in config_manager.get_services()["app"]
+        before = open("envshield.yml").read()
+
+        result = runner.invoke(
+            app, ["service", "add", "worker", ".", "--schema", "env.schema.toml"]
+        )
+
+        assert result.exit_code == 1, result.stdout
+        assert "app" in _flat(result.stdout) and "worker" in _flat(result.stdout)
+        assert open("envshield.yml").read() == before
+        assert config_manager.get_service_dir("app") == "."  # still valid

@@ -14,7 +14,11 @@ from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
 from ..config import manager as config_manager
-from ..core.exceptions import EnvShieldException, SchemaNotFoundError
+from ..core.exceptions import (
+    DuplicateServiceDirError,
+    EnvShieldException,
+    SchemaNotFoundError,
+)
 from ..utils import git_utils
 from . import discovery
 
@@ -1122,6 +1126,11 @@ def _build_undeclared_var_resolver(service_name: Optional[str]):
             view = config_manager.load_schema_view(service_name=name)
         except SchemaNotFoundError:
             continue
+        except DuplicateServiceDirError:
+            # Invalid topology, not one broken service: skipping both tied
+            # services would let their files fall through to another
+            # service's projection (BL-137). Fail the scan instead.
+            raise
         except EnvShieldException as e:
             # A broken schema in one service (e.g. mid-edit, unrelated to
             # what's actually staged) must not block undeclared-variable
@@ -1208,6 +1217,8 @@ def _scan_files(
     if service_name:
         try:
             candidate_dir = config_manager.get_service_dir(service_name)
+        except DuplicateServiceDirError:
+            raise  # scanning the whole project instead would hide it (BL-137)
         except EnvShieldException:
             candidate_dir = None
         if candidate_dir and candidate_dir != ".":

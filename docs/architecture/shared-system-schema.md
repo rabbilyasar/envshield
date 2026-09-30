@@ -313,17 +313,80 @@ which an explicit re-run of `service add` does.
 
 ### Equal directories
 
-Two services may legitimately declare the same `dir`. What that means for
-directory-routed operations (scan routing, discovery) is intentionally
-unresolved: nothing rejects it. Scan routing currently breaks the tie
-silently by service name order, so the alphabetically-first service's
-projection judges every file in that directory. This is a known defect,
-not intended semantics, and Phase 2 deliberately leaves it as is. See
-`BL-137`.
+One directory of code is one logical service. Several processes that run
+from one directory (a web server and a worker, say) are one logical
+service. Directory-routed operations (scan routing, discovery, invocation
+inference) can't tell whose projection applies to a directory two
+services claim, and would otherwise judge that code by whichever service
+sorts first. See `BL-137`.
+
+Enforcement depends on whether the services share a schema:
+
+| Services in one directory | Result |
+|---|---|
+| Users of one shared schema | **Rejected** (`DuplicateServiceDirError`). |
+| Two separate schemas (each single-user) | **Accepted: legacy limitation.** Not rejected; scan routing breaks the tie by name order. |
+
+Directories are compared by resolved path, so `app` and `./app/` are equal.
+
+- **Registration.** `service add` rejects joining a shared schema at a
+  directory another user already has. A user with no explicit `dir` counts
+  as living in the schema's parent directory, where it resolved while it
+  was the only user.
+- **Hand-written topology.** `get_service_dir()` raises
+  `DuplicateServiceDirError` (a `ServiceConfigError`) for both services.
+  Every command for them fails, `scan` fails as a whole (it doesn't skip
+  the two and let their files fall through to another service), and the
+  pre-commit hook blocks.
+- **Sharing a physical file is explicit.** Services that should share a
+  `.env`/`.env.example` point `local_file`/`example_file` at the same path
+  from their own directories. Sharing a directory is not a way to share a
+  file.
+- **Separate schemas: documented legacy limitation.** Two services on
+  *different* schemas with the same directory (e.g. two legacy schemas in
+  one directory) are not rejected. Each schema is single-user, and
+  single-user configurations keep their pre-Phase-6 behavior. Their
+  default `.env`/`.env.example` are the same physical file, so the union
+  contract applies to it as for any shared file. Scan routing and the
+  `out_of_scope` label still break the directory tie by name order, so
+  one service's schema judges that directory's code. Give each service
+  its own directory to avoid it. This is `BL-137`'s retained residual:
+  still supported for backward compatibility, with directory-routed scan
+  results that are ambiguous.
 
 ---
 
-## 4. Rules for code that consumes schemas
+## 4. Lifecycle
+
+Topology changes take effect on the next command or hook run, because
+nothing caches or embeds topology: hooks resolve coverage at run time,
+and every command reads `envshield.yml` fresh.
+
+- **Adding a service** (by `service add` or by editing `envshield.yml` by
+  hand) needs no hook reinstall. The installed hook bytes never change.
+- **Removing a service** (`service remove`) deregisters it and never
+  deletes or rewrites anything. A schema or local file another registered
+  service still uses is reported as kept, never offered for deletion. A
+  schema counts as used if it is another service's schema or anywhere in
+  that schema's `extends` chain. If
+  the schema still names the removed service in a `services` grant, the
+  removal still happens and warns; every remaining user of that schema
+  then fails closed until the grant is fixed by hand.
+- **Changing a service's `dir`** takes effect immediately, subject to the
+  equal-directory rule above.
+- **Writing shared physical files.** `setup` and `schema sync` write a
+  shared file from the union contract. Values another service keeps in it
+  are carried over (`BL-138`, refuted in Phase 6 across every candidate
+  path).
+
+`envshield/tests/test_lifecycle_acceptance.py` drives each of these
+through real commits, for five real-project topologies and a synthetic
+shared-schema fixture. Acceptance criteria: [progress.md](../../progress.md)
+(Phase 6).
+
+---
+
+## 5. Rules for code that consumes schemas
 
 - Get a service's fields from `load_schema` / `load_schema_view` (live) or
   `schema_snapshot.load_schema_for_diff` / `load_schema_view_for_diff`

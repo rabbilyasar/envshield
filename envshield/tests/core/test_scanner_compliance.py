@@ -2749,3 +2749,41 @@ class TestGenericApiKeyFileLocalBareIdentifierSuppression:
             "test_plugin_flask_blueprint.py", set(), content=content
         )
         assert secrets == []
+
+
+class TestDuplicateServiceDirFailsClosed:
+    """BL-137 (option a): a hand-written envshield.yml giving two users of a
+    shared schema the same directory is invalid topology. 'scan' must fail
+    closed rather than silently judging the directory by name order."""
+
+    YML = (
+        "services:\n"
+        "  api:\n    schema: env.schema.toml\n    dir: app\n"
+        "  worker:\n    schema: env.schema.toml\n    dir: app\n"
+    )
+    SCHEMA = '[QUEUE_URL]\nsecret = true\nservices = ["worker"]\n'
+
+    def _project(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "envshield.yml").write_text(self.YML)
+        (tmp_path / "env.schema.toml").write_text(self.SCHEMA)
+        (tmp_path / "app").mkdir()
+        (tmp_path / "app" / "main.py").write_text(
+            "import os\nos.environ['QUEUE_URL']\n"
+        )
+
+    @pytest.mark.parametrize("extra", [[], ["--service", "api"], ["--json"]])
+    def test_scan_fails_closed(self, tmp_path, monkeypatch, extra):
+        self._project(tmp_path, monkeypatch)
+        result = runner.invoke(app, ["scan", "app", *extra])
+        assert result.exit_code == 1
+        out = " ".join(result.stdout.split())
+        assert "api" in out and "worker" in out
+
+    def test_undeclared_fails_closed(self, tmp_path, monkeypatch):
+        self._project(tmp_path, monkeypatch)
+        subprocess.run(["git", "init", "-q"], check=True)
+        result = runner.invoke(app, ["undeclared", "--service", "worker"])
+        assert result.exit_code != 0
+        out = " ".join(result.stdout.split())
+        assert "api" in out and "worker" in out

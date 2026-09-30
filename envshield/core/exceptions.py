@@ -160,6 +160,15 @@ class ServiceConfigError(EnvShieldException):
         super().__init__(self.message)
 
 
+class DuplicateServiceDirError(ServiceConfigError):
+    """
+    Raised when two services sharing one schema declare the same directory
+    (BL-137). One directory of code is one logical service; directory-routed
+    operations can't tell which service's projection applies there, so the
+    topology is invalid rather than resolved by name order.
+    """
+
+
 class SharedSchemaWriteRefusedError(EnvShieldException):
     """
     Raised when a schema-writing command ('import', 'init --force') would

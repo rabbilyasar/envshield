@@ -6,6 +6,7 @@ import pytest
 from envshield.config import manager as config_manager
 from envshield.core.exceptions import (
     ConfigParseError,
+    DuplicateServiceDirError,
     InvalidManifestDefinitionError,
     SchemaNotFoundError,
     SchemaParseError,
@@ -1556,12 +1557,51 @@ class TestExplicitServiceDir:
         with pytest.raises(ServiceConfigError):
             config_manager.get_env_paths("worker")
 
-    def test_equal_explicit_dirs_are_allowed(self, tmp_path, monkeypatch):
+    @pytest.mark.parametrize(("web_dir", "worker_dir"), [(".", "."), ("app", "./app/")])
+    def test_equal_dirs_on_a_shared_schema_are_invalid_topology(
+        self, tmp_path, monkeypatch, web_dir, worker_dir
+    ):
+        """BL-137: one directory of code is one logical service. Two users
+        of a shared schema claiming the same directory would each be judged
+        by whichever sorted first, so both fail closed instead."""
+        self._yml(
+            tmp_path,
+            monkeypatch,
+            f"services:\n  web:\n    schema: env.schema.toml\n    dir: {web_dir}\n"
+            f"  worker:\n    schema: env.schema.toml\n    dir: {worker_dir}\n",
+        )
+        (tmp_path / "app").mkdir()
+        for name in ("web", "worker"):
+            with pytest.raises(DuplicateServiceDirError) as exc:
+                config_manager.get_service_dir(name)
+            message = str(exc.value)
+            assert "web" in message and "worker" in message
+            assert isinstance(exc.value, ServiceConfigError)
+            with pytest.raises(DuplicateServiceDirError):
+                config_manager.get_env_paths(name)
+
+    def test_distinct_and_nested_dirs_on_a_shared_schema_are_valid(
+        self, tmp_path, monkeypatch
+    ):
         self._yml(
             tmp_path,
             monkeypatch,
             "services:\n  web:\n    schema: env.schema.toml\n    dir: .\n"
-            "  worker:\n    schema: env.schema.toml\n    dir: .\n",
+            "  worker:\n    schema: env.schema.toml\n    dir: worker\n",
+        )
+        assert config_manager.get_service_dir("web") == "."
+        assert config_manager.get_service_dir("worker") == "worker"
+
+    def test_equal_dirs_on_separate_schemas_are_not_rejected(
+        self, tmp_path, monkeypatch
+    ):
+        """BL-137 residual, decided as a documented legacy limitation
+        (option b): each schema is single-user, so this keeps working."""
+        self._yml(
+            tmp_path,
+            monkeypatch,
+            "services:\n  web:\n    schema: web.schema.toml\n    dir: .\n"
+            "  worker:\n    schema: worker.schema.toml\n    dir: .\n",
         )
         assert config_manager.get_service_dir("web") == "."
         assert config_manager.get_service_dir("worker") == "."

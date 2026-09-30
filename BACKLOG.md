@@ -1011,6 +1011,7 @@ Component: `config/manager.py`, `core/schema_manager.py`, `cli.py`, `core/doctor
   - **BL-005 interaction, reviewed independently:** necessary for BL-030's own correctness, not a bundled unrelated fix. Without it, `_check_example_file_sync`'s `.py` branch keeps delegating unconditionally to the old single-source `_check_local_env_sync`, so `schema sync --check` — and the pre-commit hook, which calls only this — would report "not in sync" for a variable a union-mode service's registered manifest already covers, exactly the class of false-clean-adjacent disagreement BL-005 exists to prevent, newly reachable because BL-030 introduced a second possible meaning of "complete" that this one caller wasn't updated for. Strictly gated on `get_service_completeness_mode(service_name) == "union"` — every non-union service keeps calling the exact original `_check_local_env_sync`, verified both by the existing BL-005 regression suite (`test_doctor.py`, `test_pre_commit_hook.py`, `test_cli.py::test_schema_sync_check_fails_for_a_stale_python_local_file` — all still pass unmodified) and a new end-to-end test added this pass, `test_cli.py::test_schema_sync_check_passes_for_a_union_satisfied_python_local_file`, exercising the real bypass path (`schema sync --check` at the CLI layer, not `doctor._check_example_file_sync` in isolation) that motivated the fix. Belongs in this commit — shipping BL-030 without it would leave the feature self-contradictory (`check`/`doctor` report clean, the pre-commit hook still fails).
   - **Documentation:** README.md gained a new `## Multiple sources per service (\`completeness: union\`)` section (placed after "Monorepos / services," matching that section's own style and cross-linking to "Conditional requirements" for the `requiredIf` interaction) — every claim in it re-checked against the actual implementation/tests, not asserted from memory. CHANGELOG.md left untouched: the file has no "Unreleased" section anywhere in its history, and its own established convention is to document only what's actually shipped under a specific version heading — BL-030 isn't released. ROADMAP.md left untouched: it doesn't itemize individual findings, and "Now" specifically means shipped-and-in-real-use, which an uncommitted working-tree change isn't yet (the same treatment already given to `BL-023`/`109`/`110`/`112`/`114`/`115`). AGENTS.md/CLAUDE.md left untouched: the BL-005 interaction is a fresh *instance* of an already-recorded principle (§3.6, "domain-layer functions must remain caller-independent" — `_check_example_file_sync`'s delegation was correct only under the single-completeness-model assumption that held until this pass), not a new rule; recording it as a new principle would duplicate, not extend, the charter.
 - **Decision:** **Implemented 2026-09-01, committed (`0886dcb`) — not yet released.** Non-union behavior verified unchanged by construction and by the existing full suite passing unmodified. `Do not reopen Satisfaction Modes or runtime merge/precedence unless new evidence demonstrates the current architecture cannot solve a real user problem` (per explicit standing instruction) — nothing in this implementation reopens it. Reconciled 2026-09-03: previously said "not yet committed," stale since that commit landed.
+- **Phase 6 (shared system schema) interaction, 2026-09-30:** no new union semantics. A `completeness: union` service still judges against `load_schema(service)`, its projection. `setup` for a union-mode service sharing a physical `.env` keeps the peer's values (`test_file_contract.py::TestSetupPreservesPeerValues::test_union_completeness_service`). Nothing further is needed for shared-schema acceptance.
 - **Target:** Done for this pass. Committed (`0886dcb`), not yet released — both separate decisions, the first now resolved, the second not. Reconciled 2026-09-03: previously said "Not committed, not released," stale since the commit landed — the same correction already applied to the Decision line above, missed here in that pass.
 - **Release-gate review (2026-08-30, `4.6.2` prep):** Historical — recorded before implementation began; superseded by the "Implementation" entry above.
 
@@ -1066,7 +1067,8 @@ architecture itself is documented in
 phase status is in [progress.md](progress.md). Phase 1 is committed as
 `f34bfb9`, Phase 2 (explicit service `dir`) as `a2be864`, Phase 3
 (physical-file contracts) as `e336812`, Phase 4 (out-of-scope
-reporting) as `5a2c61e`, and Phase 5 (hooks) as `50720ad`.
+reporting) as `5a2c61e`, and Phase 5 (hooks) as `50720ad`. Phase 6
+(lifecycle acceptance) is in the working tree, uncommitted.
 
 ### BL-135 — `service add --schema` discarded the `DIRECTORY` argument
 
@@ -1096,10 +1098,11 @@ Component: `core/scanner.py` hook generators; indirectly `core/hooks_manager.py`
   - An untrusted `example_file` path is printed through Rich markup; markup in it raises `MarkupError`, and the hook fails closed.
   - Each affected service costs one EnvShield subprocess; a changed `envshield.yml` affects every service.
   - Test gaps: the "modified" `hook status` label is untested; the sentinel half of `test_hook_injection.py` is now vacuous (the "value not in script" assertion is what protects it).
+- **Phase 6 classification (2026-09-30):** every follow-up above stays a follow-up (working tree vs. index: known limitation). Phase 6 exercised the fail-closed pre-commit path end to end (an invalid topology blocks a real commit) and found nothing new to add here.
 
 ### BL-137 — Scan routing is ambiguous when two services declare the same directory
 
-Type: `LIMITATION` · Evidence: `CONFIRMED` (code reading: `scanner.py` compliance resolver sorts `(service_dir, schema_vars)` by directory length and returns the first containing match) · Priority: **P2** · Status: **open, intentionally undecided**
+Type: `LIMITATION` · Evidence: `CONFIRMED` (code reading: `scanner.py` compliance resolver sorts `(service_dir, schema_vars)` by directory length and returns the first containing match; live-reproduced 2026-09-30) · Priority: **P2** · Status: **fixed for shared-schema users (Phase 6); separate-schema case retained as a documented legacy limitation (not fixed)**
 Source: shared-schema design work, 2026-09.
 Component: `core/scanner.py` undeclared-variable routing
 
@@ -1107,10 +1110,28 @@ Component: `core/scanner.py` undeclared-variable routing
 - **Expected behavior:** undecided. The options are the union of the tied projections, an explicit error, or a prompt. Phase 2 deliberately does not reject equal directories in `service add`.
 - **Decision:** leave open until equal-directory semantics are decided.
 - **Update (`5a2c61e`, Phase 4):** `scan` now labels an undeclared read `out_of_scope` when the system schema defines it. With tied directories, that label is also judged against the name-order-first service's projection, so a read the other tied service is granted can show as out of scope. Same root cause; no separate finding.
+- **Live reproduction (2026-09-30, Phase 6 planning):** two users of one shared schema with `dir: api`, and `api/app.py` reading a variable granted only to `worker`. `scan` and `undeclared --service api` reported it `out_of_scope` (exit 1); `undeclared --service worker` reported it `declared`. The same file got opposite verdicts. Undeclared findings always block in the pre-commit hook (`enforcement.enforce_findings`), so the tie reached real commits: a false block, or, with the grants reversed, an ungranted read passing.
+- **Decision (Phase 6, option a):** one directory of code is one logical service. Two users of the same shared schema can't declare the same directory (compared by resolved path). Several processes in one directory are one logical service.
+- **Fix (Phase 6, working tree):**
+  - `config_manager.get_service_dir` raises `DuplicateServiceDirError` (a `ServiceConfigError`) for both services, via `reject_duplicate_dir`, so every directory-routed consumer inherits it.
+  - `scanner` re-raises that error at both of its catch sites instead of skipping the two services: skipping would let their files fall through to another service's projection. `scan` exits 1 and the pre-commit hook blocks.
+  - `service add` rejects the join at registration. A peer with no explicit `dir` counts as living in the schema's parent (the KemonChilo shape: a legacy root service plus its worker process registered at `.`).
+- **Intentional test changes:**
+  - `test_equal_explicit_dirs_are_allowed` is replaced by tests asserting rejection.
+  - Phase 3's `SAME_DIR` fixture in `test_file_contract.py`, and one test in `test_hook_runner.py`, used equal directories as the way to share default files. They now share the file through explicit `local_file`/`example_file` overrides; each test's assertions are unchanged.
+- **Tests:** `test_config_manager.py` (equal, differently-spelled, distinct/nested, separate-schema residual), `test_service_cli.py` (join rejected, own re-add fine, legacy-parent join rejected), `test_scanner_compliance.py::TestDuplicateServiceDirFailsClosed` (`scan`, `scan --service`, `scan --json`, `undeclared`), and the lifecycle suite (KemonChilo counter-scenario, shared-schema hand edit blocked at commit).
+- **Status:** **fixed for shared-schema users (Phase 6, uncommitted).** Not universally fixed; see the residual below.
+- **Residual decision (Phase 6 final acceptance review, 2026-09-30): option (b), a documented legacy limitation.** Two services on *different* schemas with the same directory (two legacy schemas in one directory) are not rejected: they remain supported for backward compatibility, even though directory-routed scan behavior there is ambiguous. Shared-schema users with the same resolved directory stay invalid and fail closed.
+  - **Why not reject:** each of those schemas is single-user, and the charter requires preserving backward compatibility for single-user schemas. Rejecting would turn working legacy configurations into hard errors on every command.
+  - **What still works:** their shared default `.env`/`.env.example` is one physical file, and the union contract applies to it (verified live: `get_file_peers` returns both; the contract is the union).
+  - **What stays ambiguous:** scan routing and the `out_of_scope` label break the directory tie by name order. Verified live: with `web` and `worker` on separate schemas at `.`, a read of worker's variable in `app.py` is flagged undeclared by `web`'s schema.
+  - **Where it's documented:** architecture doc "Equal directories"; the AGENTS.md/CLAUDE.md shared-schema rules; progress.md A2/A12 (marked LIMITATION).
+  - **Pinned by:** `test_config_manager.py::test_equal_dirs_on_separate_schemas_are_not_rejected`.
+  - **Reopen if:** a real project hits this shape, or a later decision extends the one-directory rule to separate schemas behind a compatibility path.
 
 ### BL-138 — `setup` may drop another service's values from a shared physical dotenv file
 
-Type: `BUG` · Evidence: `NEEDS_EVIDENCE` · Priority: **P1 if confirmed** (data loss) · Status: **open**
+Type: `BUG` · Evidence: `REFUTED` (Phase 6, 2026-09-30; see below) · Priority: **P1 if confirmed** (data loss) · Status: **closed: not reproducible**
 Source: reported during shared-schema design work, 2026-09. Not reproduced in the 2026-09-29 documentation pass.
 Component: `core/setup_manager.py::run_setup` / `_write_dotenv_local_file`
 
@@ -1118,6 +1139,17 @@ Component: `core/setup_manager.py::run_setup` / `_write_dotenv_local_file`
 - **Counter-evidence from code reading:** keys already present in an existing local file are carried over (`setup_manager.py`, `all_keys = schema keys + seed keys`), so the straightforward path preserves them. The failing path, if one exists, must be reproduced before this is marked `CONFIRMED`. Candidates include seeding from `.env.example` when the local file is absent, and a union-mode (`BL-030`) multi-source layout.
 - **Expected behavior:** any write to a shared physical file uses the union contract of every service projection materialized into it.
 - **Update (`e336812`, Phase 3):** `setup` now writes a shared local file from the union of every sharing service's projection (`config_manager.load_file_contract`). The originally reported data-loss path is still not reproduced, so the evidence status is unchanged.
+- **Phase 6 reproduction attempt (2026-09-30):** `test_file_contract.py::TestSetupPreservesPeerValues` seeds a shared `.env` with a peer's values, runs `setup` for the other service (overwrite confirmed), and checks the peer's values survive byte-for-byte. Candidate paths:
+  1. shared schema, existing shared file;
+  2. separate schemas sharing one file;
+  3. an explicit output path spelled differently (`./api/../.env`);
+  4. this service's schema unloadable (setup falls back to `schema = {}`);
+  5. a peer key with an empty value;
+  6. a `completeness: union` service;
+  7. an absent shared file, which must come out with every peer's variables.
+
+  All seven pass. A mutation that keeps only schema keys fails six of them (the absent-file case has nothing to lose), so the tests do detect a loss. The lifecycle suite repeats the check end to end (`TestSharedSchemaFixture`: worker's `QUEUE_URL` survives `setup --service api`). Root reason: `setup` carries every key already in the local file (`all_keys = schema keys + seed keys`), and Phase 3 made the schema side the union.
+- **Evidence status:** **REFUTED** for every candidate path above (dotenv; a Python local file is only ever patched in place). Nothing to fix. Reopen only with a concrete reproduction.
 
 ### BL-139 — `init --force` rewrites `envshield.yml` down to one service
 
@@ -1128,6 +1160,7 @@ Component: `cli.py::init`, `core/schema_manager.py::assert_schema_rewritable`
 - **Mitigated:** `init --force` now refuses outright when the root schema is shared or uses `services` scoping (`SharedSchemaWriteRefusedError`).
 - **Still open:** in a multi-service project whose root schema is single-user or unused, `init --force` still replaces the whole `envshield.yml` with a one-service config. The only guard is an interactive "cannot be undone" confirmation.
 - **Decision:** record. Whether a confirmed overwrite is acceptable is a separate decision.
+- **Phase 6 classification (2026-09-30): follow-up, not an acceptance blocker.** The overwrite is behind an explicit confirmation that says it can't be undone, and a shared or scoped root schema is refused outright, so it isn't a silent loss. It could name the services it would drop.
 
 ### BL-140 — `requiredIf` naming an undefined variable is not validated
 
@@ -1137,6 +1170,7 @@ Component: `core/schema_scope.py`, `config/manager.py`
 
 - **Current behavior:** a `requiredIf` whose `var` is undefined loads without error. Phase 1 only validates *scope* consistency of dependencies that exist.
 - **Expected behavior:** a load-time `SchemaParseError` naming the undefined dependency. This is a behavior change for existing single-user schemas, so it needs its own compatibility decision.
+- **Phase 6 classification (2026-09-30): follow-up.** Not specific to shared schemas: the same gap exists for single-user schemas, and fixing it needs a compatibility decision of its own.
 
 ### BL-141 — Proposed multiline inline-table `services` syntax was invalid TOML; mixed forms crashed the parser
 
@@ -1153,6 +1187,64 @@ Type: `COMPATIBILITY` · Evidence: `CONFIRMED` (Phase 1, `f34bfb9`) · Priority:
 Component: `core/schema_scope.py` (`SCOPE_KEY`)
 
 - Any variable-level `services` key is now interpreted as a scope grant and validated. A pre-existing schema that used `services` as a free-form attribute would now fail to load with a `SchemaScopeError`, and `load_bare_schema` refuses any schema that contains it. No such use is known. Recorded so that a report of it is recognized as this change.
+
+### BL-143 — `service remove` offered files still used by other services for deletion, and didn't warn about grants naming the removed service
+
+Type: `BUG` · Evidence: `CONFIRMED` (live, 2026-09-30, Phase 6 planning; reproduced again as failing tests before the fix) · Priority: **P2** (lifecycle safety: the command deletes nothing itself, but it told the developer that a schema still in use was theirs to delete) · Status: **fixed, tested (Phase 6, uncommitted)**
+Source: Phase 6 lifecycle review, 2026-09-30.
+Component: `cli.py::service_remove`
+
+- **Current behavior (before the fix):**
+  - Removing `worker` from a schema it shared with `api` printed "Its files are untouched: env.schema.toml. Delete them by hand if you don't want them anymore." `api` still used that schema.
+  - A `.env` shared through `local_file` overrides was offered the same way.
+  - A `services` grant still naming `worker` left `api` failing closed on its next command (correct), but `service remove` gave no warning.
+- **Expected behavior:** warn and proceed. Never offer a schema or file another registered service still uses. If the resulting topology is invalid, the remaining users fail closed; the schema is never rewritten.
+- **Fix:**
+  - Before removal, `service remove` records the other users of the schema (`get_schema_users`) and of the local file (`get_file_peers`).
+  - A file with other users is reported as "still used by … -- kept". When the other users can't be determined, the file is treated as shared.
+  - After removal, it loads each remaining user's view, and prints the first error as a warning. Exit 0.
+- **Tests:** `test_service_cli.py` (shared schema not offered; grant warning plus `check --service api` failing closed afterwards; no warning for a valid remaining topology; shared `.env` not offered while the service's own schema still is) and `test_lifecycle_acceptance.py::TestSharedSchemaFixture::test_removing_a_sharer`.
+- **Gap found and fixed in the Phase 6 final acceptance review (2026-09-30):** the first fix only checked direct users of the schema (`get_schema_users`).
+  - **Reproduction:** with a registered service `base` whose `base.schema.toml` is the base `api/env.schema.toml` `extends`, `service remove base` still said "Its files are untouched: base.schema.toml … Delete them by hand" (reproduced live).
+  - **Fix:** a schema now counts as used by every other service whose `extends` chain includes it (`get_schema_files`). A peer whose schema file doesn't exist yet is skipped, because it can't include anything. Any other lookup failure is treated as shared, as before.
+  - **Test:** `test_service_cli.py::test_service_remove_never_offers_a_schema_another_service_extends`, which failed before the fix.
+  - **Remaining resources:** `example_file` was never offered for deletion, before or after.
+
+### BL-144 — Pre-commit's per-service sync-check lines don't name the service for a Python `local_file`
+
+Type: `UX` · Evidence: `CONFIRMED` (Phase 6 lifecycle suite, Zeus model) · Priority: **P3** · Status: **open, follow-up (outside Phase 6)**
+Component: `core/hooks_manager.py::run_pre_commit` → `schema sync --check` for a `.py` local file (delegates to `doctor._check_local_env_sync`)
+
+- **Current behavior:** a change to a base schema that two services extend blocks the commit correctly, once per service, but prints two identical anonymous lines ("✗ Missing variables: SENTRY_DSN ..."). Nothing says which service or file each one is about.
+- **Expected behavior:** each line names its service (or file).
+- **Why not Phase 6:** coverage and blocking are correct; this is presentation only.
+
+### BL-145 — `doctor`'s Deployment Manifest message doesn't name the container that drifted
+
+Type: `UX` · Evidence: `CONFIRMED` (Phase 6 lifecycle suite, IssueBear model: three containers mapped to one service) · Priority: **P3** · Status: **open, follow-up (outside Phase 6)**
+Component: `core/doctor.py` deployment-manifest check
+
+- **Current behavior:** with `issuebear`, `issuebear-task-worker`, and `issuebear-util` all mapped to one service, removing a variable from one container fails the check with "'docker-compose.yml' is in sync with schema.; … Missing variables: LOCAL_MODE …; 'docker-compose.yml' is in sync with schema." The message names the file three times and never the container.
+- **Expected behavior:** each segment names its container.
+- **Why not Phase 6:** detection is correct; this is pre-existing reporting, not shared-schema lifecycle.
+
+### BL-146 — `undeclared --service ROOT` includes a nested service's files; `scan` routes them to the nested service
+
+Type: `LIMITATION` · Evidence: `NEEDS_EVIDENCE` (code reading only: `dependency_snapshot` filters changed files by containment in the service directory and additional roots, with no exclusion of a nested registered service's directory; not reproduced) · Priority: **P3** · Status: **open, follow-up (outside Phase 6)**
+Component: `core/dependency_snapshot.py`, `core/explain.py` (directory-scoped discovery)
+
+- **Claim:** in the JossJobs shape (root service `.` plus `frontend/`), `undeclared --service jossjobs` would judge `frontend/` reads against the root schema. `scan` routes them to the deepest service instead, so the two commands would disagree.
+- **Why not Phase 6:** nested directories are not a shared-schema construct. The Phase 6 suite covers `scan`'s deepest-match routing for this shape, not `undeclared`.
+
+### BL-147 — `scan`'s undeclared-variable suggestion always names `env.schema.toml`
+
+Type: `UX` · Evidence: `CONFIRMED` (live, 2026-09-30, Phase 6 final acceptance review) · Priority: **P3** · Status: **open, follow-up (outside Phase 6)**
+Source: Phase 6 final acceptance review, 2026-09-30.
+Component: `core/scanner.py` (two suggestion strings), `cli.py` (one)
+
+- **Current behavior:** the suggestion after undeclared findings says to add them to `'env.schema.toml'` whatever the routed service's schema is actually called. For example, with `web.schema.toml` and `worker.schema.toml`, it still names `env.schema.toml`.
+- **Expected behavior:** name the schema of the service the finding was routed to, or no file name at all.
+- **Why not Phase 6:** presentation only. Detection and blocking are correct.
 
 ---
 
