@@ -224,20 +224,38 @@ def discover_usages_for_service(
     get_service_additional_source_roots) names extra directories (e.g. a
     shared internal library outside every service's own directory) that
     also count toward this service. A file is included if it falls under
-    *any* of these roots; since `_changed_source_files` already returns a
+    *any* of these roots, with no ownership check against them -- BL-106
+    already documents that an additional root may legitimately belong to
+    more than one service at once, so it's exempt from the exclusivity
+    check below. Since `_changed_source_files` already returns a
     deduplicated flat file list and this is a single membership test per
     file (not a per-root sub-scan), no additional deduplication is needed
     here even when a root overlaps or nests inside another.
+
+    A file under `service_dir` itself, by contrast, is routed through
+    config_manager.resolve_file_owner (D-001, the one canonical ownership
+    answer) rather than a plain directory-containment test -- otherwise a
+    nested sibling service's own directory (e.g. a root service's '.'
+    "containing" a nested 'frontend/' service) would be misattributed to
+    `service_name` instead of excluded (BL-146).
     """
     service_dir = config_manager.get_service_dir(service_name)
-    roots = [service_dir] + config_manager.get_service_additional_source_roots(
-        service_name
-    )
+    additional_roots = config_manager.get_service_additional_source_roots(service_name)
+
+    def _belongs_to_service(f: str) -> bool:
+        if any(
+            config_manager.service_dir_contains(f, root) for root in additional_roots
+        ):
+            return True
+        return (
+            config_manager.service_dir_contains(f, service_dir)
+            and config_manager.resolve_file_owner(f) == service_name
+        )
+
     files = [
         f
         for f in _changed_source_files(revision_a, revision_b, quiet=quiet)
-        if f.endswith(_DISCOVERABLE_SUFFIXES)
-        and any(config_manager.service_dir_contains(f, root) for root in roots)
+        if f.endswith(_DISCOVERABLE_SUFFIXES) and _belongs_to_service(f)
     ]
 
     usages_a: List[discovery.DiscoveredVariableUsage] = []

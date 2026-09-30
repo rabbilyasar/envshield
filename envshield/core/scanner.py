@@ -836,6 +836,7 @@ def _scan_single_file(
     content: Optional[str] = None,
     new_lines_only: Optional[set] = None,
     system_vars: Optional[set] = None,
+    skip_undeclared: bool = False,
 ) -> (List[Dict], List[Dict]):
     """
     Helper to scan one file for both secrets and undeclared variables.
@@ -849,6 +850,15 @@ def _scan_single_file(
 
     If `new_lines_only` is provided, only those line numbers are scanned.
     Used for diff-aware scanning of excluded files.
+
+    `skip_undeclared` skips ONLY the undeclared-variable pass below --
+    secret-pattern scanning above always runs regardless, since secret
+    detection is schema-independent by design (it must catch a credential
+    in a file whose owning service has no loaded schema at all, not only
+    ones with a working schema). Set when the file's owner is topologically
+    resolved but has nothing loaded to check it against (see
+    _build_undeclared_var_resolver) -- never as a substitute for `schema_vars`
+    being empty, which means something different (everything is undeclared).
     """
     secret_findings = []
     undeclared_findings = []
@@ -959,9 +969,11 @@ def _scan_single_file(
         # Undeclared-variable detection for both Python and JS/TS runs once
         # over the whole file (not per line, like the secret loop above),
         # since a usage can span multiple lines -- see discovery.py.
-        # Skipped entirely when new_lines_only is an explicitly empty set:
-        # nothing could survive that filter anyway.
-        if new_lines_only != set():
+        # Skipped entirely when new_lines_only is an explicitly empty set
+        # (nothing could survive that filter anyway) or when skip_undeclared
+        # is set (the file's owner has no loaded schema to check it
+        # against -- see this function's own docstring).
+        if not skip_undeclared and new_lines_only != set():
             full_text = "".join(lines)
             if file_path.endswith(".py"):
                 _record_discovered_usages(
@@ -1085,25 +1097,40 @@ def _build_undeclared_var_resolver(service_name: Optional[str]):
     """
     Returns a function mapping a scanned file path to the (service variable
     set, system variable set) pair it should be checked against for
-    undeclared-variable detection -- or None if there's no schema at all to
-    check against. The system set only labels an undeclared read
-    'out_of_scope'; the service set alone decides what's declared.
+    undeclared-variable detection -- None if the file's owner has nothing
+    loaded to check it against (secret scanning still runs for that file;
+    only undeclared-variable detection is skipped) -- or the sentinel
+    (set(), set()) if the file belongs to no registered service at all
+    (existing semantics: everything found in it is flagged undeclared).
+    The system set only labels an undeclared read 'out_of_scope'; the
+    service set alone decides what's declared.
 
     An explicit `service_name` checks every file against that one schema --
     unchanged, single-target behavior.
 
-    Otherwise, each configured service's own schema is matched against
-    files under that service's own directory (the directory its schema
-    lives in) -- a file under 'alpha/' is checked against alpha's schema,
-    not beta's. A single-service project's one (and only) service has a
-    directory of '.' (its schema lives at the project root), which matches
-    every file -- there's no separate "root schema" concept to fall back to
-    anymore: envshield.yml always has at least one registered service (see
-    generate_default_config_content), single-service or not, so every
-    schema is a service's schema. Without the directory matching below,
-    running the pre-commit hook's plain `envshield scan --staged` (no
-    --service) on a multi-service project would have no way to tell which
-    service's schema applies to which file.
+    Otherwise, each file is routed by config_manager.resolve_file_owner
+    (D-001) -- topology only, independent of whether that owner's schema
+    happens to load -- to the one service whose own schema it should be
+    checked against; a file under 'alpha/' is checked against alpha's
+    schema, not beta's. A single-service project's one (and only) service
+    has a directory of '.' (its schema lives at the project root), which
+    matches every file -- there's no separate "root schema" concept to
+    fall back to anymore: envshield.yml always has at least one registered
+    service (see generate_default_config_content), single-service or not,
+    so every schema is a service's schema. Without this routing, running
+    the pre-commit hook's plain `envshield scan --staged` (no --service)
+    on a multi-service project would have no way to tell which service's
+    schema applies to which file.
+
+    Ownership is resolved against the *full* registered topology, never
+    narrowed to services whose schema happened to load: a broken/missing
+    schema in service A must never cause A's own files to fall through to
+    a parent or sibling service B and be checked against B's schema
+    instead -- that's a silent misattribution, the same class of bug as
+    BL-146, just triggered by a load failure instead of nesting. A's files
+    are topologically still A's; A simply has nothing to check them
+    against, so its undeclared-variable check is skipped for those files
+    specifically (not redirected elsewhere).
     """
     if service_name:
         try:
@@ -1117,12 +1144,9 @@ def _build_undeclared_var_resolver(service_name: Optional[str]):
             return None
         return lambda _file_path: vars_pair
 
-    service_dirs = []
+    vars_by_service = {}
     for name in sorted(config_manager.get_services().keys()):
         try:
-            service_dir = config_manager.normalize_path_for_service_match(
-                config_manager.get_service_dir(name)
-            )
             view = config_manager.load_schema_view(service_name=name)
         except SchemaNotFoundError:
             continue
@@ -1144,13 +1168,9 @@ def _build_undeclared_var_resolver(service_name: Optional[str]):
                 f"Skipping its undeclared-variable check.[/yellow]"
             )
             continue
-        service_dirs.append((service_dir, (set(view.fields), set(view.system))))
-    # Longest directory first, so a nested service dir wins over a shorter
-    # sibling -- and so a single-service project's '.' entry only ever acts
-    # as the last-resort catch-all it should be, not a premature match.
-    service_dirs.sort(key=lambda item: len(item[0]), reverse=True)
+        vars_by_service[name] = (set(view.fields), set(view.system))
 
-    if not service_dirs:
+    if not vars_by_service:
         console.print(
             "[yellow]Warning: No services configured. Skipping undeclared variable check.[/yellow]"
         )
@@ -1158,11 +1178,25 @@ def _build_undeclared_var_resolver(service_name: Optional[str]):
 
     console.print("[dim]Per-service schemas loaded for compliance check.[/dim]")
 
-    def _resolve(file_path: str) -> tuple:
-        for service_dir, vars_pair in service_dirs:
-            if config_manager.service_dir_contains(file_path, service_dir):
-                return vars_pair
-        return set(), set()
+    def _resolve(file_path: str) -> Optional[tuple]:
+        # config_manager.resolve_file_owner (D-001) is the one canonical,
+        # topology-only, deepest-directory-match ownership answer -- shared
+        # with explain.py/dependency_snapshot.py, called here against every
+        # registered service (never narrowed to vars_by_service.keys()), so
+        # a file can never be routed to a different service depending on
+        # which command asked, or on whether its own service's schema
+        # happened to load.
+        owner = config_manager.resolve_file_owner(file_path)
+        if owner is None:
+            # No registered service's directory contains this file at all
+            # -- existing semantics: everything found in it is undeclared.
+            return set(), set()
+        # `owner` is topologically correct even if its schema never loaded
+        # (skipped, warned, above) -- vars_by_service.get returns None in
+        # that case, the caller's signal to skip undeclared-variable
+        # detection for this file rather than checking it against a
+        # different, shorter-matching service's schema.
+        return vars_by_service.get(owner)
 
     return _resolve
 
@@ -1267,8 +1301,17 @@ def _scan_files(
                 scan_task, description=os.path.basename(file_path), advance=1
             )
 
-            schema_vars, system_vars = (
+            # None means the file's owner is topologically resolved but has
+            # nothing loaded to check it against -- skip undeclared-variable
+            # detection for this file specifically (secret scanning still
+            # runs below regardless), rather than falling back to a
+            # different service's schema (see _build_undeclared_var_resolver).
+            resolved_vars = (
                 schema_resolver(file_path) if schema_resolver else (set(), set())
+            )
+            skip_undeclared = resolved_vars is None
+            schema_vars, system_vars = (
+                resolved_vars if resolved_vars is not None else (set(), set())
             )
 
             if staged_only:
@@ -1320,6 +1363,7 @@ def _scan_files(
                     content=content,
                     new_lines_only=new_lines_only,
                     system_vars=system_vars,
+                    skip_undeclared=skip_undeclared,
                 )
             else:
                 if (
@@ -1329,7 +1373,10 @@ def _scan_files(
                     skipped_large_files.append(file_path)
                     continue
                 secrets, undeclared = _scan_single_file(
-                    file_path, schema_vars, system_vars=system_vars
+                    file_path,
+                    schema_vars,
+                    system_vars=system_vars,
+                    skip_undeclared=skip_undeclared,
                 )
 
             all_secret_findings.extend(secrets)

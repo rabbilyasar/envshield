@@ -92,24 +92,45 @@ def _discoverable_files(root_dir: str) -> List[str]:
 
 
 def _discover_current_usages(
-    roots: List[str], variable: str
+    service_name: str,
+    service_dir: str,
+    additional_roots: List[str],
+    variable: str,
 ) -> List[discovery.DiscoveredVariableUsage]:
     """
-    Walks every directory in `roots` (a service's own directory plus any
-    BL-106 `additional_source_roots`) and returns usages of `variable`
-    found under any of them. A file reachable through more than one root
-    -- an additional root nested inside, or equal to, the service's own
-    directory -- is only read and reported once: `_discoverable_files`
-    already normalizes each file's path (os.path.normpath), so the same
-    file discovered via two roots produces an identical string, and
-    `seen_files` collapses it to a single entry rather than a duplicated
-    "used in source" row.
+    Walks `service_dir` plus any BL-106 `additional_source_roots` and
+    returns usages of `variable` found under any of them.
+
+    Files under `service_dir` are routed through
+    config_manager.resolve_file_owner (D-001, the one canonical
+    ownership answer) so a nested sibling service's own directory is
+    never misattributed to `service_name` -- e.g. a root service (dir
+    '.') no longer claims a nested 'frontend/' service's files just
+    because '.' contains everything (BL-146). `additional_roots` are
+    deliberately exempt from that check: BL-106 already documents that an
+    additional root may legitimately belong to more than one service at
+    once (e.g. a shared internal library), with no cross-service
+    exclusivity -- so a file found there is never excluded on ownership
+    grounds, only deduplicated (below) against one already found via
+    `service_dir`.
+
+    A file reachable through more than one root -- an additional root
+    nested inside, or equal to, the service's own directory -- is only
+    read and reported once: `_discoverable_files` already normalizes each
+    file's path (os.path.normpath), so the same file discovered via two
+    roots produces an identical string, and `seen_files` collapses it to
+    a single entry rather than a duplicated "used in source" row.
     """
     usages: List[discovery.DiscoveredVariableUsage] = []
     seen_files: set = set()
-    for root_dir in roots:
+
+    def _scan_root(root_dir: str, check_ownership: bool) -> None:
         for file_path in _discoverable_files(os.path.normpath(root_dir)):
             if file_path in seen_files:
+                continue
+            if check_ownership and (
+                config_manager.resolve_file_owner(file_path) != service_name
+            ):
                 continue
             seen_files.add(file_path)
             try:
@@ -122,6 +143,10 @@ def _discover_current_usages(
             else:
                 found = discovery.discover_js_usages(content, file_path)
             usages.extend(u for u in found if u.variable == variable)
+
+    _scan_root(service_dir, check_ownership=True)
+    for root_dir in additional_roots:
+        _scan_root(root_dir, check_ownership=False)
     return usages
 
 
@@ -318,7 +343,7 @@ def build_undeclared_report(
         service=service_name,
         granted_to=sorted(granted) if granted is not None else None,
         source_usages=_discover_current_usages(
-            [service_dir] + additional_roots, variable
+            service_name, service_dir, additional_roots, variable
         ),
         manifest_references=_manifest_references(manifests, variable),
     )
@@ -388,7 +413,7 @@ def build_report(variable: str, service_name: str) -> ExplainReport:
         provenance=provenance,
         required_by=_reverse_required_by(schema, variable),
         source_usages=_discover_current_usages(
-            [service_dir] + additional_roots, variable
+            service_name, service_dir, additional_roots, variable
         ),
         manifest_references=_manifest_references(manifests, variable),
     )

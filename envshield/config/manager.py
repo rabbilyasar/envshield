@@ -948,6 +948,63 @@ def service_dir_contains(file_path: str, service_dir: str) -> bool:
     )
 
 
+def resolve_file_owner(
+    file_path: str, service_names: Optional[List[str]] = None
+) -> Optional[str]:
+    """
+    The canonical (D-001) answer to "which registered service owns this
+    physical file" -- the service whose directory (get_service_dir) is the
+    deepest match containing it, among `service_names` (default: every
+    registered service, get_services().keys()).
+
+    Every ownership decision must go through this one function. Before it
+    existed, scanner.py computed this correctly (global, deepest-match)
+    while explain.py/dependency_snapshot.py each tested membership against
+    only their one caller-named service's own directory -- silently
+    misattributing a nested sibling service's files to a shorter-matching
+    parent/root directory instead of excluding them (BL-146).
+
+    Ownership is a pure topology question: it only consults each
+    candidate's directory, never its schema -- a service whose schema is
+    broken or missing still owns the files under its own directory; it
+    simply has nothing to check them against (a caller that also needs a
+    schema handles that failure itself, the same way it always has).
+
+    Sorted by normalized directory length, descending, so a nested
+    service's directory always wins over a shorter parent/sibling's --
+    and so a project-root service (dir '.') only ever acts as the
+    catch-all it should be, never a premature match. A candidate whose own
+    directory can't be resolved (e.g. an ambiguous shared schema with no
+    explicit `dir`) is skipped: it doesn't compete for ownership, the same
+    way it can't be scanned/checked on its own either.
+
+    Raises DuplicateServiceDirError if two services share one directory --
+    an invalid topology, not a per-service outage (BL-137); silently
+    picking one would let files leak to the wrong service.
+
+    Returns None if no candidate's directory contains the file.
+    """
+    names = service_names if service_names is not None else get_services().keys()
+    dirs = []
+    for name in names:
+        try:
+            service_dir = normalize_path_for_service_match(get_service_dir(name))
+        except DuplicateServiceDirError:
+            raise
+        except EnvShieldException:
+            continue
+        dirs.append((service_dir, name))
+    # Longest directory first, so a nested service's dir wins over a
+    # shorter parent/sibling's -- mirrors service_dir_contains' own '.'
+    # catch-all reasoning, generalized to the whole registered set.
+    dirs.sort(key=lambda item: len(item[0]), reverse=True)
+
+    for service_dir, name in dirs:
+        if service_dir_contains(file_path, service_dir):
+            return name
+    return None
+
+
 def get_env_paths(service_name: str) -> Dict[str, str]:
     """
     Resolves the 'template' (tracked, e.g. '.env.example') and 'local' (real,
