@@ -19,6 +19,7 @@ from .core import (
     dependency_diff,
     dependency_snapshot,
     doctor,
+    evaluator,
     explain,
     generator,
     hooks_manager,
@@ -467,6 +468,15 @@ def check(
         "--json",
         help="Print machine-readable JSON instead of a table; suppresses all other output.",
     ),
+    process_env: bool = typer.Option(
+        False,
+        "--process-env",
+        help=(
+            "Also count variables set in this shell's environment: for a name "
+            "the schema declares, the environment's value overrides the local "
+            "file's (deployment manifests are unaffected). Values are never shown."
+        ),
+    ),
 ):
     """Validates a local environment file against the schema. Also accepts a docker-compose or Kubernetes manifest."""
     try:
@@ -492,106 +502,102 @@ def check(
             )
         file = None
 
-    had_error = False
-    results = []
-    combined: Dict[str, Any] = {}
+    environment = dict(os.environ) if process_env else None
+    evaluations = []
     for target in targets:
         if not json_output:
             _print_service_header(targets, target)
-        # completeness: union (BL-030) is opt-in per service and only
-        # applies to the service's own default source set -- an explicit
-        # `file` argument means the user asked for exactly that one file,
-        # which is unaffected by (and skips) union evaluation entirely,
-        # same as it already skips registered manifests below.
-        is_union = (
-            not file and config_manager.get_service_completeness_mode(target) == "union"
+        evaluation = evaluator.evaluate_service(
+            target, file=file, container=container, environment=environment, code=True
         )
-        try:
-            resolved_file = (
-                file or config_manager.get_env_paths(service_name=target)["local_file"]
-            )
-            if json_output:
-                result = schema_manager.check_result(
-                    resolved_file, service_name=target, container=container
-                )
-                results.append(result)
-                if not is_union and not result["clean"]:
-                    had_error = True
-            elif not schema_manager.check_schema(
-                resolved_file, service_name=target, container=container
-            ):
-                if not is_union:
-                    had_error = True
-
-            # An explicit file argument means the user asked for exactly
-            # that file, and nothing else -- only pile on registered
-            # deployment manifests when we're checking the service's own
-            # default local file. A service can be named in more than one
-            # manifest (a local compose file and a production Kubernetes
-            # manifest, say), so every match gets validated, not just one.
-            if not file:
-                for manifest in config_manager.get_deployment_manifests(target):
-                    manifest_container = manifest.get("container") or container
-                    if json_output:
-                        result = schema_manager.check_result(
-                            manifest["path"],
-                            service_name=target,
-                            container=manifest_container,
-                            paths=manifest["paths"],
-                        )
-                        results.append(result)
-                        if not is_union and not result["clean"]:
-                            had_error = True
-                    elif not schema_manager.check_schema(
-                        manifest["path"],
-                        service_name=target,
-                        container=manifest_container,
-                        paths=manifest["paths"],
-                    ):
-                        if not is_union:
-                            had_error = True
-
-            # completeness: union's own aggregate verdict, computed
-            # separately from (and never replacing) the per-source diffs
-            # above -- those keep reporting each source's own individual
-            # gaps for visibility; this decides whether the TARGET as a
-            # whole passes. A source that failed to load here is always a
-            # failure, independent of whether the sources that DID load
-            # happen to satisfy the schema between them (BL-030's explicit
-            # source-health requirement).
-            if is_union:
-                schema = config_manager.load_schema(service_name=target)
-                sources, source_errors = schema_manager.load_union_sources(
-                    target, container=container
-                )
-                union_result = schema_manager.evaluate_union_completeness(
-                    schema, sources
-                )
-                if source_errors or not union_result.is_clean:
-                    had_error = True
-                if json_output:
-                    combined[target] = schema_manager.union_completeness_result_to_dict(
-                        union_result, source_errors=source_errors
-                    )
-                else:
-                    _print_union_completeness_summary(
-                        target, union_result, source_errors
-                    )
-        except EnvShieldException as e:
-            if json_output:
-                results.append({"service": target, "clean": False, "error": str(e)})
-            else:
-                console.print(f"[bold red]Error:[/bold red] {e}")
-            had_error = True
+        evaluations.append(evaluation)
+        if not json_output:
+            _render_evaluation(evaluation)
 
     if json_output:
-        payload: Dict[str, Any] = {"success": not had_error, "results": results}
-        if combined:
-            payload["combined"] = combined
+        payload = evaluator.legacy_check_payload(evaluations)
+        payload["reports"] = [evaluator.build_report(e) for e in evaluations]
         print(json.dumps(payload, indent=2))
 
-    if had_error:
+    if not all(e.passed for e in evaluations):
         raise typer.Exit(code=1)
+
+
+def _render_evaluation(evaluation: "evaluator.ServiceEvaluation") -> None:
+    """'check's Rich output for one service, in evaluation order."""
+    schema = evaluation.view.fields if evaluation.view is not None else {}
+    for source in evaluation.sources:
+        schema_manager.print_source_header(source.path)
+        if evaluation.schema_error is not None:
+            # The contract itself didn't load: one error, nothing else to check.
+            console.print(f"[bold red]Error:[/bold red] {evaluation.schema_error}")
+            return
+        schema_manager.render_source(source, schema)
+    if evaluation.process_environment:
+        overlaid = sorted({n for s in evaluation.sources for n in s.overlaid})
+        console.print(
+            "[dim]Process environment: "
+            + (", ".join(overlaid) if overlaid else "no schema variables set")
+            + "[/dim]"
+        )
+    if evaluation.error is not None:
+        console.print(f"[bold red]Error:[/bold red] {evaluation.error}")
+        return
+    if evaluation.union is not None:
+        _print_union_completeness_summary(
+            evaluation.service, evaluation.union, evaluation.union_source_errors
+        )
+    _render_code_references(evaluation)
+
+
+def _render_code_references(evaluation: "evaluator.ServiceEvaluation") -> None:
+    """
+    Code references that disagree with the contract (D-7). Silent when
+    there's nothing to report, so a project whose code agrees with its
+    contract sees exactly the output it always did.
+    """
+    code = evaluation.code
+    if code is None or evaluation.view is None:
+        return
+    undeclared = evaluation.undeclared_references
+    medium = {
+        name: usages
+        for name, usages in code.by_variable("medium").items()
+        if name not in evaluation.view.fields and name not in undeclared
+    }
+    if not undeclared and not medium:
+        return
+
+    def _where(usages):
+        first = usages[0]
+        more = f" (+{len(usages) - 1} more)" if len(usages) > 1 else ""
+        return f"{first.file_path}:{first.line}{more}"
+
+    console.print(
+        f"\n[bold]Code references[/bold] [dim]({code.files_scanned} file(s) scanned)[/dim]"
+    )
+    if undeclared:
+        table = Table(show_header=True, header_style="bold blue")
+        table.add_column("Status", style="cyan")
+        table.add_column("Variable Name", style="white")
+        table.add_column("Referenced At", style="white")
+        for name, usages in sorted(undeclared.items()):
+            status = (
+                "[red]Out of Scope[/red]"
+                if name in evaluation.view.system
+                else "[red]Not Declared[/red]"
+            )
+            table.add_row(status, name, _where(usages))
+        console.print(table)
+        console.print(
+            "\n[bold]Suggestion:[/bold] Declare these in the schema (or remove "
+            "the reads). 'envshield explain <VAR>' shows every reference."
+        )
+    for name, usages in sorted(medium.items()):
+        console.print(
+            f"[dim]  {name} may be read from configuration at {_where(usages)} "
+            "(not an environment read EnvShield can confirm; informational).[/dim]"
+        )
 
 
 @app.command(name="doctor")
@@ -666,7 +672,7 @@ def doctor_command(
 
 _EXPLAIN_REQUIREDNESS_LABEL = {
     "required": "Yes",
-    "optional": "No (has default)",
+    "optional": "No (required = false)",
     "conditional": "Conditional",
 }
 
@@ -1852,8 +1858,8 @@ def _install_hooks(yes: bool = False) -> None:
     undefined no-input behavior instead of the safe "warn and skip"
     path these functions already implement for exactly this case.
     """
-    scanner.install_pre_commit_hook(non_interactive=yes)
-    scanner.install_post_merge_hook(non_interactive=yes)
+    hooks_manager.install_pre_commit_hook(non_interactive=yes)
+    hooks_manager.install_post_merge_hook(non_interactive=yes)
 
 
 def _confirm_hook_action(prompt: str, yes: bool) -> bool:
@@ -1953,7 +1959,7 @@ def hook_remove(
         console.print("[yellow]Cancelled.[/yellow]")
         raise typer.Exit()
     try:
-        results = scanner.remove_hooks()
+        results = hooks_manager.remove_hooks()
     except EnvShieldException as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(code=1)
@@ -1999,7 +2005,7 @@ def uninstall(
     console.print("\n[bold]EnvShield uninstall[/bold]\n")
 
     try:
-        hook_results = scanner.remove_hooks()
+        hook_results = hooks_manager.remove_hooks()
     except EnvShieldException:
         # No Git repository -- there are no hooks to remove, which isn't
         # an error condition for a project-level uninstall the way it is
@@ -2521,7 +2527,11 @@ def service_discover(
             config_manager.get_service_dir(name)
             for name in config_manager.get_services().keys()
         ]
-        candidates = service_discovery.discover_candidates(root, known_dirs=known_dirs)
+        candidates = service_discovery.discover_candidates(
+            root,
+            known_dirs=known_dirs,
+            known_names=config_manager.get_services().keys(),
+        )
     except EnvShieldException as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(code=1)

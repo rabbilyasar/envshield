@@ -2,7 +2,7 @@
 import os
 import subprocess
 
-from envshield.core import hooks_manager, scanner
+from envshield.core import hooks_manager
 
 
 def _record_subcommands(mocker):
@@ -37,7 +37,8 @@ def test_pre_commit_hook_always_scans_staged_files(tmp_path, monkeypatch, mocker
 
     assert calls[0] == ("scan", "--staged", "--enforce")
     assert (
-        "envshield hook run pre-commit" in scanner._generate_pre_commit_hook_content()
+        "envshield hook run pre-commit"
+        in hooks_manager._generate_pre_commit_hook_content()
     )
 
 

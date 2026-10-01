@@ -18,13 +18,20 @@ class TestAddedVariables:
         assert change.category == "breaking"
         assert result.has_breaking_changes is True
 
-    def test_new_variable_with_a_default_is_non_breaking(self):
-        """A defaulted field is never required (is_required_now returns
-        False unconditionally whenever defaultValue is present, matching
-        _requiredness_state's 'defaulted' state) -- adding one can't
-        invalidate any config that was valid before."""
+    def test_new_variable_with_a_default_is_breaking(self):
+        """'check' requires a defaulted field to be present in the file (the
+        default is what 'setup' fills in, not a fallback -- D-1), so adding
+        one fails every existing config that lacks it."""
         result = contract_diff.diff_schemas(
             {}, {"NEW": {"description": "x", "defaultValue": "y"}}
+        )
+
+        change = _change_for(result, "NEW")
+        assert change.category == "breaking"
+
+    def test_new_optional_variable_is_non_breaking(self):
+        result = contract_diff.diff_schemas(
+            {}, {"NEW": {"description": "x", "required": False}}
         )
 
         change = _change_for(result, "NEW")
@@ -96,19 +103,18 @@ class TestRequirednessTransitions:
         change = _change_for(result, "V")
         assert change.category == "default_changed"
 
-    def test_losing_a_bare_default_with_no_requiredif_is_breaking(self):
-        """'optional -> required': the variable had a fallback and now has
-        none -- any config that omitted it, relying on the default, is now
-        invalid. This is provable, so it's breaking, not the softer
-        default_changed bucket."""
+    def test_losing_a_bare_default_with_no_requiredif_is_non_breaking(self):
+        """Both sides require V to be present in the file; only what
+        'setup' fills in changed, so no config that passed 'check' before
+        fails it now."""
         a = {"V": {"description": "x", "defaultValue": "1"}}
         b = {"V": {"description": "x"}}
 
         result = contract_diff.diff_schemas(a, b)
 
         change = _change_for(result, "V")
-        assert change.category == "breaking"
-        assert result.has_breaking_changes is True
+        assert change.category == "non_breaking"
+        assert result.has_breaking_changes is False
 
     def test_gaining_a_bare_default_with_no_requiredif_is_non_breaking(self):
         """'required -> optional': every config that already set it
@@ -122,10 +128,9 @@ class TestRequirednessTransitions:
         assert change.category == "non_breaking"
         assert result.has_breaking_changes is False
 
-    def test_losing_a_default_while_gaining_a_requiredif_requires_review(self):
-        """Neither provably breaking (the condition might never hold) nor
-        provably safe (it might hold for many configs) -- schema-only diff
-        can't evaluate the condition, so this is genuinely undecidable."""
+    def test_losing_a_default_while_gaining_a_requiredif_is_non_breaking(self):
+        """Always-required (the default never exempted it) relaxed to
+        conditional: every config that had it present still passes."""
         a = {"V": {"description": "x", "defaultValue": "1"}}
         b = {
             "V": {
@@ -137,11 +142,12 @@ class TestRequirednessTransitions:
         result = contract_diff.diff_schemas(a, b)
 
         change = _change_for(result, "V")
-        assert change.category == "requires_review"
+        assert change.category == "non_breaking"
 
-    def test_gaining_a_default_from_conditional_is_non_breaking(self):
-        """The variable widens from 'required under some condition' to
-        'never required' -- strictly safer."""
+    def test_gaining_a_default_from_conditional_is_breaking(self):
+        """Conditional -> always required (a default wins over requiredIf
+        and must be present in the file): a config that omitted V while the
+        condition was unmet now fails 'check'."""
         a = {
             "V": {
                 "description": "x",
@@ -153,7 +159,57 @@ class TestRequirednessTransitions:
         result = contract_diff.diff_schemas(a, b)
 
         change = _change_for(result, "V")
-        assert change.category == "non_breaking"
+        assert change.category == "breaking"
+
+
+class TestRequirednessAgreesWithCheck:
+    """
+    The class of bug behind D-1: 'schema diff' judging requiredness by a
+    different rule than 'check'. For every pair of field shapes, a change
+    is 'breaking' exactly when some config 'check' accepted under A (here:
+    one omitting V, with or without the requiredIf trigger set) is
+    rejected under B.
+    """
+
+    SHAPES = {
+        "unconditional": {},
+        "defaulted": {"defaultValue": "1"},
+        "conditional": {"requiredIf": {"var": "F", "equals": "true"}},
+        "conditional_defaulted": {
+            "requiredIf": {"var": "F", "equals": "true"},
+            "defaultValue": "1",
+        },
+        "required_true": {"required": True},
+        "optional": {"required": False},
+        "optional_defaulted": {"required": False, "defaultValue": "1"},
+    }
+
+    @staticmethod
+    def _check_passes_without_v(field, trigger_values):
+        from envshield.core import schema_manager
+
+        schema = {"V": field, "F": {"required": False}}
+        diff = schema_manager.diff_against_schema(schema, dict(trigger_values))
+        return "V" not in diff.missing
+
+    def test_every_transition(self):
+        configs = [{}, {"F": "true"}]
+        for name_a, a in self.SHAPES.items():
+            for name_b, b in self.SHAPES.items():
+                result = contract_diff.diff_schemas({"V": a}, {"V": b})
+                categories = {c.category for c in result.changes}
+                newly_failing = any(
+                    self._check_passes_without_v(a, cfg)
+                    and not self._check_passes_without_v(b, cfg)
+                    for cfg in configs
+                )
+                label = f"{name_a} -> {name_b}: {categories}"
+                if newly_failing:
+                    # Conditional targets can't be proven from the schema
+                    # alone (the trigger's value is config data).
+                    assert categories & {"breaking", "requires_review"}, label
+                else:
+                    assert "breaking" not in categories, label
 
 
 class TestTypeChanges:

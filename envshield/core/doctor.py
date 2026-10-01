@@ -10,7 +10,14 @@ from rich.console import Console
 
 from ..config import manager as config_manager
 from ..parsers.factory import get_manifest_parser_and_vars, get_parser
-from . import scanner, schema_manager, service_discovery, setup_manager
+from ..utils import git_utils
+from . import (
+    evaluator,
+    hooks_manager,
+    schema_manager,
+    service_discovery,
+    setup_manager,
+)
 from .exceptions import EnvShieldException
 
 console = Console()
@@ -88,29 +95,26 @@ def _check_local_env_sync(service_name: str):
         local_file = config_manager.get_env_paths(service_name=service_name)[
             "local_file"
         ]
-        if not os.path.exists(local_file):
-            return (
-                False,
-                f"Local env file '{local_file}' not found. Run 'envshield setup' to create it.",
-            )
-
-        parser = get_parser(local_file)
-        if not parser:
-            return False, f"Cannot parse local env file '{local_file}'."
-        local_values = parser.get_vars(local_file, get_values=True)
-
-        diff = schema_manager.diff_against_schema(schema, local_values)
-        schema_manager.drop_file_peer_extras(diff, service_name, local_file)
-        schema_manager.mark_out_of_scope(diff, service_name)
-        if diff.is_clean:
-            return True, f"'{local_file}' is in sync with schema."
-        return False, diff.summary()
-
     except EnvShieldException as e:
         # Preserve the real reason (already actionable -- see
         # config_manager's load_schema/get_service_schema_path) instead of
         # masking it behind a generic "could not load schema."
         return False, str(e)
+    if not os.path.exists(local_file):
+        return (
+            False,
+            f"Local env file '{local_file}' not found. Run 'envshield setup' to create it.",
+        )
+
+    # The same evaluation 'check' runs, so the two can never disagree.
+    source = evaluator.evaluate_source(local_file, service_name, schema=schema)
+    if source.unparseable:
+        return False, f"Cannot parse local env file '{local_file}'."
+    if source.error is not None:
+        return False, source.error
+    if source.diff.is_clean:
+        return True, f"'{local_file}' is in sync with schema."
+    return False, source.diff.summary()
 
 
 def _check_deployment_manifest(service_name: str):
@@ -126,32 +130,25 @@ def _check_deployment_manifest(service_name: str):
     all_clean = True
     messages = []
     for manifest in manifests:
-        try:
-            parser, local_values = get_manifest_parser_and_vars(
-                manifest["paths"],
-                container=manifest.get("container"),
-                prefer=service_name,
-                get_values=True,
-            )
-            if not parser:
-                all_clean = False
-                messages.append(
-                    f"Cannot parse deployment manifest '{manifest['path']}'."
-                )
-                continue
-
-            diff = schema_manager.diff_against_schema(
-                schema, local_values, has_unresolved_source=parser.has_unresolved_source
-            )
-            schema_manager.mark_out_of_scope(diff, service_name)
-            if diff.is_clean:
-                messages.append(f"'{manifest['path']}' is in sync with schema.")
-            else:
-                all_clean = False
-                messages.append(f"'{manifest['path']}': {diff.summary()}")
-        except (EnvShieldException, FileNotFoundError, ValueError) as e:
+        source = evaluator.evaluate_source(
+            manifest["path"],
+            service_name,
+            container=manifest.get("container"),
+            paths=manifest["paths"],
+            schema=schema,
+            kind="manifest",
+        )
+        if source.unparseable:
             all_clean = False
-            messages.append(f"Could not check '{manifest['path']}': {e}")
+            messages.append(f"Cannot parse deployment manifest '{manifest['path']}'.")
+        elif source.error is not None:
+            all_clean = False
+            messages.append(f"Could not check '{manifest['path']}': {source.error}")
+        elif source.diff.is_clean:
+            messages.append(f"'{manifest['path']}' is in sync with schema.")
+        else:
+            all_clean = False
+            messages.append(f"'{manifest['path']}': {source.diff.summary()}")
 
     return all_clean, "; ".join(messages)
 
@@ -465,10 +462,10 @@ def _check_git_hooks():
     every generated hook script carries), the same bar pre-commit already
     held itself to.
     """
-    if not scanner.git_utils.get_git_root():
+    if not git_utils.get_git_root():
         return False, "Not a Git repository."
 
-    hooks_dir = scanner.git_utils.get_hooks_dir()
+    hooks_dir = git_utils.get_hooks_dir()
     missing = []
     for hook_name in ("pre-commit", "post-merge"):
         hook_path = os.path.join(hooks_dir, hook_name)
@@ -477,7 +474,7 @@ def _check_git_hooks():
             continue
         with open(hook_path, "r") as f:
             content = f.read()
-        if scanner.ENVSHIELD_HOOK_MARKER not in content:
+        if hooks_manager.ENVSHIELD_HOOK_MARKER not in content:
             missing.append(hook_name)
 
     if missing:
@@ -564,8 +561,8 @@ def _build_checks(service_name: str) -> List[HealthCheck]:
             "Git Hooks",
             _check_git_hooks,
             fix_func=lambda: (
-                scanner.install_pre_commit_hook(force=True),
-                scanner.install_post_merge_hook(force=True),
+                hooks_manager.install_pre_commit_hook(force=True),
+                hooks_manager.install_post_merge_hook(force=True),
             ),
             fix_description="One or both git hooks are missing or not EnvShield's. Install them now?",
         )

@@ -902,3 +902,18 @@ class TestImportRecognizesRealEnvironmentReads:
 
         assert added == {str(other_file): ["SUPERSET_SECRET_KEY"]}
         assert "PROJECT_ROOT" not in schema_dict
+
+
+class TestUnsafeNamesAreSkipped:
+    """A name the schema can't hold would make the whole written schema
+    fail to load (D-2), so import skips it and says so."""
+
+    def test_unsafe_name_is_skipped_and_reported(self, tmp_path, capsys):
+        env_file = tmp_path / ".env"
+        env_file.write_text("MY-VAR=1\nOK=2\n")
+
+        schema = toml.loads(importer.generate_schema_from_file(str(env_file)))
+
+        assert "MY-VAR" not in schema
+        assert "OK" in schema
+        assert "MY-VAR" in capsys.readouterr().out

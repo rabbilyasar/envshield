@@ -1,7 +1,7 @@
 # envshield/tests/core/test_post_merge_hook.py
 import subprocess
 
-from envshield.core import hooks_manager, scanner
+from envshield.core import hooks_manager
 
 
 def _git(*args):
@@ -51,7 +51,8 @@ def _record(mocker):
 
 def test_post_merge_hook_runs_doctor_through_the_runner():
     assert (
-        "envshield hook run post-merge" in scanner._generate_post_merge_hook_content()
+        "envshield hook run post-merge"
+        in hooks_manager._generate_post_merge_hook_content()
     )
 
 

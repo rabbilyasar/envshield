@@ -408,11 +408,21 @@ class TestSetupPreservesPeerValues:
         self._assert_peer_values_survive(tmp_path)
 
     def test_this_services_schema_is_unloadable(self, tmp_path, monkeypatch):
+        # A schema that exists but fails to load is an error, not a silent
+        # unvalidated setup (evaluator migration, step 8) -- and nothing is
+        # written, so every peer's values survive untouched.
+        from envshield.core.exceptions import SchemaParseError
+
         _project(tmp_path, monkeypatch, SEPARATE_SCHEMAS_SHARED_LOCAL)
         (tmp_path / "api" / "env.schema.toml").write_text("[BROKEN\n")
         (tmp_path / "worker" / "env.schema.toml").write_text("[QUEUE_URL]\n")
         self._seed_shared_env(tmp_path)
-        assert setup_manager.run_setup("api")
+        before = (tmp_path / ".env").read_text()
+
+        with pytest.raises(SchemaParseError):
+            setup_manager.run_setup("api")
+
+        assert (tmp_path / ".env").read_text() == before
         self._assert_peer_values_survive(tmp_path)
 
     def test_peer_key_with_an_empty_value_is_not_dropped(self, tmp_path, monkeypatch):

@@ -425,3 +425,24 @@ def test_looks_like_it_reads_the_environment_is_true_for_pydantic_base_settings(
     )
 
     assert service_discovery.looks_like_it_reads_the_environment(str(settings)) is True
+
+
+def test_discovered_directory_never_takes_a_registered_services_name(tmp_path):
+    """
+    Regression: a root service 'd' plus a discovered 'services/d/' used to
+    come back as name 'd', and registering it merged into -- and repointed
+    -- the existing root service with no warning.
+    """
+    service = tmp_path / "services" / "d"
+    service.mkdir(parents=True)
+    (service / ".env").write_text("A=1\n")
+    (tmp_path / "services" / "other").mkdir()
+    (tmp_path / "services" / "other" / ".env").write_text("B=1\n")
+
+    candidates = service_discovery.discover_candidates(
+        str(tmp_path), known_names=["d", "services-d"]
+    )
+
+    names = {os.path.basename(c["dir"]): c["name"] for c in candidates}
+    assert names["d"] not in ("d", "services-d")
+    assert names["other"] == "other"

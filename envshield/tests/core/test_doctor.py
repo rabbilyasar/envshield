@@ -115,6 +115,25 @@ def test_check_example_file_sync_passes_when_in_sync(tmp_path, monkeypatch):
     assert passed is True
 
 
+def test_check_example_file_sync_compares_key_names_only(tmp_path, monkeypatch):
+    """
+    Pins current semantics ('schema sync --check' and the pre-commit hook
+    rely on this): only the set of names is compared. A stale default or
+    annotation in '.env.example' is not drift. Changing this is its own
+    decision (see evaluator-decisions.md), not a side effect.
+    """
+    monkeypatch.chdir(tmp_path)
+    _write_root_service()
+    with open(SCHEMA_FILE_NAME, "w") as f:
+        f.write('[PORT]\ndescription="x"\ndefaultValue="8000"\n')
+    with open(".env.example", "w") as f:
+        f.write("PORT=9999\n")
+
+    passed, _message = doctor._check_example_file_sync(service_name="app")
+
+    assert passed is True
+
+
 def test_doctor_all_ok(mocker, tmp_path):
     """Tests the doctor command when all checks pass."""
     with runner.isolated_filesystem(temp_dir=tmp_path):
@@ -190,10 +209,10 @@ def test_doctor_fix_flow(mocker, tmp_path):
         # Mock the fix function itself -- the fix now installs both hooks,
         # not just pre-commit.
         mock_install_hook = mocker.patch(
-            "envshield.core.scanner.install_pre_commit_hook"
+            "envshield.core.hooks_manager.install_pre_commit_hook"
         )
         mock_install_post_merge = mocker.patch(
-            "envshield.core.scanner.install_post_merge_hook"
+            "envshield.core.hooks_manager.install_post_merge_hook"
         )
 
         # Correctly mock the chained call for questionary

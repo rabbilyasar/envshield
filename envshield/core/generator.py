@@ -164,8 +164,11 @@ def _render_python_field(key: str, details: dict[str, Any]) -> tuple[str, set[st
     # A field with 'requiredIf' and no default is only sometimes required --
     # codegen can't evaluate that condition ahead of time, so it's typed as
     # optional; 'check'/'doctor' enforce the real, conditional requirement
-    # at validation time against the project's actual local values.
-    conditional = "requiredIf" in details and default_value is None
+    # at validation time against the project's actual local values. A
+    # 'required = false' field with no default is optional outright.
+    conditional = (
+        schema_types.presence_rule(details) != "always" and default_value is None
+    )
     if conditional:
         py_type = f"Optional[{py_type}]"
         imports.add("from typing import Optional")
@@ -366,7 +369,9 @@ def _render_ts_field(key: str, details: dict[str, Any]) -> str:
     if schema_types.secret_default_conflict(details):
         default_value = None
     field_type = _effective_field_type(details)
-    conditional = "requiredIf" in details and default_value is None
+    conditional = (
+        schema_types.presence_rule(details) != "always" and default_value is None
+    )
     has_pattern = bool(details.get("pattern"))
 
     if (

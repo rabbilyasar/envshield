@@ -343,3 +343,105 @@ class TestNormalizeDefaultValue:
         compare as a plain string."""
         result = schema_types.normalize_default_value("not-a-number", "int")
         assert result == "not-a-number"
+
+
+# --- D-1/D-2 (docs/architecture/evaluator-decisions.md) ---------------------
+
+
+@pytest.mark.parametrize(
+    "field, expected",
+    [
+        ({}, "always"),
+        ({"defaultValue": "1"}, "always"),
+        ({"requiredIf": {"var": "F"}}, "conditional"),
+        # Legacy precedence: a default wins over requiredIf.
+        ({"requiredIf": {"var": "F"}, "defaultValue": "1"}, "always"),
+        ({"required": True}, "always"),
+        ({"required": True, "defaultValue": "1"}, "always"),
+        ({"required": False}, "never"),
+        ({"required": False, "defaultValue": "1"}, "never"),
+    ],
+)
+def test_presence_rule(field, expected):
+    assert schema_types.presence_rule(field) == expected
+
+
+def test_a_default_never_makes_a_field_optional_for_check():
+    assert schema_types.should_be_present({"defaultValue": "8000"}, {}) is True
+    # ...but 'setup' fills it in rather than asking.
+    assert schema_types.is_required_now({"defaultValue": "8000"}, {}) is False
+
+
+def test_required_false_is_never_present_and_never_prompted():
+    assert schema_types.should_be_present({"required": False}, {}) is False
+    assert schema_types.is_required_now({"required": False}, {}) is False
+
+
+def test_required_true_is_prompted_unless_defaulted():
+    assert schema_types.is_required_now({"required": True}, {}) is True
+    assert (
+        schema_types.is_required_now({"required": True, "defaultValue": "x"}, {})
+        is False
+    )
+
+
+@pytest.mark.parametrize(
+    "name, field, fragment",
+    [
+        (
+            "PORT",
+            {"default": "8000"},
+            "unknown key 'default' (did you mean 'defaultValue'?)",
+        ),
+        ("PORT", {"environments": ["prod"]}, "unknown key 'environments'"),
+        ("PORT", {"type": "nonsense"}, "unknown type 'nonsense'"),
+        ("PORT", {"type": 5}, "'PORT'.type must be a string"),
+        ("PORT", {"required": "yes"}, "'PORT'.required must be true or false"),
+        ("PORT", {"secret": 1}, "'PORT'.secret must be true or false"),
+        ("PORT", {"enum": "a,b"}, "'PORT'.enum must be a list"),
+        ("PORT", {"requiredIf": "F"}, "'PORT'.requiredIf must be a table"),
+        (
+            "PORT",
+            {"requiredIf": {"var": "F", "is": "1"}},
+            "requiredIf has unknown key 'is'",
+        ),
+        (
+            "PORT",
+            {"required": True, "requiredIf": {"var": "F"}},
+            "sets both 'required' and 'requiredIf'",
+        ),
+        ("BAD-NAME", {}, "is not a valid variable name"),
+        ("PORT", "8000", "must be a table"),
+    ],
+)
+def test_field_problems_detects(name, field, fragment):
+    problems = schema_types.field_problems(name, field)
+    assert any(fragment in p for p in problems), problems
+
+
+def test_field_problems_accepts_every_documented_key():
+    field = {
+        "type": "enum",
+        "enum": ["a"],
+        "pattern": "a",
+        "defaultValue": "a",
+        "required": True,
+        "secret": False,
+        "description": "d",
+        "services": ["api"],
+    }
+    assert schema_types.field_problems("V", field) == []
+    assert (
+        schema_types.field_problems(
+            "V", {"requiredIf": {"var": "F", "equals": "x"}, "defaultValue": "1"}
+        )
+        == []
+    )
+
+
+def test_field_problems_never_echoes_a_value():
+    problems = schema_types.field_problems(
+        "V", {"required": "SYNTHETIC_SECRET_VALUE", "type": ["SYNTHETIC_TYPE"]}
+    )
+    assert problems
+    assert not any("SYNTHETIC" in p for p in problems)

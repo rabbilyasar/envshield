@@ -11,6 +11,7 @@ from envshield.core.exceptions import (
     SchemaNotFoundError,
     SchemaParseError,
     SchemaScopeError,
+    SchemaValidationError,
     SecretDefaultConflictError,
     ServiceConfigError,
     UnsafePathError,
@@ -796,6 +797,47 @@ def test_get_deployment_manifests_rejects_manifest_path_escaping_project(
 
     with pytest.raises(UnsafePathError):
         config_manager.get_deployment_manifests("api")
+
+
+class TestLoadSchemaValidatesFields:
+    """D-2: an unknown key or type fails every live load, never silently ignored."""
+
+    def _write(self, schema):
+        with open("env.schema.toml", "w") as f:
+            f.write(schema)
+        with open("envshield.yml", "w") as f:
+            f.write("services:\n  api:\n    schema: env.schema.toml\n")
+
+    def test_unknown_key_fails_load_schema(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        self._write('[PORT]\ndefault = "8000"\n')
+
+        with pytest.raises(SchemaValidationError) as exc_info:
+            config_manager.load_schema("api")
+        assert "did you mean 'defaultValue'" in str(exc_info.value)
+
+    def test_unknown_type_fails_load_bare_schema(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        self._write('[PORT]\ntype = "prot"\n')
+
+        with pytest.raises(SchemaValidationError):
+            config_manager.load_bare_schema("env.schema.toml")
+
+    def test_a_problem_in_an_extends_base_fails_the_child(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        with open("base.schema.toml", "w") as f:
+            f.write("[BAD-NAME]\n")
+        self._write('extends = "base.schema.toml"\n[PORT]\ntype = "port"\n')
+
+        with pytest.raises(SchemaValidationError) as exc_info:
+            config_manager.load_schema("api")
+        assert "BAD-NAME" in str(exc_info.value)
+
+    def test_required_is_a_supported_key(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        self._write('[PORT]\ntype = "port"\nrequired = false\n')
+
+        assert config_manager.load_schema("api")["PORT"]["required"] is False
 
 
 class TestManifestBaseOverrideRegistration:

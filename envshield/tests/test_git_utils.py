@@ -112,7 +112,7 @@ def test_get_hooks_dir_honors_absolute_core_hooks_path(tmp_path, monkeypatch):
 def test_install_pre_commit_hook_writes_into_configured_hooks_path(
     tmp_path, monkeypatch
 ):
-    from envshield.core import scanner
+    from envshield.core import hooks_manager
 
     _init_repo(tmp_path)
     monkeypatch.chdir(tmp_path)
@@ -121,7 +121,7 @@ def test_install_pre_commit_hook_writes_into_configured_hooks_path(
         ["git", "config", "core.hooksPath", ".husky"], cwd=tmp_path, check=True
     )
 
-    scanner.install_pre_commit_hook(force=True)
+    hooks_manager.install_pre_commit_hook(force=True)
 
     assert os.path.exists(tmp_path / ".husky" / "pre-commit")
     assert not os.path.exists(tmp_path / ".git" / "hooks" / "pre-commit")
@@ -179,14 +179,14 @@ class TestHookGrepMatchesExactPathOnly:
 
     def test_hooks_do_no_path_matching_in_shell(self, tmp_path, monkeypatch):
         from envshield.config import manager as config_manager
-        from envshield.core import scanner
+        from envshield.core import hooks_manager
 
         monkeypatch.chdir(tmp_path)
         config_manager.add_service("api", "api/env.schema.toml")
 
         for content in (
-            scanner._generate_pre_commit_hook_content(),
-            scanner._generate_post_merge_hook_content(),
+            hooks_manager._generate_pre_commit_hook_content(),
+            hooks_manager._generate_post_merge_hook_content(),
         ):
             assert "grep" not in content
             assert "api/" not in content

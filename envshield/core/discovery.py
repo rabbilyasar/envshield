@@ -80,6 +80,29 @@ class DiscoveredVariableUsage:
         }
 
 
+@dataclass
+class DynamicReference:
+    """
+    A recognized environment read whose key isn't a literal --
+    `os.getenv(name)`, `process.env[key]`. It names no variable, so it can
+    never be declared or undeclared; it's reported so a reader knows
+    discovery saw a read it couldn't resolve, rather than it disappearing.
+    """
+
+    file_path: str
+    line: int
+    language: str
+    access_type: str
+
+    def to_dict(self) -> dict:
+        return {
+            "file_path": self.file_path,
+            "line": self.line,
+            "language": self.language,
+            "access_type": self.access_type,
+        }
+
+
 def _literal_str(node: Optional[ast.expr]) -> Optional[str]:
     """
     Returns the string value of `node` if it's a plain literal string
@@ -269,12 +292,28 @@ def _is_flask_config_get(node: ast.expr, flask_bindings: _FlaskBindings) -> bool
 
 class _UsageVisitor(ast.NodeVisitor):
     def __init__(
-        self, file_path: str, bindings: _OsBindings, flask_bindings: _FlaskBindings
+        self,
+        file_path: str,
+        bindings: _OsBindings,
+        flask_bindings: _FlaskBindings,
+        include_settings: bool = False,
     ):
         self.file_path = file_path
         self.bindings = bindings
         self.flask_bindings = flask_bindings
+        self.include_settings = include_settings
         self.usages: List[DiscoveredVariableUsage] = []
+        self.dynamic: List[DynamicReference] = []
+
+    def _record_dynamic(self, line: int, access_type: str) -> None:
+        self.dynamic.append(
+            DynamicReference(
+                file_path=self.file_path,
+                line=line,
+                language="python",
+                access_type=access_type,
+            )
+        )
 
     def _record(
         self, variable: str, line: int, access_type: str, confidence: str = "high"
@@ -296,7 +335,12 @@ class _UsageVisitor(ast.NodeVisitor):
             return
 
         key = _literal_str(node.args[0])
-        if key is not None:
+        if key is None:
+            if _is_os_environ_get(node.func, self.bindings):
+                self._record_dynamic(node.lineno, "os.environ.get")
+            elif _is_os_getenv(node.func, self.bindings):
+                self._record_dynamic(node.lineno, "os.getenv")
+        else:
             if _is_os_environ_get(node.func, self.bindings):
                 self._record(key, node.lineno, "os.environ.get")
             elif _is_os_getenv(node.func, self.bindings):
@@ -321,6 +365,8 @@ class _UsageVisitor(ast.NodeVisitor):
             key = _literal_str(node.slice)
             if key is not None:
                 self._record(key, node.lineno, "os.environ[]")
+            else:
+                self._record_dynamic(node.lineno, "os.environ[]")
         elif _is_flask_config_attr(node.value, self.flask_bindings) and isinstance(
             node.ctx, ast.Load
         ):
@@ -331,6 +377,89 @@ class _UsageVisitor(ast.NodeVisitor):
                 )
 
         self.generic_visit(node)
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        if self.include_settings and _is_base_settings_subclass(node):
+            confidence = "medium" if _settings_rename_env(node) else "high"
+            for stmt in node.body:
+                if not (
+                    isinstance(stmt, ast.AnnAssign)
+                    and isinstance(stmt.target, ast.Name)
+                ):
+                    continue
+                if stmt.target.id == "model_config":
+                    continue
+                # An explicit os.environ/getenv read in the value names the
+                # real variable; the ordinary traversal records that one.
+                if stmt.value is not None and _contains_recognized_env_read(
+                    stmt.value, self.bindings
+                ):
+                    continue
+                variable = stmt.target.id.upper()
+                if stmt.value is not None and _is_pydantic_field_call(stmt.value):
+                    variable = _pydantic_field_alias(stmt.value) or variable
+                self._record(
+                    variable,
+                    stmt.lineno,
+                    "pydantic.BaseSettings.field",
+                    confidence=confidence,
+                )
+        self.generic_visit(node)
+
+
+_SETTINGS_RENAME_KEYS = frozenset(
+    {"env_prefix", "alias_generator", "case_sensitive", "env_nested_delimiter"}
+)
+
+
+def _settings_rename_env(node: ast.ClassDef) -> bool:
+    """
+    Whether a BaseSettings class configures anything that changes which
+    environment name a field reads (a prefix, an alias generator, case
+    sensitivity, nesting) -- via `model_config = SettingsConfigDict(...)`
+    (pydantic v2) or an inner `class Config` (v1). If so, a field's
+    upper-cased name is only a guess, so it's reported at "medium".
+    `env_file` alone doesn't rename anything and doesn't count.
+    """
+    for stmt in node.body:
+        value = None
+        if isinstance(stmt, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == "model_config" for t in stmt.targets
+        ):
+            value = stmt.value
+        elif (
+            isinstance(stmt, ast.AnnAssign)
+            and isinstance(stmt.target, ast.Name)
+            and stmt.target.id == "model_config"
+        ):
+            value = stmt.value
+        if isinstance(value, ast.Call):
+            if any(
+                kw.arg in _SETTINGS_RENAME_KEYS or kw.arg is None
+                for kw in value.keywords
+            ):
+                return True
+        elif isinstance(value, ast.Dict):
+            for key in value.keys:
+                if key is None or _literal_str(key) in _SETTINGS_RENAME_KEYS:
+                    return True
+        elif value is not None:
+            return True  # model_config built some other way: can't tell
+        if isinstance(stmt, ast.ClassDef) and stmt.name == "Config":
+            for inner in stmt.body:
+                targets = (
+                    inner.targets
+                    if isinstance(inner, ast.Assign)
+                    else [inner.target]
+                    if isinstance(inner, ast.AnnAssign)
+                    else []
+                )
+                if any(
+                    isinstance(t, ast.Name) and t.id in _SETTINGS_RENAME_KEYS
+                    for t in targets
+                ):
+                    return True
+    return False
 
 
 def discover_python_usages(
@@ -359,22 +488,52 @@ def discover_python_usages(
     this can't discover usages in should not abort the overall scan or
     affect that same file's secret-scanning results.
     """
+    return _visit_python(content, file_path)[0]
+
+
+def _visit_python(
+    content: str, file_path: str, include_settings: bool = False
+) -> "tuple[List[DiscoveredVariableUsage], List[DynamicReference]]":
     try:
         tree = ast.parse(content, filename=file_path)
     except (SyntaxError, RecursionError, ValueError):
-        return []
+        return [], []
 
     bindings = _collect_os_bindings(tree, content)
     flask_bindings = (
         _collect_flask_bindings(tree) if "current_app" in content else _FlaskBindings()
     )
-    visitor = _UsageVisitor(file_path, bindings, flask_bindings)
+    visitor = _UsageVisitor(
+        file_path, bindings, flask_bindings, include_settings=include_settings
+    )
     try:
         visitor.visit(tree)
     except RecursionError:
-        return []
+        return [], []
 
-    return visitor.usages
+    return visitor.usages, visitor.dynamic
+
+
+def discover_references(
+    content: str, file_path: str
+) -> "tuple[List[DiscoveredVariableUsage], List[DynamicReference]]":
+    """
+    The evaluator's entry point (and 'explain's): everything
+    discover_python_usages/discover_js_usages find, plus BaseSettings
+    fields (Python -- "high" unless the class renames environment names,
+    see _settings_rename_env) and reads whose key isn't a literal, as
+    DynamicReference. Dispatches on the file's extension; any other file
+    yields nothing.
+
+    'scan' and 'undeclared' keep calling discover_python_usages /
+    discover_js_usages, which don't include BaseSettings fields: what
+    blocks a commit or lands in SARIF isn't changed as a side effect.
+    """
+    if file_path.endswith(".py"):
+        return _visit_python(content, file_path, include_settings=True)
+    if _js_language_for(file_path):
+        return _discover_js(content, file_path)
+    return [], []
 
 
 @dataclass
@@ -800,26 +959,104 @@ def _discover_js_destructuring(
     return usages
 
 
-def discover_js_usages(content: str, file_path: str) -> List[DiscoveredVariableUsage]:
-    """
-    The one public entry point for JS/TS (Phase 2B Milestone 2): recognizes
-    process.env/import.meta.env dot access, bracket access, and
-    single-level object destructuring (including rename/default/rest
-    handling) with a literal string key/property name. Gated by the
-    caller to .js/.jsx/.ts/.tsx files; `language` is derived from the
-    extension purely for labeling -- none of these patterns differ between
-    JS and TS, so no TS-specific syntax awareness is needed.
+_JS_DYNAMIC_ACCESS_RE = re.compile(
+    r"(process\.env|import\.meta\.env)\[(?!\s*(['\"])\w+\2\s*\])"
+)
 
-    Regex-based, not a parser -- never raises on malformed/unusual input;
-    it just matches fewer (or zero) usages, the same safe-by-construction
-    property every other regex-based check in scanner.py already has.
+
+def _js_non_code_mask(content: str) -> bytearray:
     """
+    Marks every character inside a comment or a string literal (1) versus
+    code (0), in one linear pass, so a `process.env.X` written in a comment
+    or a string isn't reported as a read. Template literals are text
+    except their `${...}` expressions, which are code (nested templates
+    included).
+
+    Deliberately small, not a real JS lexer: a regex literal isn't
+    recognized, so a quote inside one (`/'/`) opens a string -- bounded to
+    the rest of that line, since ' and " strings can't span lines. The
+    effect of that is a missed read on one line, never a crash.
+    """
+    n = len(content)
+    mask = bytearray(n)
+    i = 0
+    # Each entry: brace depth inside a template's ${...} expression.
+    template_exprs: List[int] = []
+    in_template = False
+    while i < n:
+        ch = content[i]
+        if in_template:
+            if ch == "\\":
+                mask[i : i + 2] = b"\x01\x01"[: n - i]
+                i += 2
+                continue
+            if ch == "`":
+                mask[i] = 1
+                in_template = False
+                i += 1
+                continue
+            if ch == "$" and i + 1 < n and content[i + 1] == "{":
+                mask[i : i + 2] = b"\x01\x01"
+                template_exprs.append(0)
+                in_template = False
+                i += 2
+                continue
+            mask[i] = 1
+            i += 1
+            continue
+        nxt = content[i + 1] if i + 1 < n else ""
+        if ch == "/" and nxt == "/":
+            end = content.find("\n", i)
+            end = n if end == -1 else end
+            mask[i:end] = b"\x01" * (end - i)
+            i = end
+        elif ch == "/" and nxt == "*":
+            end = content.find("*/", i + 2)
+            end = n if end == -1 else end + 2
+            mask[i:end] = b"\x01" * (end - i)
+            i = end
+        elif ch in "'\"":
+            j = i + 1
+            while j < n and content[j] != ch and content[j] != "\n":
+                j += 2 if content[j] == "\\" else 1
+            end = min(j + 1, n)
+            mask[i:end] = b"\x01" * (end - i)
+            i = end
+        elif ch == "`":
+            mask[i] = 1
+            in_template = True
+            i += 1
+        else:
+            if template_exprs:
+                if ch == "{":
+                    template_exprs[-1] += 1
+                elif ch == "}":
+                    if template_exprs[-1] == 0:
+                        template_exprs.pop()
+                        mask[i] = 1
+                        in_template = True
+                        i += 1
+                        continue
+                    template_exprs[-1] -= 1
+            i += 1
+    return mask
+
+
+def _discover_js(
+    content: str, file_path: str
+) -> "tuple[List[DiscoveredVariableUsage], List[DynamicReference]]":
     language = _js_language_for(file_path) or "javascript"
+    mask = _js_non_code_mask(content)
+    # Brace matching runs over code only, so a brace inside a string or
+    # comment can't pair with a real destructuring pattern's.
+    code_only = "".join(
+        " " if mask[i] and ch != "\n" else ch for i, ch in enumerate(content)
+    )
     # Built once and reused for every match below -- a per-match
     # content.count("\n", 0, pos) call would cost O(pos) each time, which
     # for a file with many matches spread across it degrades toward
     # O(n * matches) rather than the O(n) this achieves.
-    brace_matches, newline_positions = _build_brace_match_and_line_index(content)
+    brace_matches, newline_positions = _build_brace_match_and_line_index(code_only)
     usages = []
 
     for pattern, group, access_type in (
@@ -829,6 +1066,8 @@ def discover_js_usages(content: str, file_path: str) -> List[DiscoveredVariableU
         (_JS_META_BRACKET_ACCESS_RE, 2, "import.meta.env[]"),
     ):
         for m in pattern.finditer(content):
+            if mask[m.start()]:
+                continue
             if _JS_ASSIGNMENT_TARGET_RE.match(content, m.end()):
                 continue
             usages.append(
@@ -843,8 +1082,60 @@ def discover_js_usages(content: str, file_path: str) -> List[DiscoveredVariableU
             )
 
     usages.extend(
-        _discover_js_destructuring(
+        u
+        for u in _discover_js_destructuring(
             content, file_path, language, brace_matches, newline_positions
         )
     )
-    return usages
+
+    dynamic = [
+        DynamicReference(
+            file_path=file_path,
+            line=_line_at(newline_positions, m.start()),
+            language=language,
+            access_type=f"{m.group(1)}[]",
+        )
+        for m in _JS_DYNAMIC_ACCESS_RE.finditer(content)
+        if not mask[m.start()]
+        and not _JS_ASSIGNMENT_TARGET_RE.match(
+            content, _bracket_end(content, m.end() - 1)
+        )
+    ]
+    return usages, dynamic
+
+
+def _bracket_end(content: str, open_pos: int) -> int:
+    """Position just past the ']' closing the '[' at `open_pos` (or end of line)."""
+    depth = 0
+    for i in range(open_pos, len(content)):
+        ch = content[i]
+        if ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        elif ch == "\n":
+            return i
+    return len(content)
+
+
+def discover_js_usages(content: str, file_path: str) -> List[DiscoveredVariableUsage]:
+    """
+    The one public entry point for JS/TS (Phase 2B Milestone 2): recognizes
+    process.env/import.meta.env dot access, bracket access, and
+    single-level object destructuring (including rename/default/rest
+    handling) with a literal string key/property name. Gated by the
+    caller to .js/.jsx/.ts/.tsx files; `language` is derived from the
+    extension purely for labeling -- none of these patterns differ between
+    JS and TS, so no TS-specific syntax awareness is needed.
+
+    A match that starts inside a comment or a string literal is not a read
+    (see _js_non_code_mask); `process.env["X"]` itself still is, since the
+    match starts at `process`.
+
+    Regex-based, not a parser -- never raises on malformed/unusual input;
+    it just matches fewer (or zero) usages, the same safe-by-construction
+    property every other regex-based check in scanner.py already has.
+    """
+    return _discover_js(content, file_path)[0]

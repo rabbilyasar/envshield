@@ -60,7 +60,12 @@ def cli(*args, code=0):
 
 
 def cli_json(*args, code=0):
-    return json.loads(cli(*args, "--json", code=code).stdout)
+    payload = json.loads(cli(*args, "--json", code=code).stdout)
+    # 'check's additive per-service reports (evaluator-decisions.md D-5) are
+    # covered by the evaluator's own tests; these compare the legacy keys.
+    if args and args[0] == "check":
+        assert len(payload.pop("reports")) >= 1
+    return payload
 
 
 def commit(message):

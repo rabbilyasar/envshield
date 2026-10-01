@@ -106,10 +106,11 @@ What each field actually means:
 | `enum` | Value must be one of this list. Implies an enum type regardless of `type`. |
 | `pattern` | A regex the value must also match, e.g. `pattern = "^v\\d+\\.\\d+\\.\\d+$"`. |
 | `secret` | Marks the variable sensitive — masked input in `setup`, masked in generated code. `import` auto-suggests it from the variable's name/value; it never overwrites a `secret` value you've already committed. |
-| `defaultValue` | What `setup` writes automatically. A variable still has to be explicitly present in your local file even with a default — `check`/`doctor` name the default inline so a missing one is obvious. |
+| `defaultValue` | What `setup` writes automatically (and `.env.example` and generated code show). A default never makes a variable optional: it still has to be explicitly present in your local file — `check`/`doctor` name the default inline so a missing one is obvious. |
+| `required` | Optional. `required = false` makes a variable optional: it may be absent or blank, but a value that is set must still be valid. `required = true` is the default. Can't be combined with `requiredIf`. |
 | `description` | Shown in `setup`, copied into generated code. |
 
-**There is no separate `required = true/false` field.** Requiredness is derived: unconditional by default, waived by a `defaultValue`, or made conditional by `requiredIf` — see below.
+Requiredness: every variable is required unless `required = false`, or `requiredIf` makes it conditional (see below). Any other key, or an unknown `type`, is an error — a typo like `default = "8000"` is reported (`did you mean 'defaultValue'?`) instead of silently ignored.
 
 ### Conditional requirements (`requiredIf`)
 
@@ -151,7 +152,7 @@ Four stages, in order: define the contract, validate against it, discover what c
 
 ### Validate
 
-**`envshield check`** — validate local configuration, and commonly-used Docker Compose and Kubernetes deployment-manifest patterns, against the same schema (see [Known limitations](#known-limitations)).
+**`envshield check`** — validate local configuration, and commonly-used Docker Compose and Kubernetes deployment-manifest patterns, against the same schema (see [Known limitations](#known-limitations)). It also scans the service's own source code and fails on a variable the code reads but the schema doesn't declare (the same files the pre-commit `scan` checks). `--process-env` also counts variables set in your shell (for a name the schema declares, the shell's value wins over the file's). `--json` adds a versioned, value-free report per service.
 
 ```bash
 $ envshield check

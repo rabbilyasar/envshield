@@ -269,6 +269,17 @@ def test_generate_config_required_if_becomes_optional_python():
     assert "None, description=" in content
 
 
+def test_generate_config_required_false_becomes_optional():
+    schema = {"SENTRY_DSN": {"description": "Optional.", "required": False}}
+
+    python = generator.generate_config(schema, lang="python")
+    typescript = generator.generate_config(schema, lang="typescript")
+
+    assert "sentry_dsn: Optional[str] = Field(" in python
+    assert "None, description=" in python
+    assert '"SENTRY_DSN": z.string().optional(),' in typescript
+
+
 def test_generate_typescript_explicit_enum_type():
     schema = {"LOG_LEVEL": {"description": "Verbosity.", "enum": ["debug", "info"]}}
 

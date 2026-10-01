@@ -18,7 +18,7 @@ its absence after running the script is the proof.
 import os
 import subprocess
 
-from envshield.core import scanner
+from envshield.core import hooks_manager
 from envshield.core.exceptions import EnvShieldException
 
 
@@ -62,7 +62,7 @@ class TestShellInjectionIsPrevented:
             side_effect=EnvShieldException("no local file for this test"),
         )
 
-        script = scanner._generate_pre_commit_hook_content()
+        script = hooks_manager._generate_pre_commit_hook_content()
         assert malicious_schema not in script
         _run_generated_script(script, tmp_path)
 
@@ -83,7 +83,7 @@ class TestShellInjectionIsPrevented:
             side_effect=EnvShieldException("no local file for this test"),
         )
 
-        script = scanner._generate_pre_commit_hook_content()
+        script = hooks_manager._generate_pre_commit_hook_content()
         assert malicious_name not in script
         _run_generated_script(script, tmp_path)
 
@@ -113,7 +113,7 @@ class TestShellInjectionIsPrevented:
             },
         )
 
-        script = scanner._generate_pre_commit_hook_content()
+        script = hooks_manager._generate_pre_commit_hook_content()
         assert malicious_example not in script
         _run_generated_script(script, tmp_path)
 
@@ -139,7 +139,7 @@ class TestShellInjectionIsPrevented:
             },
         )
 
-        script = scanner._generate_pre_commit_hook_content()
+        script = hooks_manager._generate_pre_commit_hook_content()
         assert malicious_example not in script
         _run_generated_script(script, tmp_path)
 
@@ -160,7 +160,7 @@ class TestShellInjectionIsPrevented:
             side_effect=EnvShieldException("no local file for this test"),
         )
 
-        script = scanner._generate_pre_commit_hook_content()
+        script = hooks_manager._generate_pre_commit_hook_content()
         assert malicious_schema not in script
         _run_generated_script(script, tmp_path)
 
@@ -187,7 +187,7 @@ class TestShellInjectionIsPrevented:
             side_effect=EnvShieldException("no local file for this test"),
         )
 
-        script = scanner._generate_pre_commit_hook_content()
+        script = hooks_manager._generate_pre_commit_hook_content()
         assert malicious_schema not in script
         result = _run_generated_script(script, tmp_path)
 
@@ -206,7 +206,7 @@ class TestShellInjectionIsPrevented:
             return_value={"services": {"evil": {"schema": malicious_schema}}},
         )
 
-        script = scanner._generate_post_merge_hook_content()
+        script = hooks_manager._generate_post_merge_hook_content()
         assert malicious_schema not in script
         _run_generated_script(script, tmp_path)
 
@@ -222,7 +222,7 @@ class TestShellInjectionIsPrevented:
             return_value={"services": {malicious_name: {"schema": "env.schema.toml"}}},
         )
 
-        script = scanner._generate_post_merge_hook_content()
+        script = hooks_manager._generate_post_merge_hook_content()
         assert malicious_name not in script
         _run_generated_script(script, tmp_path)
 
@@ -247,7 +247,7 @@ class TestLegitimateHookExecutionStillWorks:
             return_value={"local_file": ".env", "example_file": ".env.example"},
         )
 
-        script = scanner._generate_pre_commit_hook_content()
+        script = hooks_manager._generate_pre_commit_hook_content()
         result = _run_generated_script(script, tmp_path)
 
         # Outside a git repo, 'git diff'/'envshield scan' fail harmlessly --
@@ -281,7 +281,7 @@ class TestLegitimateHookExecutionStillWorks:
         with open(".env.example", "w") as f:
             f.write("API_KEY=\n")
 
-        scanner.install_pre_commit_hook(non_interactive=True)
+        hooks_manager.install_pre_commit_hook(non_interactive=True)
 
         os.system("git add env.schema.toml .env .env.example")
         result = subprocess.run(

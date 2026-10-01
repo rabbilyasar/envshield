@@ -26,7 +26,10 @@ What you can already do with EnvShield:
   instead of writing one from scratch.
 - **Validate configuration against the contract** (`check`, `doctor`,
   `setup`) — for a local file, and for Docker Compose or Kubernetes
-  deployment manifests.
+  deployment manifests. `check` also reports code that reads a variable
+  the contract doesn't declare, and `check --process-env` counts variables
+  set in the shell. `check --json` includes a versioned, value-free report
+  per service.
 - **Discover configuration usage in source code** (`undeclared`) — catch a
   variable your code just started reading that the contract doesn't know
   about yet. Python is AST-based; JavaScript/TypeScript is pattern-based.

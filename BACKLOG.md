@@ -861,7 +861,7 @@ Component: `core/scanner.py` (`DEFAULT_EXCLUDED_DIRS` — one new entry, reusing
 
 ### BL-128 — `scan`'s user-configured `exclude_files` glob matching silently fails to exclude anything when scanning the default path (`.`)
 
-Type: `SCANNER` / `RELIABILITY` · Evidence: `CONFIRMED` (direct reproduction) · Priority: **P2** · Status: **NEEDS_FIX — not yet fixed, out of scope for the change that found it**
+Type: `SCANNER` / `RELIABILITY` · Evidence: `CONFIRMED` (direct reproduction) · Priority: **P2** · Status: **fixed 2026-10-01 (evaluator migration), in the working tree — not yet committed**
 Source(s): discovered incidentally while writing a regression test for `BL-127` (confirming vendor-path exclusion didn't disturb the pre-existing `exclude_files` mechanism) — not part of `BL-127`'s own change.
 Component: `core/scanner.py` (`_filter_files`, `_scan_files`'s non-staged branch)
 
@@ -871,6 +871,9 @@ Component: `core/scanner.py` (`_filter_files`, `_scan_files`'s non-staged branch
 - **Impact:** any user relying on `secret_scanning.exclude_files` with a plain `envshield scan` (no explicit path argument) gets silently un-excluded findings for exactly the files they configured to be excluded — a real, if narrow, correctness gap in a documented feature. Does not affect `--staged` scans, or non-staged scans given an explicit path argument.
 - **Suggested fix direction (not implemented):** normalize both the walked path and the exclusion check consistently — e.g. `os.path.normpath`/`os.path.relpath` on `file_path` before matching, rather than a raw string prefix strip.
 - **Decision:** **Open.** Left for a future, separately-scoped and separately-authorized fix.
+- **Re-confirmed on a real project (2026-10-01):** KemonChilo's `envshield.yml` excludes `.github/workflows/ci.yml`; a plain `scan --json` still reported 6 findings in it.
+- **A second, related gap found while fixing it:** the same pattern matched differently by mode. A full walk yields `./tests/x`, which `**/tests/*` matches; a staged (Git-relative) scan sees `tests/x`, which it doesn't. So `init`'s own seeded `**/tests/*` exclusion never applied to a top-level `tests/` directory in `scan --staged`.
+- **Fix (2026-10-01):** one matcher, `source_files.matches_exclusion`, used by both branches of `_scan_files` and by the evaluator's code-reference pass. The path is compared project-relative and normalized (absolute, `./x`, and `x` are the same file); a leading `**/` also matches zero directories; a `./` pattern prefix is accepted. Nothing that was excluded before stops being excluded. Tests: `tests/core/test_source_files.py` (including the KemonChilo shape end to end). KemonChilo's `scan` is now clean, as its config intends.
 
 ### BL-129 — `Generic API Key`'s unquoted branch false-positived on Python bare-identifier code references (`token=existing_token`, tuple-unpack fixture passthrough)
 
@@ -1140,6 +1143,7 @@ Component: `core/setup_manager.py::run_setup` / `_write_dotenv_local_file`
 - **Counter-evidence from code reading:** keys already present in an existing local file are carried over (`setup_manager.py`, `all_keys = schema keys + seed keys`), so the straightforward path preserves them. The failing path, if one exists, must be reproduced before this is marked `CONFIRMED`. Candidates include seeding from `.env.example` when the local file is absent, and a union-mode (`BL-030`) multi-source layout.
 - **Expected behavior:** any write to a shared physical file uses the union contract of every service projection materialized into it.
 - **Update (`e336812`, Phase 3):** `setup` now writes a shared local file from the union of every sharing service's projection (`config_manager.load_file_contract`). The originally reported data-loss path is still not reproduced, so the evidence status is unchanged.
+- **Update (2026-10-01, evaluator migration):** `test_file_contract.py::TestSetupPreservesPeerValues::test_this_services_schema_is_unloadable` used to assert that `setup` *succeeds* when this service's schema fails to load (it fell back to an empty schema and rewrote the shared file unvalidated). That fallback is removed (BL-153): `setup` now raises, writes nothing, and the test asserts the shared file is byte-identical afterwards. The peer-values invariant still holds, more strongly.
 - **Phase 6 reproduction attempt (2026-09-30):** `test_file_contract.py::TestSetupPreservesPeerValues` seeds a shared `.env` with a peer's values, runs `setup` for the other service (overwrite confirmed), and checks the peer's values survive byte-for-byte. Candidate paths:
   1. shared schema, existing shared file;
   2. separate schemas sharing one file;
@@ -1265,6 +1269,101 @@ Component: `core/service_manager.py` (`_infer_from_invocation_dir` and its calle
 
 ---
 
+## Part 5c — Evaluator migration
+
+Decisions: [docs/architecture/evaluator-decisions.md](docs/architecture/evaluator-decisions.md). Phase status: [progress.md](progress.md). Found and, unless marked open, fixed in the working tree on 2026-10-01 (not yet committed).
+
+### BL-149 — `defaultValue` meant two different things: `explain` and `schema diff` called a defaulted variable optional
+
+Type: `BUG` / `CONTRACT` · Evidence: `CONFIRMED` (code reading and live run, 2026-09-30) · Priority: **P1** (a `schema diff` false negative on a PR gate) · Status: **fixed**
+Component: `core/schema_types.py`, `core/explain.py`, `core/contract_diff.py`
+
+- **Problem:** `check`/`doctor` require a defaulted variable to be present in the file (`should_be_present`, since `bc151da`). `explain` labelled it `optional`, and `schema diff` classified adding one as `non_breaking` ("every config valid before is still valid"). Adding `PORT` with a default failed every existing `.env` without `PORT`, while the PR's `schema diff` reported nothing breaking. Losing a default was also reported `breaking` and gaining one from conditional `non_breaking`, both backwards under `check`'s rule.
+- **Fix:** one presence rule, `schema_types.presence_rule`, which every consumer now reads (D-1). `explain` reports a defaulted variable as `required`; `schema diff` classifies each requiredness transition by whether an existing file can start failing `check`. Five tests that pinned the old classifications were changed to the corrected semantics. A new test, `TestRequirednessAgreesWithCheck`, checks every pair of field shapes against `diff_against_schema` itself, so the two rules can't drift apart again.
+- **Behavior change:** `schema diff` now reports adding a defaulted variable as `breaking`, which fails a default `--fail-on` gate that passed before.
+
+### BL-150 — Unknown schema keys and types were silently ignored; `check` accepted unsafe variable names
+
+Type: `BUG` / `CONTRACT` · Evidence: `CONFIRMED` (live run, 2026-09-30) · Priority: **P2** · Status: **fixed**
+Component: `core/schema_types.py` (`field_problems`), `config/manager.py` (`_validate_schema_fields`)
+
+- **Problem:** `required`, `environments`, `example`, a typo such as `default`, and an unknown `type` loaded without error; an unknown type behaved as an unconstrained string. `KNOWN_TYPES` existed and was never used. A `BAD-NAME` key passed `check`; only writers rejected it.
+- **Fix:** every live load validates the merged system schema (D-2) and raises `SchemaValidationError` (a `SchemaParseError`) naming each problem, never a value. `required` is now a supported boolean key (D-2's table). The revision loader is deliberately not validated, so `schema diff` can still read a historical schema. `import` now skips a variable whose name the schema can't hold (it used to write a schema that then failed to load).
+- **Behavior change:** a schema relying on an ignored key now fails to load, with a message naming the key (`'PORT' has unknown key 'default' (did you mean 'defaultValue'?)`).
+
+### BL-151 — Accepting the enforcement override also passed findings that could never be overridden
+
+Type: `SECURITY` · Evidence: `CONFIRMED` (code reading; regression test fails on the old code) · Priority: **P1** · Status: **fixed**
+Component: `core/enforcement.py` (`enforce_findings`)
+
+- **Problem:** with at least one `likely_secret` finding, the interactive prompt was offered and "COMMIT ANYWAY" returned True for *all* findings, including `ambiguous` and unclassified ones (e.g. an `AKIA…` vendor match) that block unconditionally on their own.
+- **Fix:** the override is offered only when every remaining finding is `likely_secret`; a mixed set blocks without a prompt. Tests: `test_enforcement.py::TestOverrideNeverCarriesANonOverridableFinding`.
+
+### BL-152 — `service discover` silently repointed an existing service with the same name
+
+Type: `BUG` · Evidence: `CONFIRMED` (live reproduction, 2026-09-30) · Priority: **P2** · Status: **fixed**
+Component: `core/service_discovery.py` (`discover_candidates`), `cli.py` (`service discover`)
+
+- **Problem:** root service `d` plus a discovered `services/d/.env`: `discover --yes` registered `d → services/d/env.schema.toml`, merging into (and repointing) the root service with no warning. `discover_candidates` de-duplicated by directory, and by name only within one run. BL-023's note that discover "never re-registers an existing name" holds for directories only.
+- **Fix:** registered names count as taken; the candidate is disambiguated (`services-d`, then a numeric suffix). Test: `test_service_discovery.py::test_discovered_directory_never_takes_a_registered_services_name`; the reproduction now leaves `d` untouched.
+
+### BL-153 — `setup` fell back to an empty schema when the schema failed to load
+
+Type: `BUG` / `RELIABILITY` · Evidence: `CONFIRMED` · Priority: **P2** · Status: **fixed**
+Component: `core/setup_manager.py` (`run_setup`)
+
+- **Problem:** any `EnvShieldException` loading the schema became `schema = {}`, and `setup` then wrote seed values with no validation, reporting success.
+- **Fix:** only a schema that doesn't exist yet falls back to the template, with a visible warning; a schema that exists but fails to load raises and writes nothing. `setup` now also re-evaluates the file it wrote with the evaluator and says whether it satisfies the contract. See BL-138's update for the one test that pinned the old behavior.
+
+### BL-155 — JS/TS discovery reported matches inside comments and strings
+
+Type: `DISCOVERY` (false positive) · Evidence: `CONFIRMED` (fixture run, 2026-09-30) · Priority: **P2** · Status: **fixed**
+Component: `core/discovery.py` (`_js_non_code_mask`)
+
+- **Problem:** `// process.env.X` and `"process.env.X"` were high-confidence reads, which `scan --staged` then blocked on as undeclared.
+- **Fix:** a small linear lexer masks comments and string literals (template-literal `${...}` stays code); a match starting in a masked span is dropped, and brace matching for destructuring ignores braces in strings and comments. Shared by `scan`, `undeclared`, `explain`, and `check`. Known ceiling: regex literals aren't recognized, so a quote inside one can hide a read on that one line. On 8 real repositories the masking removed 0 matches, so this false positive is real but rare in practice.
+
+### BL-156 — Dynamic environment reads disappeared silently
+
+Type: `DISCOVERY` · Evidence: `CONFIRMED` · Priority: **P3** · Status: **fixed (reported, never a failure)**
+Component: `core/discovery.py` (`DynamicReference`, `discover_references`)
+
+- **Problem:** `os.getenv(name)`, `os.environ[name]`, `process.env[key]` produced nothing, so a reader couldn't tell discovery had seen a read it couldn't resolve.
+- **Fix:** `discover_references` returns them as `DynamicReference`; `check --json` lists them under `code_references.dynamic_references`. `discover_python_usages`/`discover_js_usages` (used by `scan`/`undeclared`) are unchanged.
+
+### BL-157 — pydantic `BaseSettings` fields were visible to `import` but not to `check`/`explain`
+
+Type: `DISCOVERY` (false negative) · Evidence: `CONFIRMED` · Priority: **P2** · Status: **fixed for `check`/`explain`; `scan`/`undeclared` deliberately unchanged**
+Component: `core/discovery.py` (`_UsageVisitor.visit_ClassDef`, `_settings_rename_env`)
+
+- **Fix:** `discover_references` reports each field (upper-cased name, or `Field(alias=...)`) at `high`, or at `medium` when the class configures `env_prefix`, an alias generator, case sensitivity, or a nested delimiter. Real-repo check: phineas's vendored `spectree` config sets `env_prefix="spectree_"` (24 fields), correctly `medium`, so it can't fail a check.
+- **Open question:** whether `scan` (pre-commit) and `undeclared` (SARIF) should move onto `discover_references` too. Doing so changes what blocks a commit; it's a separate decision (D-7).
+
+### BL-158 — `check` doesn't cover code no service owns (migration gap vs `scan`)
+
+Type: `ARCHITECTURE` · Evidence: `CONFIRMED` (Zeus, archived config, 2026-10-01) · Priority: **P2** · Status: **open**
+Component: `core/evaluator.py` (`discover_code_references`), `core/scanner.py`
+
+- **Current behavior:** `scan` flags a read in a file under no service's directory against an empty contract; `check` is per service and only covers such a file when a service lists it in `additional_source_roots` (BL-106). On Zeus, owned files agree exactly (athena 1, hermes 2 names); `scan` additionally reports 21 names in the shared `modules/` tree.
+- **Why it matters:** `scan`'s undeclared-variable check can't be removed until this has a home. So far the evaluator doesn't replace it.
+- **Options:** report unowned files' reads in a project-level section of `check`; or require shared code to be registered (`additional_source_roots`) and say so when it isn't.
+
+### BL-159 — The pre-commit hook's undeclared-variable check reads staged content; the evaluator reads the working tree
+
+Type: `ARCHITECTURE` · Evidence: `CONFIRMED` · Priority: **P3** · Status: **open (blocks isolating the scanner to secrets only)**
+Component: `core/scanner.py` (`_scan_files --staged`, `_build_undeclared_var_resolver`), `core/evaluator.py`
+
+- The last non-secret responsibility left in `scanner.py` is undeclared-variable detection in `scan --staged`, which must read the Git index, not disk. Until the evaluator accepts a staged-content source, that code stays where it is; creating a `secret_guard` module around the unchanged scanner would be an abstraction with one implementation, so it wasn't created.
+
+### BL-160 — `explain` prints a `requiredIf` comparison literal even when the trigger variable is secret
+
+Type: `SECURITY` (hardening) · Evidence: `CONFIRMED` (code reading) · Priority: **P3** · Status: **open**
+Component: `cli.py` (`_render_explain_report`)
+
+- `setup` and `schema sync` render a condition through `schema_types.requiredif_condition_text`, which withholds the literal when the trigger is `secret`. `explain`'s Rich output prints `when VAR == "<equals>"` directly. The literal is schema-authored, not a value from a file, but the same reasoning `requiredif_condition_text` documents applies. Fix: use `requiredif_condition_text`.
+
+---
+
 ## Part 6 — AI-Agent-Friendly EnvShield (strategic direction)
 
 **Umbrella direction, not a single feature.** Do not implement MCP or any agent
@@ -1321,6 +1420,7 @@ Source(s): Zeus dogfooding pass, 2026-09-01. `envshield scan /home/rabbil/dev/ze
 - **`scan --staged` measured separately, as explicitly requested — not merely inferred from the repo-wide number.** Using a disposable local clone of Zeus (never touching the real working tree or its git index — `git clone --no-local file:///.../zeus`, discarded after) with 3 realistic files staged: **0.22s.** Confirms `_collect_files_to_scan`'s staged-only path already does exactly what you'd want — it scans only the staged files, not the repository tree — so the hook-path cost (what a pre-commit hook or CI staged-check actually pays) is not the same problem as the repo-wide number above, and is not currently a bottleneck on a monorepo of this size. This answers the open question in the original entry (whether staged discovery can avoid repository-wide work): **yes, empirically confirmed.**
 - **CPU utilization / multiprocessing headroom:** every measurement (before and after the fix) showed 99% single-core CPU, on a 12-core machine — the workload is CPU-bound and entirely single-threaded. Real headroom exists for a future embarrassingly-parallel-by-file optimization (each file's scan is independent), but this is a materially larger change (process orchestration, result-merging, Rich progress bar across workers) than this pass's scope — **not implemented, not designed further here**, recorded as the natural next performance step if repo-wide `scan` time becomes a real problem again after the regex fix.
 - **Whether unchanged files are reparsed on every run:** yes, confirmed — there is still no caching (see `BL-052`, unchanged by this pass). But this pass's own profiling shows that matters less than it might seem: `ast.parse` itself was never the dominant cost (~1.7s of the profiled ~51.6s), so a caching layer would have saved much less than the regex fix already did. Caching remains a legitimate future direction, just not the highest-value one revealed by this pass.
+- **Update (2026-10-01):** the evaluator's code-reference pass (`check`) took **23.2s** on Zeus (archived config, 910 service-owned files); profiling showed ~88% of it in `resolve_file_owner`, which re-parsed `envshield.yml` about seven times per file. Fixed at the root: `config_manager.file_owner_resolver()` resolves the topology once per command; `resolve_file_owner` delegates to it, and every per-file caller (`scan`, `explain`, `undeclared`'s snapshot, the evaluator) now builds one resolver. Zeus `check`: **3.3s**, byte-identical output. Repo-wide `scan` on the same copy is still ~14s, dominated by secret-pattern matching as recorded above.
 - **Decision:** Baseline established and a real, evidenced, low-risk fix shipped in the same pass (`BL-114`). `BL-050` itself is now `CONFIRMED` rather than `NEEDS_EVIDENCE` and stays open only as the ongoing home for future large-repo benchmarking (e.g., if multiprocessing is ever pursued, re-benchmark against this same baseline).
 
 ### BL-051 — Memory consumption under large schemas/discovery

@@ -1082,3 +1082,64 @@ def test_setup_does_not_announce_inference_for_an_interactive_pick(mocker, tmp_p
 
         assert result.exit_code == 0, result.stdout
         assert "inferred from the current directory" not in result.stdout
+
+
+def test_setup_never_prompts_for_a_required_false_field(mocker, tmp_path):
+    """D-2: 'required = false' is optional outright -- setup fills its
+    default if it has one, and otherwise leaves it out without asking."""
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_root_service_config()
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write(
+                '[SENTRY_DSN]\ndescription="x"\nrequired=false\n\n'
+                '[LOG_LEVEL]\ndescription="x"\nrequired=false\ndefaultValue="info"\n'
+            )
+        mock_prompt = mocker.patch("envshield.core.setup_manager.Prompt.ask")
+
+        result = runner.invoke(app, ["setup"], input="n\n")
+
+        assert result.exit_code == 0, result.output
+        mock_prompt.assert_not_called()
+        with open(".env") as f:
+            assert "LOG_LEVEL=info" in f.read()
+
+
+def test_setup_refuses_a_schema_that_exists_but_fails_to_load(tmp_path):
+    """No silent fallback to an empty schema: the error is shown and the
+    local file is left exactly as it was."""
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_root_service_config()
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[PORT]\ndefault = "8000"\n')  # unknown key: invalid schema
+        with open(".env.example", "w") as f:
+            f.write("PORT=\n")
+
+        result = runner.invoke(app, ["setup"])
+
+        assert result.exit_code == 1
+        assert "unknown key 'default'" in result.stdout
+        assert not os.path.exists(".env")
+
+
+def test_setup_warns_when_there_is_no_schema_yet(mocker, tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_root_service_config()  # schema registered, file never created
+        with open(".env.example", "w") as f:
+            f.write("PORT=8000\n")
+
+        result = runner.invoke(app, ["setup"])
+
+        assert result.exit_code == 0, result.stdout
+        assert "without validation" in result.stdout
+
+
+def test_setup_re_checks_the_file_it_wrote(mocker, tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write_root_service_config()
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[PORT]\ntype="port"\ndefaultValue="8000"\n')
+
+        result = runner.invoke(app, ["setup"])
+
+        assert result.exit_code == 0, result.stdout
+        assert "'.env' satisfies the schema" in result.stdout

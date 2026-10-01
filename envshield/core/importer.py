@@ -10,7 +10,7 @@ from rich.console import Console
 
 from ..parsers._dotenv import DotenvParser
 from ..parsers.factory import get_parser
-from . import discovery
+from . import discovery, schema_types
 from .exceptions import EnvShieldException
 from .scanner import MAX_SCANNABLE_SIZE_BYTES, SECRET_PATTERNS
 
@@ -302,10 +302,17 @@ def generate_schema_from_file(
     defaults_found = 0
     types_found = 0
     oversized_defaults: list = []
+    unsafe_names: list = []
 
     console.print("\n[bold]Analyzing variables...[/bold]")
 
     for key, value in variables.items():
+        # A name the schema can't hold would make the whole written schema
+        # unloadable (schema_types.field_problems) -- skipped and reported
+        # instead.
+        if not schema_types.is_safe_variable_name(key):
+            unsafe_names.append(key)
+            continue
         is_secret, default_value = _classify_variable(key, value)
         # Inferring a type is safe regardless of secret status -- it only
         # records the *shape* a valid value must have (e.g. type = "url"),
@@ -401,6 +408,12 @@ def generate_schema_from_file(
             f"[bold yellow]Warning:[/] Found {commented_out_count} commented-out "
             "variable assignment(s); these were not imported."
         )
+    if unsafe_names:
+        console.print(
+            f"[bold yellow]Warning:[/] Skipped {len(unsafe_names)} variable(s) whose "
+            "name isn't a valid environment variable name (must match "
+            "^[A-Za-z_][A-Za-z0-9_]*$): " + ", ".join(sorted(unsafe_names))
+        )
     if oversized_defaults:
         console.print(
             f"[bold yellow]Warning:[/] Skipped {len(oversized_defaults)} value(s) "
@@ -448,7 +461,7 @@ def merge_variables_from_other_sources(
             continue
 
         for key, value in variables.items():
-            if key in schema_dict:
+            if key in schema_dict or not schema_types.is_safe_variable_name(key):
                 continue
             is_secret, default_value = _classify_variable(key, value)
             inferred_type = _infer_type(key, value)

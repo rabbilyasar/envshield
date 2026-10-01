@@ -22,10 +22,31 @@ like `"3"` or `"true"`.
 """
 
 import re
-from typing import Any
+from typing import Any, Dict
 from urllib.parse import urlparse
 
 KNOWN_TYPES = {"string", "int", "float", "bool", "port", "url", "email", "enum"}
+
+# Every key a field table may carry (see docs/architecture/evaluator-
+# decisions.md D-2). `services` is schema_scope.SCOPE_KEY, spelled out here
+# to keep this module import-free.
+FIELD_KEYS = frozenset(
+    {
+        "type",
+        "enum",
+        "pattern",
+        "defaultValue",
+        "requiredIf",
+        "required",
+        "secret",
+        "description",
+        "services",
+    }
+)
+_REQUIREDIF_KEYS = frozenset({"var", "equals"})
+# Near-misses worth naming in the error -- `default` in particular, since
+# nothing else would tell a user their default was silently ignored.
+_KEY_HINTS = {"default": "defaultValue", "required_if": "requiredIf"}
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _BOOL_VALUES = {"true", "false"}
@@ -43,6 +64,59 @@ def is_safe_variable_name(name: str) -> bool:
     rather than sanitized.
     """
     return bool(_SAFE_VARIABLE_NAME_RE.match(name))
+
+
+def field_problems(name: str, field_schema: Any) -> list[str]:
+    """
+    Structural problems with one schema entry, as human-readable strings
+    naming only keys and types -- never a value (a mistyped `required =
+    "..."` could hold anything). Empty when the entry is valid. Pure, so
+    the live loader and tests share one definition of "valid".
+    """
+    if not is_safe_variable_name(name):
+        return [
+            f"{name!r} is not a valid variable name (must match "
+            "^[A-Za-z_][A-Za-z0-9_]*$)"
+        ]
+    if not isinstance(field_schema, dict):
+        return [f"'{name}' must be a table ([{name}]), not a bare value"]
+
+    problems = []
+    for key in sorted(set(field_schema) - FIELD_KEYS):
+        hint = _KEY_HINTS.get(key)
+        problems.append(
+            f"'{name}' has unknown key '{key}'"
+            + (f" (did you mean '{hint}'?)" if hint else "")
+        )
+    declared_type = field_schema.get("type")
+    if declared_type is not None and not isinstance(declared_type, str):
+        problems.append(f"'{name}'.type must be a string")
+    elif declared_type is not None and declared_type not in KNOWN_TYPES:
+        problems.append(
+            f"'{name}' has unknown type {declared_type!r} (one of: "
+            f"{', '.join(sorted(KNOWN_TYPES))})"
+        )
+    for key in ("required", "secret"):
+        if key in field_schema and not isinstance(field_schema[key], bool):
+            problems.append(f"'{name}'.{key} must be true or false")
+    if "enum" in field_schema and not isinstance(field_schema["enum"], list):
+        problems.append(f"'{name}'.enum must be a list")
+    condition = field_schema.get("requiredIf")
+    if condition is not None:
+        if not isinstance(condition, dict):
+            problems.append(
+                f"'{name}'.requiredIf must be a table like "
+                '{ var = "OTHER", equals = "value" }'
+            )
+        else:
+            for key in sorted(set(condition) - _REQUIREDIF_KEYS):
+                problems.append(f"'{name}'.requiredIf has unknown key '{key}'")
+        if "required" in field_schema:
+            problems.append(
+                f"'{name}' sets both 'required' and 'requiredIf' -- use one: "
+                "requiredIf already says when it's required"
+            )
+    return problems
 
 
 def resolve_field_type(field_schema: dict[str, Any]) -> str:
@@ -159,26 +233,67 @@ def secret_default_conflict(field_schema: dict[str, Any]) -> bool:
     return str(field_schema.get("defaultValue", "")) != ""
 
 
-def is_required_now(field_schema: dict[str, Any], local_values: dict[str, str]) -> bool:
+def presence_rule(field_schema: Dict[str, Any]) -> str:
     """
-    Whether a field is currently required, given its `requiredIf` condition
-    (if any) evaluated against the project's other local values.
+    When a field must be explicitly present (non-blank) in a checked file:
+    'always', 'conditional' (its requiredIf decides), or 'never'.
 
-    A field with a `defaultValue` is never "required" -- consistent with
-    every other required/missing check in EnvShield, a default is itself
-    the fallback. A field with no `requiredIf` is required unconditionally,
-    exactly as before this existed.
+    An explicit boolean `required` decides outright. Otherwise the legacy
+    rule: a defaultValue makes it always required -- even over a
+    requiredIf, since 'setup' fills the default in regardless -- then
+    `requiredIf` makes it conditional, and anything else is always
+    required. A defaultValue never makes a field optional
+    (docs/architecture/evaluator-decisions.md D-1): it's what 'setup' fills
+    in, not proof the file's own copy may be missing.
     """
+    required = field_schema.get("required")
+    if required is True:
+        return "always"
+    if required is False:
+        return "never"
     if "defaultValue" in field_schema:
-        return False
+        return "always"
+    if field_schema.get("requiredIf"):
+        return "conditional"
+    return "always"
+
+
+def requiredness_label(field_schema: Dict[str, Any]) -> str:
+    """presence_rule, as the contract vocabulary 'explain' and reports use."""
+    return {"always": "required", "conditional": "conditional", "never": "optional"}[
+        presence_rule(field_schema)
+    ]
+
+
+def _condition_holds(
+    field_schema: Dict[str, Any], local_values: Dict[str, str]
+) -> bool:
     condition = field_schema.get("requiredIf")
-    if not condition:
-        return True
-    other_var = condition.get("var")
+    other_var = condition.get("var") if isinstance(condition, dict) else None
     if not other_var:
         return True
     expected = str(condition.get("equals", "true"))
     return local_values.get(other_var) == expected
+
+
+def is_required_now(field_schema: Dict[str, Any], local_values: Dict[str, str]) -> bool:
+    """
+    Whether 'setup' must ask for this field right now, given its
+    `requiredIf` condition (if any) evaluated against the project's other
+    local values.
+
+    A field with a `defaultValue` never needs asking -- 'setup' fills the
+    default in instead. That's a prompting decision only: whether the file
+    must end up containing the field is should_be_present.
+    """
+    if "defaultValue" in field_schema:
+        return False
+    rule = presence_rule(field_schema)
+    if rule == "never":
+        return False
+    if rule == "conditional":
+        return _condition_holds(field_schema, local_values)
+    return True
 
 
 def requiredif_condition_text(
@@ -211,18 +326,18 @@ def requiredif_condition_text(
 
 
 def should_be_present(
-    field_schema: dict[str, Any], local_values: dict[str, str]
+    field_schema: Dict[str, Any], local_values: Dict[str, str]
 ) -> bool:
     """
     Whether a field must have an explicit, non-blank value in the target
-    file -- broader than is_required_now (used for setup's prompt-or-fill
-    decision, which must stay exactly as it is). A defaultValue is a
-    starting value 'setup' writes automatically, not license for the
-    file's own copy to stay silently absent or blank: nothing guarantees
-    whatever reads this file actually falls back the same way, or falls
-    back at all -- that equivalence only holds once 'generate's output is
-    the thing actually being read. A defaulted field must be present
-    regardless of requiredIf; one with neither a default nor an active
-    requiredIf is the only case that's genuinely optional right now.
+    file -- what 'check'/'doctor' enforce. Broader than is_required_now
+    (setup's prompt-or-fill decision): a defaultValue is a starting value
+    'setup' writes automatically, not license for the file's own copy to
+    stay silently absent or blank -- nothing guarantees whatever reads this
+    file actually falls back the same way, or falls back at all. See
+    presence_rule.
     """
-    return "defaultValue" in field_schema or is_required_now(field_schema, local_values)
+    rule = presence_rule(field_schema)
+    if rule == "conditional":
+        return _condition_holds(field_schema, local_values)
+    return rule == "always"

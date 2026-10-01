@@ -148,6 +148,19 @@ class SchemaScopeError(SchemaParseError):
         self.args = (self.message,)
 
 
+class SchemaValidationError(SchemaParseError):
+    """
+    A schema that parses as TOML but isn't a valid contract: an unknown
+    field key or type, a non-boolean 'required'/'secret', an unsafe
+    variable name (see schema_types.field_problems). A SchemaParseError
+    subclass so every existing handler treats it as a broken schema. The
+    message names keys and types only, never a value.
+    """
+
+    def __init__(self, schema_path: str, problems: list):
+        super().__init__(schema_path, "; ".join(problems))
+
+
 class ServiceConfigError(EnvShieldException):
     """
     Raised when envshield.yml's service topology can't be resolved safely

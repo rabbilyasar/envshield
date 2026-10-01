@@ -8,7 +8,7 @@ from typer.testing import CliRunner
 from envshield.cli import app
 from envshield.config import manager as config_manager
 from envshield.config.manager import CONFIG_FILE_NAME, SCHEMA_FILE_NAME
-from envshield.core import scanner
+from envshield.core import hooks_manager
 from envshield.core.scanner import MAX_SCANNABLE_SIZE_BYTES
 
 runner = CliRunner()
@@ -54,8 +54,8 @@ def test_init_installs_both_hooks_when_neither_exists(tmp_path, mocker):
         os.system("git init")
         mocker.patch("envshield.core.hooks_manager._is_interactive", return_value=True)
         mocker.patch("questionary.confirm").return_value.ask.return_value = True
-        spy_pre = mocker.spy(scanner, "install_pre_commit_hook")
-        spy_post = mocker.spy(scanner, "install_post_merge_hook")
+        spy_pre = mocker.spy(hooks_manager, "install_pre_commit_hook")
+        spy_post = mocker.spy(hooks_manager, "install_post_merge_hook")
 
         result = runner.invoke(app, ["init"])
 
@@ -87,8 +87,8 @@ def test_init_only_installs_the_missing_hook_when_pre_commit_already_exists(
 
         mocker.patch("envshield.core.hooks_manager._is_interactive", return_value=True)
         mocker.patch("questionary.confirm").return_value.ask.return_value = True
-        spy_pre = mocker.spy(scanner, "install_pre_commit_hook")
-        spy_post = mocker.spy(scanner, "install_post_merge_hook")
+        spy_pre = mocker.spy(hooks_manager, "install_pre_commit_hook")
+        spy_post = mocker.spy(hooks_manager, "install_post_merge_hook")
 
         result = runner.invoke(app, ["init"])
 
@@ -116,8 +116,8 @@ def test_init_only_installs_the_missing_hook_when_post_merge_already_exists(
 
         mocker.patch("envshield.core.hooks_manager._is_interactive", return_value=True)
         mocker.patch("questionary.confirm").return_value.ask.return_value = True
-        spy_pre = mocker.spy(scanner, "install_pre_commit_hook")
-        spy_post = mocker.spy(scanner, "install_post_merge_hook")
+        spy_pre = mocker.spy(hooks_manager, "install_pre_commit_hook")
+        spy_post = mocker.spy(hooks_manager, "install_post_merge_hook")
 
         result = runner.invoke(app, ["init"])
 
@@ -1704,6 +1704,12 @@ def test_check_json_reports_clean_state(tmp_path):
 
         assert result.exit_code == 0, result.stdout
         payload = json.loads(result.stdout)
+        # 'reports' is additive (evaluator-decisions.md D-5); every
+        # pre-existing key keeps its exact shape.
+        assert payload.pop("reports")[0]["summary"] == {
+            "clean": True,
+            "complete": True,
+        }
         assert payload == {
             "success": True,
             "results": [
@@ -2426,3 +2432,41 @@ def test_import_into_a_fresh_project_refuses_a_scoped_schema_without_registering
         assert not os.path.exists(CONFIG_FILE_NAME)
         with open(SCHEMA_FILE_NAME) as f:
             assert f.read() == schema
+
+
+class TestCheckProcessEnv:
+    """D-3 at the CLI: 'check --process-env' opts in; plain 'check' doesn't."""
+
+    def _project(self):
+        _write_root_service()
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[NODE_ENV]\nenum=["development","production"]\n')
+        with open(".env", "w") as f:
+            f.write("")
+
+    def test_plain_check_ignores_the_shell(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._project()
+            result = runner.invoke(
+                app, ["check", "--json"], env={"NODE_ENV": "development"}
+            )
+        assert result.exit_code == 1
+        assert json.loads(result.stdout)["results"][0]["missing"] == ["NODE_ENV"]
+
+    def test_process_env_satisfies_and_is_reported_by_name_only(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._project()
+            result = runner.invoke(
+                app,
+                ["check", "--process-env", "--json"],
+                env={"NODE_ENV": "production"},
+            )
+        assert result.exit_code == 0, result.stdout
+        payload = json.loads(result.stdout)
+        sources = payload["reports"][0]["sources"]
+        assert {
+            "kind": "process_environment",
+            "status": "checked",
+            "variables": ["NODE_ENV"],
+        } in sources
+        assert "production" not in result.stdout

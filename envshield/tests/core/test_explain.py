@@ -32,9 +32,10 @@ class TestVariableFound:
         assert report.schema["secret"] is True
         assert report.schema["description"] == "Primary DB"
 
-    def test_optional_field_with_default_is_reported_as_optional(
-        self, tmp_path, monkeypatch
-    ):
+    def test_defaulted_field_is_reported_as_required(self, tmp_path, monkeypatch):
+        # A default is what 'setup' fills in, not a license to be absent:
+        # 'check' fails a file missing LOG_LEVEL, so 'explain' must not
+        # call it optional (evaluator-decisions.md D-1).
         monkeypatch.chdir(tmp_path)
         _write_root_service()
         with open(SCHEMA_FILE_NAME, "w") as f:
@@ -42,8 +43,18 @@ class TestVariableFound:
 
         report = explain.build_report("LOG_LEVEL", "app")
 
-        assert report.schema["requiredness"] == "optional"
+        assert report.schema["requiredness"] == "required"
         assert report.schema["default"] == "info"
+
+    def test_required_false_field_is_reported_as_optional(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        _write_root_service()
+        with open(SCHEMA_FILE_NAME, "w") as f:
+            f.write('[LOG_LEVEL]\ndefaultValue = "info"\nrequired = false\n')
+
+        report = explain.build_report("LOG_LEVEL", "app")
+
+        assert report.schema["requiredness"] == "optional"
 
 
 class TestDescribeFieldWithholdsSecretDefaults:
@@ -67,9 +78,9 @@ class TestDescribeFieldWithholdsSecretDefaults:
 
         assert described["default"] is None
         assert described["secret"] is True
-        # 'requiredness' still reflects that a default exists, without
-        # echoing its value -- distinct concerns, both correct.
-        assert described["requiredness"] == "optional"
+        # A default never makes a field optional (D-1); withholding it
+        # doesn't change the field's requiredness either.
+        assert described["requiredness"] == "required"
 
     def test_non_secret_field_with_a_default_is_unaffected(self):
         described = explain._describe_field({"defaultValue": "info"})

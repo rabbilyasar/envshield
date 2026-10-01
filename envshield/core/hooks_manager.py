@@ -1,11 +1,13 @@
 """Manages Git hooks installation and lifecycle."""
 
 import os
+import stat
 import subprocess
 import sys
-from typing import Iterable, List, Tuple
+from typing import Dict, Iterable, List, Tuple
 
 import questionary
+import typer
 from rich.console import Console
 
 from ..config import manager as config_manager
@@ -13,6 +15,263 @@ from ..core.exceptions import EnvShieldException, ServiceConfigError
 from ..utils import git_utils
 
 console = Console()
+
+
+ENVSHIELD_HOOK_MARKER = "# Hook installed by EnvShield"
+
+
+def remove_hooks() -> List[Dict[str, str]]:
+    """
+    Removes only a hook file EnvShield can prove is its own, unmodified
+    output -- an exact content match against what EnvShield would generate
+    right now, the same ownership standard install_pre_commit_hook/
+    install_post_merge_hook already use (see their own comment: the marker
+    comment alone is not proof of ownership -- a user can modify a
+    generated hook, or hand-write one containing the same comment, while
+    keeping the marker text intact). A hook that isn't provably
+    EnvShield's own unmodified output is left alone -- whether it's
+    genuinely foreign (Husky, a hand-written script) or an EnvShield hook
+    a user has since extended.
+
+    Returns one {"name": ..., "status": ...} entry per hook type EnvShield
+    manages (pre-commit, post-merge), regardless of outcome -- "removed"
+    (deleted, exact match), "preserved" (a file exists but its content
+    doesn't exactly match current generated output -- hand-modified,
+    foreign, or stale relative to the current config), or "missing" (no
+    file at that path). This is the single source of truth for hook
+    ownership; 'hook remove' filters for "removed", 'uninstall' also
+    reports "preserved" -- neither re-derives the ownership check itself.
+    """
+    git_root = git_utils.get_git_root()
+    if not git_root:
+        raise EnvShieldException("Not inside a Git repository.")
+
+    hooks_dir = git_utils.get_hooks_dir()
+    generators = {
+        "pre-commit": _generate_pre_commit_hook_content,
+        "post-merge": _generate_post_merge_hook_content,
+    }
+    results = []
+    for hook_name, generate_content in generators.items():
+        hook_path = os.path.join(hooks_dir, hook_name)
+        if not os.path.exists(hook_path):
+            results.append({"name": hook_name, "status": "missing"})
+            continue
+        with open(hook_path, "r") as f:
+            content = f.read()
+        if content != generate_content():
+            results.append({"name": hook_name, "status": "preserved"})
+            continue
+        os.remove(hook_path)
+        results.append({"name": hook_name, "status": "removed"})
+    return results
+
+
+def _describe_existing_hook(content: str, is_safely_regeneratable: bool) -> str:
+    """
+    Best-effort description of an existing hook file, for the overwrite
+    warning. `is_safely_regeneratable` is an exact-content match against
+    what EnvShield would generate right now -- the marker comment alone is
+    not proof of that (see the call site's own comment): a user can modify
+    a generated hook, or hand-write one, while keeping the marker text
+    intact.
+    """
+    if is_safely_regeneratable:
+        return "previously installed by EnvShield -- safe to regenerate"
+    if ENVSHIELD_HOOK_MARKER in content:
+        return (
+            "previously installed by EnvShield, but its contents no longer match "
+            "what EnvShield would generate now (hand-edited, or stale relative to "
+            "your current config) -- overwriting could discard those changes"
+        )
+    if "husky.sh" in content or ".husky" in content:
+        return "managed by Husky"
+    non_comment_lines = [
+        line
+        for line in content.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    return f"NOT installed by EnvShield -- overwriting will delete {len(non_comment_lines)} existing line(s) of hook logic"
+
+
+def _warn_hooks_path_redirect(hooks_dir: str, git_root: str) -> None:
+    default_dir = os.path.join(git_root, ".git", "hooks")
+    if os.path.abspath(hooks_dir) != os.path.abspath(default_dir):
+        console.print(
+            f"[dim]ℹ️  core.hooksPath is set -- installing into {hooks_dir} instead of .git/hooks.[/dim]"
+        )
+
+
+# The installed hooks are constant shims: identical bytes for every
+# project and every envshield.yml. What they cover (which schemas, which
+# services) is resolved each time they run, by 'envshield hook run' (see
+# hooks_manager.run_pre_commit/run_post_merge) -- so adding a service or
+# sharing a schema never leaves an installed hook stale, remove/uninstall's
+# exact-match ownership check keeps working after any config change, and no
+# value from envshield.yml (a committed, PR-editable file) is ever
+# interpolated into a shell script.
+_PRE_COMMIT_HOOK = (
+    "#!/bin/sh\n\n"
+    f"{ENVSHIELD_HOOK_MARKER}\n"
+    "# Scans staged files for secrets and undeclared variables, and checks the\n"
+    "# template of every service whose schema (or a schema it extends) is staged.\n"
+    "# What that covers is read from envshield.yml each time this runs.\n"
+    "exec envshield hook run pre-commit\n"
+)
+
+_POST_MERGE_HOOK = (
+    "#!/bin/sh\n\n"
+    f"{ENVSHIELD_HOOK_MARKER}\n"
+    "# Runs 'envshield doctor' for every service whose schema (or a schema it\n"
+    "# extends) changed in this merge. Non-blocking: warns, never fails the merge.\n"
+    "exec envshield hook run post-merge\n"
+)
+
+
+def _generate_pre_commit_hook_content() -> str:
+    return _PRE_COMMIT_HOOK
+
+
+def install_pre_commit_hook(force: bool = False, non_interactive: bool = False):
+    """Installs the Git pre-commit hook."""
+    git_root = git_utils.get_git_root()
+    if not git_root:
+        raise EnvShieldException("Not inside a Git repository. Cannot install hook.")
+
+    hooks_dir = git_utils.get_hooks_dir()
+    _warn_hooks_path_redirect(hooks_dir, git_root)
+    os.makedirs(hooks_dir, exist_ok=True)
+    pre_commit_path = os.path.join(hooks_dir, "pre-commit")
+
+    hook_script_content = _generate_pre_commit_hook_content()
+
+    try:
+        if os.path.exists(pre_commit_path):
+            with open(pre_commit_path, "r") as f:
+                existing_content = f.read()
+
+            # A marker comment alone is not proof this file is EnvShield's own,
+            # untouched output -- a user can modify a generated hook (or
+            # hand-write one containing the same comment) while keeping the
+            # marker text intact. Only an exact match against what EnvShield
+            # would generate right now is provably safe to replace without
+            # asking; non-interactive mode's fast path is scoped to exactly
+            # that case -- anything else (including a marker-bearing file
+            # that no longer matches) falls through to the same protected
+            # confirmation/warning path as a genuinely foreign hook.
+            is_safely_regeneratable = existing_content == hook_script_content
+
+            if non_interactive and not is_safely_regeneratable:
+                console.print(
+                    "[bold yellow]⚠️  Warning:[/] A pre-commit hook already exists. EnvShield was not installed automatically."
+                )
+                console.print(
+                    "    Please add 'envshield hook run pre-commit' to your existing hook script."
+                )
+                return
+
+            if not force and not non_interactive:
+                overwrite = questionary.confirm(
+                    f"A pre-commit hook already exists ({_describe_existing_hook(existing_content, is_safely_regeneratable)}). Do you want to overwrite it?",
+                    default=False,
+                ).ask()
+                if not overwrite:
+                    console.print("[yellow]Hook installation cancelled.[/yellow]")
+                    raise typer.Exit()
+
+        with open(pre_commit_path, "w") as f:
+            f.write(hook_script_content)
+
+        current_permissions = os.stat(pre_commit_path).st_mode
+        os.chmod(
+            pre_commit_path,
+            current_permissions | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH,
+        )
+
+        console.print(
+            "[bold green]✓ Git pre-commit hook installed successfully![/bold green]"
+        )
+
+    except (IOError, OSError) as e:
+        raise EnvShieldException(
+            f"Failed to write or set permissions for the hook file: {e}"
+        )
+    except (TypeError, KeyboardInterrupt):
+        console.print("[yellow]Hook installation cancelled by user.[/yellow]")
+        raise typer.Exit()
+
+
+def _generate_post_merge_hook_content() -> str:
+    return _POST_MERGE_HOOK
+
+
+def install_post_merge_hook(force: bool = False, non_interactive: bool = False):
+    """
+    Installs a Git post-merge hook that runs 'envshield doctor' after pulling changes.
+    This ensures developers are alerted immediately if a pulled commit adds a new required
+    environment variable, without waiting for a container restart.
+    """
+    git_root = git_utils.get_git_root()
+    if not git_root:
+        raise EnvShieldException("Not inside a Git repository. Cannot install hook.")
+
+    hooks_dir = git_utils.get_hooks_dir()
+    _warn_hooks_path_redirect(hooks_dir, git_root)
+    os.makedirs(hooks_dir, exist_ok=True)
+    post_merge_path = os.path.join(hooks_dir, "post-merge")
+
+    hook_script_content = _generate_post_merge_hook_content()
+
+    try:
+        if os.path.exists(post_merge_path):
+            with open(post_merge_path, "r") as f:
+                existing_content = f.read()
+
+            # See install_pre_commit_hook's identical comment: a marker
+            # comment alone is not proof this file is EnvShield's own,
+            # untouched output. Only an exact match against what EnvShield
+            # would generate right now is treated as provably safe.
+            is_safely_regeneratable = existing_content == hook_script_content
+
+            if non_interactive and not is_safely_regeneratable:
+                console.print(
+                    "[bold yellow]⚠️  Warning:[/] A post-merge hook already exists. EnvShield was not installed automatically."
+                )
+                console.print(
+                    "    Please add 'envshield hook run post-merge' to your existing hook script."
+                )
+                return
+
+            if not force and not non_interactive:
+                overwrite = questionary.confirm(
+                    f"A post-merge hook already exists ({_describe_existing_hook(existing_content, is_safely_regeneratable)}). Do you want to overwrite it?",
+                    default=False,
+                ).ask()
+                if not overwrite:
+                    console.print("[yellow]Hook installation cancelled.[/yellow]")
+                    raise typer.Exit()
+
+        with open(post_merge_path, "w") as f:
+            f.write(hook_script_content)
+
+        current_permissions = os.stat(post_merge_path).st_mode
+        os.chmod(
+            post_merge_path,
+            current_permissions | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH,
+        )
+
+        console.print(
+            "[bold green]✓ Git post-merge hook installed successfully![/bold green]"
+        )
+
+    except (IOError, OSError) as e:
+        raise EnvShieldException(
+            f"Failed to write or set permissions for the hook file: {e}"
+        )
+    except (TypeError, KeyboardInterrupt):
+        console.print("[yellow]Hook installation cancelled by user.[/yellow]")
+        raise typer.Exit()
+
 
 # The opening lines of the per-service hooks EnvShield generated before
 # the hook became a constant shim. Only used to *describe* such a file in
@@ -311,14 +570,11 @@ class HooksManager:
             force: If True, overwrite existing hooks.
         """
         try:
-            # Import here to avoid circular imports
-            from . import scanner
-
             pre_commit, post_merge = self.are_hooks_installed()
             if not pre_commit:
-                scanner.install_pre_commit_hook(force=force, non_interactive=False)
+                install_pre_commit_hook(force=force, non_interactive=False)
             if not post_merge:
-                scanner.install_post_merge_hook(force=force, non_interactive=False)
+                install_post_merge_hook(force=force, non_interactive=False)
         except EnvShieldException as e:
             console.print(f"[bold yellow]⚠️  Warning:[/] {e}")
 
@@ -332,8 +588,6 @@ class HooksManager:
         exact match (BL-119/BL-120). The shim is the same for every
         configuration, so a change to envshield.yml never makes it stale.
         """
-        from .scanner import ENVSHIELD_HOOK_MARKER
-
         path = os.path.join(hooks_dir, filename)
         if not os.path.exists(path):
             return f"[dim]✗ {label}[/dim]"
@@ -363,8 +617,6 @@ class HooksManager:
 
         # Import here to avoid circular imports (same pattern as
         # _do_install_hooks above).
-        from . import scanner
-
         hooks_dir = git_utils.get_hooks_dir() or os.path.join(
             self.git_root, ".git", "hooks"
         )
@@ -374,13 +626,13 @@ class HooksManager:
                 hooks_dir,
                 "pre-commit",
                 "pre-commit hook (secret scanning)",
-                scanner._generate_pre_commit_hook_content,
+                _generate_pre_commit_hook_content,
             ),
             self._hook_status_line(
                 hooks_dir,
                 "post-merge",
                 "post-merge hook (config change detection)",
-                scanner._generate_post_merge_hook_content,
+                _generate_post_merge_hook_content,
             ),
         ]
 

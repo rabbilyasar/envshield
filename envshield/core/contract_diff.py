@@ -178,40 +178,38 @@ def diff_schemas(
 
 def _requiredness_state(field_schema: Dict[str, Any]) -> str:
     """
-    Three mutually exclusive states, matching schema_types.is_required_now
-    exactly:
+    Four mutually exclusive states, from schema_types.presence_rule (what
+    'check' enforces) plus whether a default exists:
 
-    'defaulted': has a defaultValue -- never required, regardless of
-    requiredIf (is_required_now checks this first and returns False
-    unconditionally).
-    'conditional': no defaultValue, requiredIf present -- required only
-    when that condition holds, which this module has no config data to
-    evaluate.
-    'unconditional': no defaultValue, no requiredIf -- always required.
+    'defaulted': must always be present; has a defaultValue ('setup' fills
+    it in -- it does not make the field optional, see
+    evaluator-decisions.md D-1).
+    'unconditional': must always be present; no default.
+    'conditional': required only when its requiredIf holds, which this
+    module has no config data to evaluate.
+    'optional': 'required = false' -- never has to be present.
 
-    Distinguishing 'defaulted' from 'unconditional' (both were folded into
-    one 'unconditional' state before this) matters because gaining or
-    losing a bare defaultValue is itself a requiredness change -- see
-    _classify_requiredness_transition -- not merely a default-value edit.
+    'defaulted' and 'unconditional' impose the same presence rule; they're
+    kept apart because gaining or losing a default is still worth
+    reporting (it changes what 'setup' and generated code do).
     """
-    if "defaultValue" in field_schema:
-        return "defaulted"
-    if field_schema.get("requiredIf"):
+    rule = schema_types.presence_rule(field_schema)
+    if rule == "never":
+        return "optional"
+    if rule == "conditional":
         return "conditional"
-    return "unconditional"
+    return "defaulted" if "defaultValue" in field_schema else "unconditional"
 
 
 def _classify_added(key: str, field_schema: Dict[str, Any]) -> ContractChange:
     state = _requiredness_state(field_schema)
-    if state == "defaulted":
+    if state == "optional":
         return ContractChange(
             variable=key,
             category="non_breaking",
             description=(
-                f"'{key}' was added with a default value -- never required "
-                "(is_required_now returns False unconditionally whenever a "
-                "defaultValue is present), so every config valid before is "
-                "still valid."
+                f"'{key}' was added as optional (required = false), so every "
+                "config valid before is still valid."
             ),
             detail={"added": True},
         )
@@ -225,6 +223,17 @@ def _classify_added(key: str, field_schema: Dict[str, Any]) -> ContractChange:
                 "condition's referenced value, which schema-only diff can't see."
             ),
             detail={"added": True, "requiredIf": field_schema.get("requiredIf")},
+        )
+    if state == "defaulted":
+        return ContractChange(
+            variable=key,
+            category="breaking",
+            description=(
+                f"'{key}' was added and must always be present. Its default is "
+                "what 'setup' fills in, not a fallback 'check' accepts, so an "
+                "existing config without it now fails."
+            ),
+            detail={"added": True},
         )
     return ContractChange(
         variable=key,
@@ -319,24 +328,43 @@ def _defaults_differ(default_a: Any, default_b: Any, type_a: str, type_b: str) -
     ) != schema_types.normalize_default_value(default_b, type_b)
 
 
-# One entry per reachable (before, after) pair among the three
+# One entry per reachable (before, after) pair among the four
 # _requiredness_state values -- same-state pairs never reach this function
 # (the '_diff_field' call site only invokes it when req_a != req_b).
+# 'defaulted' and 'unconditional' share one presence rule (always present),
+# so a transition between them never breaks an existing config.
+_STILL_ALWAYS = (
+    "non_breaking",
+    "'{key}' {change} -- it must still always be present, so every config "
+    "valid before is still valid.",
+)
 _REQUIREDNESS_TRANSITIONS: Dict[tuple, tuple] = {
-    ("defaulted", "conditional"): (
-        "requires_review",
-        "'{key}' lost its default and gained a requiredIf condition -- "
-        "whether this breaks an existing config depends on whether that "
-        "condition currently holds, which schema-only diff can't see.",
-    ),
     ("defaulted", "unconditional"): (
-        "breaking",
-        "'{key}' lost its default and is now always required -- a config "
-        "that validly omitted it, relying on the default, is now invalid.",
+        _STILL_ALWAYS[0],
+        _STILL_ALWAYS[1].replace("{change}", "lost its default"),
+    ),
+    ("unconditional", "defaulted"): (
+        _STILL_ALWAYS[0],
+        _STILL_ALWAYS[1].replace("{change}", "gained a default"),
+    ),
+    ("defaulted", "conditional"): (
+        "non_breaking",
+        "'{key}' requiredness relaxed from always-required to conditional "
+        "-- every config that satisfied the stricter old rule still "
+        "satisfies the relaxed one.",
+    ),
+    ("unconditional", "conditional"): (
+        "non_breaking",
+        "'{key}' requiredness relaxed from always-required to conditional "
+        "-- every config that satisfied the stricter old rule still "
+        "satisfies the relaxed one.",
     ),
     ("conditional", "defaulted"): (
-        "non_breaking",
-        "'{key}' gained a default -- every config valid before is still valid.",
+        "breaking",
+        "'{key}' requiredness changed from conditional to always required "
+        "(its new default is what 'setup' fills in, not a fallback 'check' "
+        "accepts) -- a config that validly omitted it while the old "
+        "condition was unmet is now invalid.",
     ),
     ("conditional", "unconditional"): (
         "breaking",
@@ -344,15 +372,36 @@ _REQUIREDNESS_TRANSITIONS: Dict[tuple, tuple] = {
         "-- a config that validly omitted it while the old condition was "
         "unmet is now invalid.",
     ),
-    ("unconditional", "defaulted"): (
+    ("defaulted", "optional"): (
         "non_breaking",
-        "'{key}' gained a default -- every config valid before is still valid.",
+        "'{key}' is now optional (required = false) -- every config valid "
+        "before is still valid.",
     ),
-    ("unconditional", "conditional"): (
+    ("unconditional", "optional"): (
         "non_breaking",
-        "'{key}' requiredness relaxed from always-required to conditional "
-        "-- every config that satisfied the stricter old rule still "
-        "satisfies the relaxed one.",
+        "'{key}' is now optional (required = false) -- every config valid "
+        "before is still valid.",
+    ),
+    ("conditional", "optional"): (
+        "non_breaking",
+        "'{key}' is now optional (required = false) -- every config valid "
+        "before is still valid.",
+    ),
+    ("optional", "defaulted"): (
+        "breaking",
+        "'{key}' was optional and must now always be present -- a config "
+        "that omitted it is now invalid.",
+    ),
+    ("optional", "unconditional"): (
+        "breaking",
+        "'{key}' was optional and must now always be present -- a config "
+        "that omitted it is now invalid.",
+    ),
+    ("optional", "conditional"): (
+        "requires_review",
+        "'{key}' was optional and is now conditionally required via "
+        "requiredIf -- whether an existing config is affected depends on "
+        "that condition's referenced value, which schema-only diff can't see.",
     ),
 }
 

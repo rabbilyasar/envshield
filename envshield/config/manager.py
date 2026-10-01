@@ -15,6 +15,7 @@ from envshield.core.exceptions import (
     SchemaNotFoundError,
     SchemaParseError,
     SchemaScopeError,
+    SchemaValidationError,
     SecretDefaultConflictError,
     ServiceConfigError,
     UnsafePathError,
@@ -191,6 +192,7 @@ def load_schema_view(service_name: str) -> schema_scope.ServiceSchemaView:
             "recreate it, or restore the file at that path."
         )
     merged = _load_schema_file(schema_path)
+    _validate_schema_fields(merged, schema_path)
     view = schema_scope.project(
         merged,
         schema_path,
@@ -202,6 +204,22 @@ def load_schema_view(service_name: str) -> schema_scope.ServiceSchemaView:
     # default is refused even while it's out of this service's scope.
     _reject_secret_defaults(view.system, schema_path)
     return view
+
+
+def _validate_schema_fields(schema: Dict[str, Any], schema_path: str) -> None:
+    """
+    Refuses a merged schema with any structurally invalid entry (see
+    schema_types.field_problems): an unknown key or type is an error, never
+    silently ignored. Live loads only -- a historical revision must still
+    be representable for 'schema diff' (see schema_snapshot).
+    """
+    problems = [
+        problem
+        for name, details in schema.items()
+        for problem in schema_types.field_problems(name, details)
+    ]
+    if problems:
+        raise SchemaValidationError(schema_path, problems)
 
 
 def get_schema_users(schema_path: str) -> List[str]:
@@ -258,6 +276,7 @@ def load_bare_schema(path: str = SCHEMA_FILE_NAME) -> Dict[str, Any]:
             "generate one from an existing config, or 'envshield init'."
         )
     schema = _load_schema_file(path)
+    _validate_schema_fields(schema, path)
     if any(
         isinstance(details, dict) and schema_scope.SCOPE_KEY in details
         for details in schema.values()

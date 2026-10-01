@@ -4,14 +4,14 @@
 
 import os
 import re
-from typing import Dict, List, Optional
+from typing import Dict, Iterable, List, Optional
 
 import yaml
 
 from ..parsers.factory import get_parser
 from . import inspector
 from .exceptions import EnvShieldException
-from .scanner import DEFAULT_EXCLUDED_DIRS
+from .source_files import DEFAULT_EXCLUDED_DIRS
 
 # Directories whose immediate children are conventionally one-service-per-
 # subdirectory in a monorepo (Turborepo/Nx/Lerna-style), so their contents
@@ -388,12 +388,16 @@ def _candidate_dirs(root: str) -> List[str]:
 
 
 def discover_candidates(
-    root: str = ".", known_dirs: Optional[List[str]] = None
+    root: str = ".",
+    known_dirs: Optional[List[str]] = None,
+    known_names: Optional[Iterable[str]] = None,
 ) -> List[dict]:
     """
     Scans `root` for directories that look like independent services with
     their own environment configuration, skipping any directory that's
-    already registered (by directory, not name) via `known_dirs`.
+    already registered (by directory) via `known_dirs`. A candidate never
+    takes a name in `known_names` (the registered services): registering it
+    under one would merge it into -- and repoint -- that existing service.
 
     A directory only qualifies if it has an actual environment-config
     signal -- a dotenv file, or a recognizable Python config module. A
@@ -413,6 +417,7 @@ def discover_candidates(
     validation against the wrong container.
     """
     known_dirs_norm = {os.path.normpath(d) for d in (known_dirs or [])}
+    taken = set(known_names or ())
     candidates = []
     seen_names: Dict[str, int] = {}
 
@@ -427,15 +432,23 @@ def discover_candidates(
 
         base_name = os.path.basename(normalized)
         name = base_name
-        if base_name in seen_names:
+        if base_name in seen_names or base_name in taken:
             # Disambiguate a repeated basename (e.g. two "api" dirs under
-            # different parents) using its parent directory's name.
+            # different parents, or one already registered) using its
+            # parent directory's name.
             parent = os.path.basename(os.path.dirname(normalized))
             name = (
                 f"{parent}-{base_name}"
                 if parent
-                else f"{base_name}-{seen_names[base_name]}"
+                else f"{base_name}-{seen_names.get(base_name, 1)}"
             )
+        suffix = 2
+        unique = name
+        while unique in taken:
+            unique = f"{name}-{suffix}"
+            suffix += 1
+        name = unique
+        taken.add(name)
         seen_names[base_name] = seen_names.get(base_name, 0) + 1
 
         compose_file = find_compose_file(normalized, root)

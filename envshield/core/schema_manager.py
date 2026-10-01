@@ -99,6 +99,9 @@ class SchemaDiff:
         # a clean pass, but the reporting below never claims the variable
         # is absent -- only that it can't be confirmed.
         self.unresolved = unresolved if unresolved is not None else set()
+        # Declared names the source contains (names only, never values) --
+        # lets a report tell "present and valid" from "absent, not required".
+        self.present: set = set()
         # Variables the system schema defines but doesn't grant this
         # service (see mark_out_of_scope). Reporting only: an out-of-scope
         # variable is still `extra`.
@@ -253,13 +256,15 @@ def diff_against_schema(
 
     extra = local_vars - schema_vars_all
 
-    return SchemaDiff(
+    diff = SchemaDiff(
         missing=missing,
         blank=blank,
         invalid=invalid,
         extra=extra,
         unresolved=unresolved,
     )
+    diff.present = local_vars & schema_vars_all
+    return diff
 
 
 def drop_file_peer_extras(diff: SchemaDiff, service_name: str, file_path: str) -> None:
@@ -509,8 +514,39 @@ def evaluate_union_completeness(
     )
 
 
+def environment_overlay_names(
+    environment: Dict[str, str], schema: Dict[str, Any]
+) -> List[str]:
+    """
+    The names the process-environment overlay takes from `environment`:
+    only what the contract declares or names as a requiredIf trigger, never
+    an unrelated shell variable (evaluator-decisions.md D-3).
+    """
+    relevant = set(schema)
+    for details in schema.values():
+        condition = details.get("requiredIf") if isinstance(details, dict) else None
+        if isinstance(condition, dict) and condition.get("var"):
+            relevant.add(condition["var"])
+    return sorted(name for name in relevant if name in environment)
+
+
+def overlay_environment(
+    local_values: Dict[str, str], environment: Dict[str, str], schema: Dict[str, Any]
+) -> Dict[str, str]:
+    """
+    `local_values` with the process environment laid over it for the
+    names environment_overlay_names picks -- the environment wins, even
+    when it's empty, as a dotenv loader never overrides an already-set
+    variable. Returns a new dict; the caller's values are untouched.
+    """
+    names = environment_overlay_names(environment, schema)
+    return {**local_values, **{name: environment[name] for name in names}}
+
+
 def load_union_sources(
-    service_name: str, container: Optional[str] = None
+    service_name: str,
+    container: Optional[str] = None,
+    environment: Optional[Dict[str, str]] = None,
 ) -> Tuple[List[UnionSource], List[str]]:
     """
     Loads every one of a union-mode service's registered sources -- its
@@ -538,6 +574,12 @@ def load_union_sources(
     else:
         try:
             local_values = parser.get_vars(local_file, get_values=True)
+            if environment is not None:
+                local_values = overlay_environment(
+                    local_values,
+                    environment,
+                    config_manager.load_schema(service_name=service_name),
+                )
             sources.append(
                 UnionSource(local_file, local_values, parser.has_unresolved_source)
             )
@@ -622,7 +664,8 @@ def check_schema(
 ) -> bool:
     """
     Validates a local environment file against that service's
-    env.schema.toml, intelligently handling variables with default values.
+    env.schema.toml and prints the result -- a Rich rendering of
+    evaluator.evaluate_source.
 
     `file_path` can also be a docker-compose or Kubernetes manifest -- see
     parsers/_docker_compose.py and parsers/_kubernetes.py. `container`
@@ -632,47 +675,38 @@ def check_schema(
 
     `paths`, when given, is the ordered list of layer files `file_path`
     displays as one logical manifest (BL-025's Compose base+override
-    layering) -- resolved and merged via
-    parsers.factory.get_manifest_parser_and_vars instead of parsing
-    `file_path` alone. Omitted (the default), `file_path` is parsed by
-    itself, exactly as before BL-025.
+    layering). Omitted (the default), `file_path` is parsed by itself.
+
+    A schema that fails to load raises, as it always has.
 
     Returns:
         True if the local file is in sync with the schema, False otherwise
         (including when the file or a usable parser can't be found).
     """
+    from . import evaluator
+
+    print_source_header(file_path)
+    schema = config_manager.load_schema(service_name=service_name)
+    source = evaluator.evaluate_source(
+        file_path, service_name, container=container, paths=paths, schema=schema
+    )
+    render_source(source, schema)
+    return source.clean
+
+
+def print_source_header(file_path: str) -> None:
     console.print(
         f"\n[bold]Validating [magenta]{file_path}[/magenta] against schema...[/bold]"
     )
 
-    # Load the schema and the local .env file
-    schema = config_manager.load_schema(service_name=service_name)
 
-    try:
-        parser, local_values = get_manifest_parser_and_vars(
-            paths if paths is not None else [file_path],
-            container=container,
-            prefer=service_name,
-            get_values=True,
-        )
-    except FileNotFoundError as e:
-        console.print(f"[red]Error:[/red] {e}")
-        return False
-    except (ValueError, EnvShieldException) as e:
-        console.print(f"[red]Error:[/red] {e}")
-        return False
-
-    if not parser:
-        console.print(f"[red]Error:[/red] {_no_parser_found_message(file_path)}")
-        return False
-
-    diff = diff_against_schema(
-        schema, local_values, has_unresolved_source=parser.has_unresolved_source
-    )
-    if paths is None:
-        drop_file_peer_extras(diff, service_name, file_path)
-    mark_out_of_scope(diff, service_name)
-
+def render_source(source: Any, schema: Dict[str, Any]) -> None:
+    """Prints one evaluator.SourceEvaluation as 'check's table (or its error)."""
+    if source.error is not None:
+        console.print(f"[red]Error:[/red] {source.error}")
+        return
+    diff = source.diff
+    file_path = source.path
     if diff.is_clean:
         console.print(
             "[bold green]✓ Your configuration is perfectly in sync with the schema![/bold green]"
@@ -713,7 +747,7 @@ def check_schema(
         console.print(table)
         suggestions = []
         if diff.missing or diff.blank or diff.invalid:
-            if parser.is_deployment_manifest:
+            if source.is_deployment_manifest:
                 suggestions.append(
                     "Fix the missing/blank/invalid values directly in this deployment "
                     "manifest -- 'envshield setup' only writes your local config file, "
@@ -736,8 +770,6 @@ def check_schema(
             )
         console.print("\n[bold]Suggestion:[/bold] " + " ".join(suggestions))
 
-    return diff.is_clean
-
 
 def check_result(
     file_path: str,
@@ -746,76 +778,19 @@ def check_result(
     paths: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """
-    Same validation as check_schema, but returns a plain, JSON-serializable
-    dict instead of printing a Rich table -- for '--json'. Kept as its own
-    function rather than a flag on check_schema, so the existing
-    Rich-rendering path (and its return-value contract) is never at risk of
-    a behavior change from this one.
+    Same validation as check_schema, as a plain, JSON-serializable dict
+    instead of a Rich table -- 'check --json's per-file entry
+    (evaluator.SourceEvaluation.legacy_result). Every failure, including a
+    schema that fails to load, is an error entry, never raised.
 
-    `paths` has the same meaning as in check_schema (BL-025's ordered
-    Compose base+override layers) -- omitted, `file_path` is parsed alone,
-    exactly as before BL-025. The returned dict's "file" key is always
-    `file_path` either way, so its JSON shape is unchanged.
+    `paths` has the same meaning as in check_schema. The returned dict's
+    "file" key is always `file_path`, so its JSON shape is unchanged.
     """
-    try:
-        schema = config_manager.load_schema(service_name=service_name)
-        parser, local_values = get_manifest_parser_and_vars(
-            paths if paths is not None else [file_path],
-            container=container,
-            prefer=service_name,
-            get_values=True,
-        )
-        if not parser:
-            return {
-                "file": file_path,
-                "service": service_name,
-                "clean": False,
-                "error": _no_parser_found_message(file_path),
-            }
-    except FileNotFoundError as e:
-        return {
-            "file": file_path,
-            "service": service_name,
-            "clean": False,
-            "error": str(e),
-        }
-    except (ValueError, EnvShieldException) as e:
-        return {
-            "file": file_path,
-            "service": service_name,
-            "clean": False,
-            "error": str(e),
-        }
+    from . import evaluator
 
-    diff = diff_against_schema(
-        schema, local_values, has_unresolved_source=parser.has_unresolved_source
-    )
-    try:
-        if paths is None:
-            drop_file_peer_extras(diff, service_name, file_path)
-        mark_out_of_scope(diff, service_name)
-    except EnvShieldException as e:
-        return {
-            "file": file_path,
-            "service": service_name,
-            "clean": False,
-            "error": str(e),
-        }
-    result = {
-        "file": file_path,
-        "service": service_name,
-        "clean": diff.is_clean,
-        "missing": sorted(diff.missing),
-        "blank": sorted(diff.blank),
-        "invalid": dict(diff.invalid),
-        "extra": sorted(diff.extra),
-        "unresolved": sorted(diff.unresolved),
-    }
-    if diff.out_of_scope:
-        # The subset of `extra` defined system-wide but not granted here.
-        # Only present when non-empty, so a unique schema's shape is unchanged.
-        result["out_of_scope"] = sorted(diff.out_of_scope)
-    return result
+    return evaluator.evaluate_source(
+        file_path, service_name, container=container, paths=paths
+    ).legacy_result()
 
 
 def sync_schema(service_name: str) -> bool:
@@ -935,6 +910,8 @@ def sync_schema(service_name: str) -> bool:
         condition_text = schema_types.requiredif_condition_text(details, schema)
         if condition_text:
             annotations.append(f"required if {condition_text}")
+        elif schema_types.presence_rule(details) == "never":
+            annotations.append("optional")
         if annotations:
             body += f"# {'; '.join(annotations)}\n"
 

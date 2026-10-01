@@ -319,6 +319,50 @@ class TestMultipleFindings:
         assert grouped["unclassified"][0]["file_path"] == "tests/mock.py"
 
 
+class TestOverrideNeverCarriesANonOverridableFinding:
+    """
+    Accepting the override is for LIKELY_SECRET findings only. A mixed set
+    -- one likely secret plus an AMBIGUOUS or unclassified finding (e.g. a
+    vendor-key match, which is never overridable on its own) -- must block
+    without offering the override at all.
+    """
+
+    LIKELY = {
+        "file_path": "src/auth.py",
+        "line_num": 15,
+        "secret_type": "Generic API Key",
+        "redacted_preview": "[REDACTED (30 chars)]",
+        "classification": "likely_secret",
+        "classification_confidence": "HIGH",
+    }
+
+    def _assert_blocks_without_prompt(self, other):
+        with patch(
+            "envshield.core.enforcement.console.input",
+            side_effect=["2", "COMMIT ANYWAY"],
+        ) as prompt:
+            allowed = enforcement.enforce_findings(
+                [self.LIKELY, other], [], interactive=True
+            )
+        assert allowed is False
+        prompt.assert_not_called()
+
+    def test_with_an_unclassified_vendor_key(self):
+        self._assert_blocks_without_prompt(
+            {
+                "file_path": "deploy/env.yml",
+                "line_num": 3,
+                "secret_type": "AWS Access Key ID",
+                "redacted_preview": "[REDACTED (20 chars)]",
+            }
+        )
+
+    def test_with_an_ambiguous_finding(self):
+        self._assert_blocks_without_prompt(
+            {**self.LIKELY, "classification": "ambiguous", "line_num": 99}
+        )
+
+
 class TestOutputSafety:
     """Tests that no raw secret values are exposed."""
 

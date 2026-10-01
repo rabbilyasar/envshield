@@ -3,7 +3,37 @@
 Internal status of in-flight multi-phase work. Public direction lives in
 [ROADMAP.md](ROADMAP.md); individual findings in [BACKLOG.md](BACKLOG.md).
 
-Last updated: 2026-09-30.
+Last updated: 2026-10-01.
+
+---
+
+## Evaluator migration
+
+Decisions: [docs/architecture/evaluator-decisions.md](docs/architecture/evaluator-decisions.md).
+Findings: BACKLOG.md Part 5c (`BL-149` to `BL-160`). Working tree, not yet committed.
+
+Goal: every command's configuration semantics converge on one evaluator
+(`core/evaluator.py`), without removing behavior before its replacement
+is proven.
+
+| Step | Status |
+|---|---|
+| 0. Decision records | Done (D-1 to D-8) |
+| 1. Schema hardening (key/type validation, `required`, D-1 fixes in `explain`/`schema diff`) | Done |
+| 2. Extract hooks lifecycle and file walking out of `scanner.py` | Done (hooks → `hooks_manager`; walking/exclusions → `source_files`) |
+| 3–4. Evaluator, versioned report, golden tests | Done (22 golden scenarios recorded from pre-evaluator `check`) |
+| 5. `check` on the evaluator | Done (golden JSON and Rich output identical; `--json` adds `reports`) |
+| 6. Code references in `check` | Done (same file set as `scan`; code no service owns not covered yet, BL-158) |
+| 7. Discovery: `BaseSettings`, dynamic keys, JS comments/strings | Done |
+| 8. `setup` | Partly: load-failure fallback removed, post-write evaluation added; the prompt decision still uses `setup`'s own post-default values |
+| 9. `doctor` / hooks / example | Partly: `doctor`'s local and manifest checks use the evaluator; hooks and `schema sync --check` unchanged |
+| 10. Secret guard | Partly: override bug fixed (BL-151); scanner still owns the staged undeclared check (BL-159) |
+| 11. Real-project verification | Done: KemonChilo (full workflow), Zeus (archived config, compatibility), discovery on 8 repositories |
+| 12. Remove obsolete code | Only what was migrated: `check`'s CLI orchestration, `check_schema`/`check_result` bodies, `doctor`'s duplicate loaders, `explain`'s duplicate walker |
+| 13. Documentation | Done (this file, BACKLOG Part 5c, decision records, ROADMAP "Now", README) |
+| 14. MCP | Not started (separate phase) |
+
+**Open before the next step:** BL-158 (unowned code), BL-159 (staged undeclared check).
 
 ---
 

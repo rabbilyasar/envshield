@@ -909,3 +909,126 @@ class TestJsPathologicalInputCompletesQuickly:
         content = "const { A, B, C } = process.env;\n" * 10000
         result = _js(content)
         assert len(result) == 30000
+
+
+class TestJsCommentsAndStringsAreNotReads:
+    """A match starting inside a comment or string literal is not a read."""
+
+    SOURCE = (
+        "// process.env.IN_LINE_COMMENT\n"
+        "/* process.env.IN_BLOCK_COMMENT\n   still process.env.IN_BLOCK_2 */\n"
+        'const s = "process.env.IN_DOUBLE";\n'
+        "const q = 'process.env.IN_SINGLE';\n"
+        "const t = `process.env.IN_TEMPLATE ${process.env.IN_TEMPLATE_EXPR}`;\n"
+        "const a = process.env.REAL;\n"
+        'const b = process.env["REAL_BRACKET"];\n'
+        "const brace = '{'; const { REAL_DESTRUCTURED } = process.env;\n"
+    )
+
+    def test_only_code_matches(self):
+        found = {u.variable for u in discovery.discover_js_usages(self.SOURCE, "a.ts")}
+        assert found == {
+            "REAL",
+            "REAL_BRACKET",
+            "REAL_DESTRUCTURED",
+            "IN_TEMPLATE_EXPR",
+        }
+
+    def test_line_numbers_are_unchanged_by_masking(self):
+        lines = {
+            u.variable: u.line
+            for u in discovery.discover_js_usages(self.SOURCE, "a.ts")
+        }
+        assert lines["REAL"] == 7
+        assert lines["REAL_DESTRUCTURED"] == 9
+
+    def test_unterminated_string_is_bounded_to_its_line(self):
+        source = "const x = 'oops\nconst y = process.env.NEXT_LINE;\n"
+        found = [u.variable for u in discovery.discover_js_usages(source, "a.js")]
+        assert found == ["NEXT_LINE"]
+
+
+class TestDynamicReferences:
+    """Reads with a non-literal key are reported, never silently dropped."""
+
+    def test_python(self):
+        source = (
+            "import os\nname = 'X'\n"
+            "os.getenv(name)\nos.environ[name]\nos.environ.get(f'A_{name}')\n"
+            "os.environ[name] = '1'\n"
+        )
+        usages, dynamic = discovery.discover_references(source, "a.py")
+        assert usages == []
+        assert [(d.line, d.access_type) for d in dynamic] == [
+            (3, "os.getenv"),
+            (4, "os.environ[]"),
+            (5, "os.environ.get"),
+        ]
+
+    def test_js(self):
+        source = (
+            "const a = process.env[key];\n"
+            "const b = import.meta.env[`X_${k}`];\n"
+            "process.env[key] = 'write';\n"
+            "// process.env[inComment]\n"
+            'const c = process.env["LITERAL"];\n'
+        )
+        usages, dynamic = discovery.discover_references(source, "a.js")
+        assert [u.variable for u in usages] == ["LITERAL"]
+        assert [(d.line, d.access_type) for d in dynamic] == [
+            (1, "process.env[]"),
+            (2, "import.meta.env[]"),
+        ]
+
+    def test_existing_entry_points_are_unchanged(self):
+        assert (
+            discovery.discover_python_usages("import os\nos.getenv(n)\n", "a.py") == []
+        )
+
+
+class TestBaseSettingsInReferences:
+    SOURCE = (
+        "import os\n"
+        "from pydantic import Field\n"
+        "from pydantic_settings import BaseSettings, SettingsConfigDict\n\n"
+        "class Settings(BaseSettings):\n"
+        '    model_config = SettingsConfigDict(env_file=".env")\n'
+        "    database_url: str\n"
+        "    port: int = 8000\n"
+        '    token: str = Field(alias="API_TOKEN")\n'
+        '    explicit: str = os.getenv("EXPLICIT_READ", "")\n\n'
+        "class Prefixed(BaseSettings):\n"
+        '    model_config = SettingsConfigDict(env_prefix="APP_")\n'
+        "    thing: str\n\n"
+        "class V1(BaseSettings):\n"
+        "    class Config:\n"
+        '        env_prefix = "V1_"\n'
+        "    other: str\n"
+    )
+
+    def _found(self):
+        usages, _ = discovery.discover_references(self.SOURCE, "settings.py")
+        return {u.variable: (u.confidence, u.access_type) for u in usages}
+
+    def test_fields_are_references(self):
+        found = self._found()
+        assert found["DATABASE_URL"] == ("high", "pydantic.BaseSettings.field")
+        assert found["PORT"][0] == "high"
+        assert found["API_TOKEN"][0] == "high"
+        assert "TOKEN" not in found
+        # The explicit read names the variable; the field name doesn't.
+        assert found["EXPLICIT_READ"] == ("high", "os.getenv")
+        assert "EXPLICIT" not in found
+        assert "MODEL_CONFIG" not in found
+
+    def test_a_renaming_config_lowers_confidence(self):
+        found = self._found()
+        assert found["THING"][0] == "medium"
+        assert found["OTHER"][0] == "medium"
+
+    def test_scan_discovery_does_not_include_settings_fields(self):
+        """'scan'/'undeclared' keep their behavior (evaluator-decisions D-7)."""
+        found = {
+            u.variable for u in discovery.discover_python_usages(self.SOURCE, "s.py")
+        }
+        assert found == {"EXPLICIT_READ"}

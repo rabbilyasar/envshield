@@ -15,7 +15,7 @@ from typer.testing import CliRunner
 
 from envshield.cli import app
 from envshield.config import manager as config_manager
-from envshield.core import hooks_manager, scanner
+from envshield.core import hooks_manager
 from envshield.core.exceptions import (
     SchemaNotFoundError,
     SchemaParseError,
@@ -287,14 +287,14 @@ class TestConstantShim:
     ):
         monkeypatch.chdir(tmp_path)
         before = (
-            scanner._generate_pre_commit_hook_content(),
-            scanner._generate_post_merge_hook_content(),
+            hooks_manager._generate_pre_commit_hook_content(),
+            hooks_manager._generate_post_merge_hook_content(),
         )
         _write("envshield.yml", SHARED)
         _write("env.schema.toml", SHARED_SCHEMA)
         after = (
-            scanner._generate_pre_commit_hook_content(),
-            scanner._generate_post_merge_hook_content(),
+            hooks_manager._generate_pre_commit_hook_content(),
+            hooks_manager._generate_post_merge_hook_content(),
         )
         assert before == after
 
@@ -307,22 +307,22 @@ class TestConstantShim:
             "    dir: deep/payments\n    example_file: deep/payments/tmpl.env\n",
         )
         for content in (
-            scanner._generate_pre_commit_hook_content(),
-            scanner._generate_post_merge_hook_content(),
+            hooks_manager._generate_pre_commit_hook_content(),
+            hooks_manager._generate_post_merge_hook_content(),
         ):
             for value in ("payments", "deep/", "tmpl.env", "env.schema.toml"):
                 assert value not in content
             assert content.startswith("#!/bin/sh\n")
-            assert scanner.ENVSHIELD_HOOK_MARKER in content
+            assert hooks_manager.ENVSHIELD_HOOK_MARKER in content
 
     def test_shims_invoke_the_runner_for_their_event(self):
         assert (
             "envshield hook run pre-commit"
-            in scanner._generate_pre_commit_hook_content()
+            in hooks_manager._generate_pre_commit_hook_content()
         )
         assert (
             "envshield hook run post-merge"
-            in scanner._generate_post_merge_hook_content()
+            in hooks_manager._generate_post_merge_hook_content()
         )
 
 
@@ -675,12 +675,12 @@ class TestLifecycle:
         confirm = mocker.patch("questionary.confirm")
         confirm.return_value.ask.return_value = True
 
-        scanner.install_post_merge_hook()
+        hooks_manager.install_post_merge_hook()
 
         confirm.assert_called_once()
         assert (
             open(".git/hooks/post-merge").read()
-            == scanner._generate_post_merge_hook_content()
+            == hooks_manager._generate_post_merge_hook_content()
         )
 
     def test_unknown_event_is_rejected(self):

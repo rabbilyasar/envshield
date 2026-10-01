@@ -138,7 +138,7 @@ class TestNoArgumentDiffDirection:
 
             assert result.exit_code == 1
 
-    def test_an_uncommitted_defaulted_addition_stays_non_breaking(self, tmp_path):
+    def test_an_uncommitted_optional_addition_stays_non_breaking(self, tmp_path):
         with runner.isolated_filesystem(temp_dir=tmp_path):
             _init_repo()
             _write("envshield.yml", "services:\n  api:\n    schema: env.schema.toml\n")
@@ -147,7 +147,7 @@ class TestNoArgumentDiffDirection:
             _write(
                 "env.schema.toml",
                 '[KEPT]\ndescription = "k"\n\n'
-                '[ADDED]\ndescription = "a"\ntype = "string"\ndefaultValue = "d"\n',
+                '[ADDED]\ndescription = "a"\ntype = "string"\nrequired = false\n',
             )
 
             result = runner.invoke(app, ["schema", "diff", "--json"])

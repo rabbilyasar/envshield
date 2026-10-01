@@ -14,7 +14,7 @@ from rich.prompt import Prompt
 from ..config import manager as config_manager
 from ..parsers.factory import get_parser
 from . import file_updater, schema_manager, schema_types, service_discovery
-from .exceptions import EnvShieldException
+from .exceptions import EnvShieldException, SchemaNotFoundError
 from .importer import key_contains_secret_keyword
 
 console = Console()
@@ -159,10 +159,16 @@ def run_setup(service_name: str, output_file: Optional[str] = None) -> SetupResu
 
     # Load the schema so we can use its authoritative 'secret' flag and
     # descriptions during prompting, instead of re-guessing from the key name.
+    # Only a schema that doesn't exist yet falls back to the template alone
+    # (and says so); a schema that exists but fails to load -- malformed,
+    # invalid, a secret with a default -- is an error, never a silent
+    # unvalidated setup.
+    missing_schema: Optional[str] = None
     try:
         schema = config_manager.load_schema(service_name=service_name)
-    except EnvShieldException:
+    except SchemaNotFoundError as e:
         schema = {}
+        missing_schema = str(e)
     # When the file being written is the service's own local file and other
     # services share it, it's materialized from the union of their
     # projections (the physical-file contract). A peer or conflict error
@@ -179,6 +185,12 @@ def run_setup(service_name: str, output_file: Optional[str] = None) -> SetupResu
             )
         raise EnvShieldException(
             f"'{example_file}' not found. Please run 'envshield schema sync' first to generate it."
+        )
+
+    if missing_schema:
+        console.print(
+            f"[bold yellow]Warning:[/bold yellow] {missing_schema} Values are taken "
+            "from the existing files as they are, without validation."
         )
 
     if schema:
@@ -322,9 +334,34 @@ def run_setup(service_name: str, output_file: Optional[str] = None) -> SetupResu
         _write_python_local_file(local_file, final_vars, keys_to_prompt)
     else:
         _write_dotenv_local_file(local_file, final_vars)
+    if schema:
+        _report_written_file(service_name, local_file)
     return SetupResult(
         completed=True, local_file=local_file, configured_count=len(keys_to_prompt)
     )
+
+
+def _report_written_file(service_name: str, local_file: str) -> None:
+    """
+    Evaluates the file just written the way 'check' does (the same
+    evaluator, so the two can't disagree) and says whether it now
+    satisfies the contract -- a value kept invalid after the retry limit,
+    say, is named here rather than hidden behind "configuration complete".
+    Names and constraint descriptions only, never a value.
+    """
+    from . import evaluator
+
+    source = evaluator.evaluate_source(local_file, service_name)
+    if source.clean:
+        console.print(f"[green]✓ '{local_file}' satisfies the schema.[/green]")
+    elif source.diff is not None:
+        console.print(
+            f"[bold yellow]Still not satisfied:[/bold yellow] {source.diff.summary()}"
+        )
+    else:
+        console.print(
+            f"[bold yellow]Couldn't re-check '{local_file}':[/bold yellow] {source.error}"
+        )
 
 
 def _write_dotenv_local_file(local_file: str, final_vars: Dict[str, str]) -> None:

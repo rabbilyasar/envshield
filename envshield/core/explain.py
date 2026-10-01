@@ -27,68 +27,7 @@ from ..config import manager as config_manager
 from ..parsers.factory import get_manifest_parser_and_vars
 from . import discovery, schema_types
 from .exceptions import EnvShieldException, VariableNotFoundError
-
-# Mirrors scanner.py's DEFAULT_EXCLUDED_DIRS / _is_default_excluded_dir and
-# dependency_snapshot.py's _open_disk_source exactly, duplicated rather than
-# imported -- the same reason dependency_snapshot.py's own docstring gives
-# for duplicating scanner.py's _open_for_scan: a sibling module with its
-# own CLI-adjacent dependencies this one has no other reason to pull in.
-from .scanner import DEFAULT_EXCLUDED_DIRS
-
-_PYTHON_SUFFIXES = (".py",)
-_JS_SUFFIXES = (".js", ".jsx", ".ts", ".tsx")
-_DISCOVERABLE_SUFFIXES = _PYTHON_SUFFIXES + _JS_SUFFIXES
-
-_CAN_USE_O_NOFOLLOW = hasattr(os, "O_NOFOLLOW")
-
-
-def _is_default_excluded_dir(dirname: str) -> bool:
-    return (
-        dirname in DEFAULT_EXCLUDED_DIRS
-        or dirname.endswith(".egg-info")
-        or dirname.endswith(".dist-info")
-    )
-
-
-def _open_disk_source(path: str):
-    """Symlink-protected open -- see scanner.py's _open_for_scan / dependency_snapshot.py's _open_disk_source, mirrored exactly."""
-    flags = os.O_RDONLY
-    if _CAN_USE_O_NOFOLLOW:
-        flags |= os.O_NOFOLLOW
-    fd = os.open(path, flags)
-    return os.fdopen(fd, "r", encoding="utf-8", errors="ignore")
-
-
-def _discoverable_files(root_dir: str) -> List[str]:
-    """
-    Every .py/.js/.jsx/.ts/.tsx file under `root_dir` -- symlink-safe,
-    excluded-dir-pruned, mirroring scanner.py's own file-collection walk.
-    Always the live working tree (like 'doctor'/'check'), never a Git
-    revision -- a developer explaining one variable right now wants the
-    current state, not history (that's 'undeclared'/'schema diff's job).
-
-    `root_dir` is any directory to walk -- a service's own directory, or
-    (BL-106) one of its `additional_source_roots`; this function has no
-    concept of "the" service directory, it just walks what it's given.
-    """
-    if os.path.islink(root_dir):
-        return []
-    files: List[str] = []
-    for root, dirs, filenames in os.walk(root_dir):
-        dirs[:] = [d for d in dirs if not _is_default_excluded_dir(d)]
-        for filename in filenames:
-            if not filename.endswith(_DISCOVERABLE_SUFFIXES):
-                continue
-            file_path = os.path.join(root, filename)
-            if os.path.islink(file_path):
-                continue
-            # normpath rather than the raw os.walk join -- a project-root
-            # service_dir of "." would otherwise report every usage's
-            # file_path with a "./" prefix, unlike every other path this
-            # command shows (schema_path, manifest paths) or unlike what
-            # 'undeclared' reports for the same file via git.
-            files.append(os.path.normpath(file_path))
-    return files
+from .source_files import discoverable_files, open_nofollow
 
 
 def _discover_current_usages(
@@ -126,21 +65,20 @@ def _discover_current_usages(
     owner = config_manager.file_owner_resolver()
 
     def _scan_root(root_dir: str, check_ownership: bool) -> None:
-        for file_path in _discoverable_files(os.path.normpath(root_dir)):
+        for file_path in discoverable_files(os.path.normpath(root_dir)):
             if file_path in seen_files:
                 continue
             if check_ownership and (owner(file_path) != service_name):
                 continue
             seen_files.add(file_path)
             try:
-                with _open_disk_source(file_path) as f:
+                with open_nofollow(file_path) as f:
                     content = f.read()
             except (IOError, OSError):
                 continue
-            if file_path.endswith(_PYTHON_SUFFIXES):
-                found = discovery.discover_python_usages(content, file_path)
-            else:
-                found = discovery.discover_js_usages(content, file_path)
+            # 'check's discovery (BaseSettings fields included), so the two
+            # never disagree about where a variable is read.
+            found, _dynamic = discovery.discover_references(content, file_path)
             usages.extend(u for u in found if u.variable == variable)
 
     _scan_root(service_dir, check_ownership=True)
@@ -214,17 +152,12 @@ def _describe_field(field_schema: Dict[str, Any]) -> Dict[str, Any]:
     The schema-declarative facts about one field -- never evaluated
     against any ambient local values (that's 'check'/'doctor's job,
     against one specific file's actual content). 'requiredness' is
-    'optional' (has a defaultValue -- schema_types.is_required_now's own
-    precedence: a default always wins, regardless of requiredIf),
-    'conditional' (no default, has requiredIf), or 'required'
-    (unconditional) -- describing the contract, not resolving it.
+    schema_types.requiredness_label: 'required' (must be present in the
+    file -- a defaultValue doesn't change that, it's only what 'setup'
+    fills in), 'conditional' (its requiredIf decides), or 'optional'
+    ('required = false') -- describing the contract, not resolving it.
     """
-    if "defaultValue" in field_schema:
-        requiredness = "optional"
-    elif field_schema.get("requiredIf"):
-        requiredness = "conditional"
-    else:
-        requiredness = "required"
+    requiredness = schema_types.requiredness_label(field_schema)
 
     is_secret = bool(field_schema.get("secret", False))
     # A secret field's default is never surfaced here, even though

@@ -186,6 +186,12 @@ def enforce_findings(
     if not has_high_confidence:
         return False
 
+    # An override is only ever for LIKELY_SECRET findings. Accepting it must
+    # not also carry through an AMBIGUOUS or unclassified finding (e.g. a
+    # vendor-key match) that would have blocked on its own.
+    if grouped["ambiguous"] or grouped["unclassified"]:
+        return False
+
     # Interactive + high-confidence findings: offer explicit override
     _display_enforcement_warning(secret_findings)
     return _prompt_user_decision()
