@@ -307,13 +307,18 @@ def test_generate_refuses_an_explicit_path_outside_the_project(world):
 # --- Legitimate writes keep working ----------------------------------------
 
 
-def test_setup_creates_a_new_env_as_0600(world):
+def test_setup_creates_a_new_env_as_0600(world, mocker):
     _write("envshield.yml", ONE_SERVICE)
     _write("env.schema.toml", SCHEMA)
+    # A hidden prompt reads /dev/tty when one exists, not CliRunner's input.
+    prompt = mocker.patch(
+        "envshield.core.setup_manager.Prompt.ask", return_value=SECRET
+    )
 
-    result = _invoke(["setup"], f"{SECRET}\n")
+    result = _invoke(["setup"])
 
     assert result.exit_code == 0, result.stdout
+    assert prompt.call_args.kwargs["password"] is True
     with open(".env") as f:
         assert f"API_KEY={SECRET}" in f.read()
     assert os.stat(".env").st_mode & 0o777 == 0o600
@@ -325,10 +330,15 @@ def test_setup_overwrites_an_existing_regular_env(world, mocker):
     _write(".env", "PORT=9000\n")
     os.chmod(".env", 0o644)
     mocker.patch("questionary.confirm").return_value.ask.return_value = True
+    # A hidden prompt reads /dev/tty when one exists, not CliRunner's input.
+    prompt = mocker.patch(
+        "envshield.core.setup_manager.Prompt.ask", return_value=SECRET
+    )
 
-    result = _invoke(["setup"], f"{SECRET}\n")
+    result = _invoke(["setup"])
 
     assert result.exit_code == 0, result.stdout
+    assert prompt.call_args.kwargs["password"] is True
     with open(".env") as f:
         content = f.read()
     assert "PORT=9000" in content and f"API_KEY={SECRET}" in content
@@ -349,14 +359,19 @@ def test_sync_creates_missing_parent_directories(world):
         assert "PORT=8000" in f.read()
 
 
-def test_setup_patches_a_regular_python_local_file(world):
+def test_setup_patches_a_regular_python_local_file(world, mocker):
     _write("envshield.yml", ONE_SERVICE + "    local_file: settings.py\n")
     _write("env.schema.toml", SCHEMA)
     _write("settings.py", "# keep me\nPORT = '8000'\n")
+    # A hidden prompt reads /dev/tty when one exists, not CliRunner's input.
+    prompt = mocker.patch(
+        "envshield.core.setup_manager.Prompt.ask", return_value=SECRET
+    )
 
-    result = _invoke(["setup"], f"{SECRET}\n")
+    result = _invoke(["setup"])
 
     assert result.exit_code == 0, result.stdout
+    assert prompt.call_args.kwargs["password"] is True
     with open("settings.py") as f:
         content = f.read()
     assert "# keep me" in content and SECRET in content
