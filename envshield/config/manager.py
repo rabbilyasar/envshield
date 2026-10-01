@@ -984,25 +984,53 @@ def resolve_file_owner(
 
     Returns None if no candidate's directory contains the file.
     """
-    names = service_names if service_names is not None else get_services().keys()
-    dirs = []
-    for name in names:
-        try:
-            service_dir = normalize_path_for_service_match(get_service_dir(name))
-        except DuplicateServiceDirError:
-            raise
-        except EnvShieldException:
-            continue
-        dirs.append((service_dir, name))
-    # Longest directory first, so a nested service's dir wins over a
-    # shorter parent/sibling's -- mirrors service_dir_contains' own '.'
-    # catch-all reasoning, generalized to the whole registered set.
-    dirs.sort(key=lambda item: len(item[0]), reverse=True)
+    return file_owner_resolver(service_names)(file_path)
 
-    for service_dir, name in dirs:
-        if service_dir_contains(file_path, service_dir):
-            return name
-    return None
+
+def file_owner_resolver(service_names: Optional[List[str]] = None):
+    """
+    resolve_file_owner for many files: returns `owner(file_path)`, which
+    answers exactly as resolve_file_owner would, but reads envshield.yml
+    and resolves each candidate's directory once (on its first call, so an
+    invalid topology still raises only when a file is actually routed),
+    not once per file. For callers routing a whole tree of files; the
+    topology can't change mid-command.
+    """
+    ordered: List[tuple] = []
+    resolved = False
+
+    def owner(file_path: str) -> Optional[str]:
+        nonlocal resolved
+        if not resolved:
+            names = (
+                service_names if service_names is not None else get_services().keys()
+            )
+            # Name order, so the stable sort below breaks an equal-directory
+            # tie (two separate schemas in one directory, BL-137's
+            # documented residual) by service name, never by envshield.yml
+            # order.
+            for name in sorted(names):
+                try:
+                    service_dir = normalize_path_for_service_match(
+                        get_service_dir(name)
+                    )
+                except DuplicateServiceDirError:
+                    raise
+                except EnvShieldException:
+                    continue
+                ordered.append((service_dir, name))
+            # Longest directory first, so a nested service's dir wins over
+            # a shorter parent/sibling's -- mirrors service_dir_contains'
+            # own '.' catch-all reasoning, generalized to the whole
+            # registered set.
+            ordered.sort(key=lambda item: len(item[0]), reverse=True)
+            resolved = True
+        for service_dir, name in ordered:
+            if service_dir_contains(file_path, service_dir):
+                return name
+        return None
+
+    return owner
 
 
 def get_env_paths(service_name: str) -> Dict[str, str]:

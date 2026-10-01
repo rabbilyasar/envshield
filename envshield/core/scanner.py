@@ -1177,6 +1177,7 @@ def _build_undeclared_var_resolver(service_name: Optional[str]):
         return None
 
     console.print("[dim]Per-service schemas loaded for compliance check.[/dim]")
+    owner_of = config_manager.file_owner_resolver()
 
     def _resolve(file_path: str) -> Optional[tuple]:
         # config_manager.resolve_file_owner (D-001) is the one canonical,
@@ -1186,7 +1187,7 @@ def _build_undeclared_var_resolver(service_name: Optional[str]):
         # a file can never be routed to a different service depending on
         # which command asked, or on whether its own service's schema
         # happened to load.
-        owner = config_manager.resolve_file_owner(file_path)
+        owner = owner_of(file_path)
         if owner is None:
             # No registered service's directory contains this file at all
             # -- existing semantics: everything found in it is undeclared.
@@ -1199,6 +1200,37 @@ def _build_undeclared_var_resolver(service_name: Optional[str]):
         return vars_by_service.get(owner)
 
     return _resolve
+
+
+def _service_ownership_filter(service_name: str, service_dir: str):
+    """
+    Returns a predicate: is this file `service_name`'s own, by
+    config_manager.resolve_file_owner (D-001)?
+
+    Services declaring the very same directory as `service_name` are left
+    out of the candidates: they can only happen as two separate schemas
+    sharing a directory (the documented BL-137 residual -- one shared
+    schema's users can't, get_service_dir already failed closed), where
+    the tie can't be settled by topology. Explicitly naming one of them
+    claims that directory; otherwise whichever lost the tie would scan
+    nothing and report clean.
+    """
+    candidates = [service_name]
+    for name in config_manager.get_services():
+        if name == service_name:
+            continue
+        try:
+            other_dir = config_manager.get_service_dir(name)
+        except DuplicateServiceDirError:
+            raise
+        except EnvShieldException:
+            other_dir = None  # resolve_file_owner skips it too
+        if other_dir is None or not config_manager.same_physical_file(
+            other_dir, service_dir
+        ):
+            candidates.append(name)
+    owner_of = config_manager.file_owner_resolver(candidates)
+    return lambda f: owner_of(f) == service_name
 
 
 def _scan_files(
@@ -1247,7 +1279,14 @@ def _scan_files(
     # path is left alone either way: that's a deliberate, existing choice
     # (e.g. checking one shared file against a specific service's schema
     # on purpose), not something to silently override.
-    service_scope_dir = None
+    #
+    # "X's own files" is an ownership question, so it's answered by
+    # config_manager.resolve_file_owner (D-001) -- not by directory
+    # containment, which would sweep a nested service's files (e.g.
+    # 'apps/web/' under 'apps/') into X and check them against X's schema,
+    # and which a root service (dir '.') couldn't scope by at all.
+    explicit_paths = bool(paths)
+    owned_by_service = None
     if service_name:
         try:
             candidate_dir = config_manager.get_service_dir(service_name)
@@ -1255,20 +1294,15 @@ def _scan_files(
             raise  # scanning the whole project instead would hide it (BL-137)
         except EnvShieldException:
             candidate_dir = None
-        if candidate_dir and candidate_dir != ".":
-            service_scope_dir = candidate_dir
-
-    if service_scope_dir and not staged_only and not paths:
-        paths = [service_scope_dir]
+        if candidate_dir and (staged_only or not explicit_paths):
+            owned_by_service = _service_ownership_filter(service_name, candidate_dir)
+            if candidate_dir != "." and not staged_only:
+                paths = [candidate_dir]  # walk only X's subtree
 
     files_to_scan = _collect_files_to_scan(paths, staged_only)
 
-    if service_scope_dir and staged_only:
-        files_to_scan = [
-            f
-            for f in files_to_scan
-            if config_manager.service_dir_contains(f, service_scope_dir)
-        ]
+    if owned_by_service:
+        files_to_scan = [f for f in files_to_scan if owned_by_service(f)]
 
     # For staged scans: keep excluded files for diff-aware scanning
     # For non-staged scans: filter out excluded files as before

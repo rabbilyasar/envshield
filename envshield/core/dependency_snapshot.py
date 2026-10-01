@@ -242,6 +242,8 @@ def discover_usages_for_service(
     service_dir = config_manager.get_service_dir(service_name)
     additional_roots = config_manager.get_service_additional_source_roots(service_name)
 
+    owner = config_manager.file_owner_resolver()
+
     def _belongs_to_service(f: str) -> bool:
         if any(
             config_manager.service_dir_contains(f, root) for root in additional_roots
@@ -249,7 +251,7 @@ def discover_usages_for_service(
             return True
         return (
             config_manager.service_dir_contains(f, service_dir)
-            and config_manager.resolve_file_owner(f) == service_name
+            and owner(f) == service_name
         )
 
     files = [

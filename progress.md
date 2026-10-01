@@ -19,9 +19,9 @@ Findings: BACKLOG.md Part 5b (`BL-135` to `BL-147`).
 | Phase 3 | Complete (committed `e336812`) |
 | Phase 4 | Complete (committed `5a2c61e`) |
 | Phase 5 | Complete (committed `50720ad`) |
-| Phase 6 | Implemented in the working tree, uncommitted; pending review |
+| Phase 6 | Complete (committed `26b821b`) |
 
-**Current: Phase 6 implemented, pending review before commit.**
+**Complete.** (Reconciled 2026-10-01: Phase 6 was committed as `26b821b`; a follow-up, `d1435bb`, unified physical-file ownership.)
 
 The scope of Phases 3–6 is not recorded in this repository. Define each
 one here before starting it; don't infer it.

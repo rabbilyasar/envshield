@@ -123,14 +123,13 @@ def _discover_current_usages(
     """
     usages: List[discovery.DiscoveredVariableUsage] = []
     seen_files: set = set()
+    owner = config_manager.file_owner_resolver()
 
     def _scan_root(root_dir: str, check_ownership: bool) -> None:
         for file_path in _discoverable_files(os.path.normpath(root_dir)):
             if file_path in seen_files:
                 continue
-            if check_ownership and (
-                config_manager.resolve_file_owner(file_path) != service_name
-            ):
+            if check_ownership and (owner(file_path) != service_name):
                 continue
             seen_files.add(file_path)
             try:

@@ -155,6 +155,24 @@ class TestResolveFileOwner:
         with pytest.raises(DuplicateServiceDirError):
             config_manager.resolve_file_owner("shared/app.py")
 
+    @pytest.mark.parametrize("first, second", [("zeta", "alpha"), ("alpha", "zeta")])
+    def test_equal_dirs_on_separate_schemas_tie_break_by_name(
+        self, tmp_path, monkeypatch, first, second
+    ):
+        """BL-137 residual: the tie goes to the alphabetically-first
+        service, whatever order envshield.yml lists them in."""
+        monkeypatch.chdir(tmp_path)
+        _write(
+            "envshield.yml",
+            f"services:\n"
+            f"  {first}:\n    schema: {first}.schema.toml\n    dir: app\n"
+            f"  {second}:\n    schema: {second}.schema.toml\n    dir: app\n",
+        )
+        _write("zeta.schema.toml", "")
+        _write("alpha.schema.toml", "")
+
+        assert config_manager.resolve_file_owner("app/main.py") == "alpha"
+
 
 # -- 2. Consumers agree: scan / explain / undeclared, through their real ----
 # -- public entry points, on the exact JossJobs-shaped nested topology. -----
@@ -390,3 +408,113 @@ class TestScannerSeparatesOwnershipFromSchemaEligibility:
             (f["file_path"], f["variable_name"]) for f in result["undeclared_variables"]
         }
         assert ("unrelated/thing.py", "SOME_VAR") in undeclared
+
+
+# -- 4. 'scan --service X' scopes to X's own files by the same resolver. ----
+
+
+def _undeclared(result):
+    return {
+        (f["file_path"], f["variable_name"]) for f in result["undeclared_variables"]
+    }
+
+
+@pytest.fixture
+def nested_parent_repo(tmp_path, monkeypatch):
+    """A non-root parent service 'apps' with a nested 'web' service."""
+    monkeypatch.chdir(tmp_path)
+    _init_repo()
+    _write(
+        "envshield.yml",
+        "services:\n"
+        "  apps:\n    schema: apps/env.schema.toml\n"
+        "  web:\n    schema: apps/web/env.schema.toml\n",
+    )
+    _write("apps/env.schema.toml", '[APPS_VAR]\ndefaultValue = "a"\n')
+    _write("apps/web/env.schema.toml", '[WEB_VAR]\ndefaultValue = "w"\n')
+    _write("apps/main.py", "import os\nos.environ.get('APPS_VAR')\n")
+    _write("apps/web/main.py", "import os\nos.environ.get('WEB_VAR')\n")
+    _commit("init")
+    return tmp_path
+
+
+class TestScanServiceScopesByOwnership:
+    def test_parent_service_scan_excludes_the_nested_services_files(
+        self, nested_parent_repo
+    ):
+        _write(
+            "apps/main.py",
+            "import os\nos.environ.get('APPS_VAR')\nos.environ.get('APPS_NEW')\n",
+        )
+        result = cli_json("scan", "--service", "apps", code=1)
+        assert _undeclared(result) == {("apps/main.py", "APPS_NEW")}
+
+    def test_parent_service_staged_scan_excludes_the_nested_services_files(
+        self, nested_parent_repo
+    ):
+        _write(
+            "apps/main.py",
+            "import os\nos.environ.get('APPS_VAR')\nos.environ.get('APPS_NEW')\n",
+        )
+        _write("apps/web/main.py", "import os\nos.environ.get('WEB_VAR')\n# edit\n")
+        _git("add", "-A")
+        result = cli_json("scan", "--service", "apps", "--staged", code=1)
+        assert _undeclared(result) == {("apps/main.py", "APPS_NEW")}
+
+    def test_nested_service_can_still_be_scanned_explicitly(self, nested_parent_repo):
+        _write(
+            "apps/web/main.py",
+            "import os\nos.environ.get('WEB_VAR')\nos.environ.get('APPS_VAR')\n",
+        )
+        result = cli_json("scan", "--service", "web", code=1)
+        # APPS_VAR is apps' variable: undeclared for web, and apps' own
+        # file is out of web's scan entirely.
+        assert _undeclared(result) == {("apps/web/main.py", "APPS_VAR")}
+
+    def test_root_service_scan_excludes_the_nested_services_files(self, jossjobs_repo):
+        """A root service (dir '.') used to get no scoping at all: every
+        file project-wide was checked against root's schema."""
+        _write("app.py", "import os\nos.environ.get('ROOT_UNDECLARED')\n")
+        result = cli_json("scan", "--service", "jossjobs", code=1)
+        assert _undeclared(result) == {("app.py", "ROOT_UNDECLARED")}
+
+    def test_root_service_staged_scan_excludes_the_nested_services_files(
+        self, jossjobs_repo
+    ):
+        _write("app.py", "import os\nos.environ.get('ROOT_UNDECLARED')\n")
+        _write("frontend/src/api.ts", "const b = process.env.BACKEND_ORIGIN;\n// x\n")
+        _git("add", "-A")
+        result = cli_json("scan", "--service", "jossjobs", "--staged", code=1)
+        assert _undeclared(result) == {("app.py", "ROOT_UNDECLARED")}
+
+    def test_root_level_files_still_clean_when_declared(self, jossjobs_repo):
+        _write("app.py", "import os\nos.environ.get('FRONTEND_ORIGIN')\n")
+        result = cli_json("scan", "--service", "jossjobs")
+        assert _undeclared(result) == set()
+
+    def test_separate_schemas_sharing_a_directory_each_scan_it(
+        self, tmp_path, monkeypatch
+    ):
+        """BL-137 residual: whichever service loses the directory tie must
+        not scan zero files and report clean when named explicitly."""
+        monkeypatch.chdir(tmp_path)
+        _init_repo()
+        _write(
+            "envshield.yml",
+            "services:\n"
+            "  web:\n    schema: web.schema.toml\n    dir: .\n"
+            "  worker:\n    schema: worker.schema.toml\n    dir: .\n",
+        )
+        _write("web.schema.toml", '[WEB_VAR]\ndefaultValue = "w"\n')
+        _write("worker.schema.toml", '[WORKER_VAR]\ndefaultValue = "k"\n')
+        _write(
+            "app.py",
+            "import os\nos.environ.get('WEB_VAR')\nos.environ.get('WORKER_VAR')\n",
+        )
+        _commit("init")
+        assert _undeclared(cli_json("scan", "--service", "web", code=1)) == {
+            ("app.py", "WORKER_VAR")
+        }
+        assert _undeclared(cli_json("scan", "--service", "worker", code=1)) == {
+            ("app.py", "WEB_VAR")
+        }
