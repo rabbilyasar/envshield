@@ -5,7 +5,7 @@ import toml
 import yaml
 from rich.console import Console
 
-from envshield.core import schema_scope, schema_types
+from envshield.core import file_updater, schema_scope, schema_types
 from envshield.core.exceptions import (
     ConfigNotFoundError,
     ConfigParseError,
@@ -572,7 +572,7 @@ def add_service(
             "the wrong file."
         )
 
-    with open(CONFIG_FILE_NAME, "w") as f:
+    with file_updater.open_for_write(CONFIG_FILE_NAME) as f:
         yaml.dump(config, f, sort_keys=False, indent=2)
 
 
@@ -673,7 +673,7 @@ def remove_service(name: str) -> None:
                     del containers[container_name]
         config["manifests"] = [entry for entry in manifests if entry.get("containers")]
 
-    with open(CONFIG_FILE_NAME, "w") as f:
+    with file_updater.open_for_write(CONFIG_FILE_NAME) as f:
         yaml.dump(config, f, sort_keys=False, indent=2)
 
 
@@ -738,7 +738,7 @@ def add_manifest(
     else:
         manifests.append({**entry_fields, "containers": dict(containers)})
 
-    with open(CONFIG_FILE_NAME, "w") as f:
+    with file_updater.open_for_write(CONFIG_FILE_NAME) as f:
         yaml.dump(config, f, sort_keys=False, indent=2)
 
 
@@ -1362,7 +1362,7 @@ def update_gitignore():
             )
             return
 
-        with open(GITIGNORE_FILE_NAME, "a") as f:
+        with file_updater.open_for_write(GITIGNORE_FILE_NAME, append=True) as f:
             f.write("\n# EnvShield Files\n")
             for pattern in missing_patterns:
                 f.write(pattern + "\n")
@@ -1377,7 +1377,7 @@ def update_gitignore():
 def write_file(file_name: str, content: str, success_message: str):
     """Generic file writing function."""
     try:
-        with open(file_name, "w") as f:
+        with file_updater.open_for_write(file_name) as f:
             f.write(content)
         console.print(f"[bold green]✓[/bold green] {success_message}")
     except IOError as e:

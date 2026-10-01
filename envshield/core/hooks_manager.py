@@ -13,6 +13,7 @@ from rich.console import Console
 from ..config import manager as config_manager
 from ..core.exceptions import EnvShieldException, ServiceConfigError
 from ..utils import git_utils
+from . import file_updater
 
 console = Console()
 
@@ -179,14 +180,15 @@ def install_pre_commit_hook(force: bool = False, non_interactive: bool = False):
                     console.print("[yellow]Hook installation cancelled.[/yellow]")
                     raise typer.Exit()
 
-        with open(pre_commit_path, "w") as f:
+        # Never through a symlink (BL-154): with core.hooksPath inside the
+        # worktree, the hook file itself is repository content.
+        with file_updater.open_for_write(pre_commit_path, root=hooks_dir) as f:
             f.write(hook_script_content)
-
-        current_permissions = os.stat(pre_commit_path).st_mode
-        os.chmod(
-            pre_commit_path,
-            current_permissions | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH,
-        )
+            current_permissions = os.fstat(f.fileno()).st_mode
+            os.fchmod(
+                f.fileno(),
+                current_permissions | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH,
+            )
 
         console.print(
             "[bold green]✓ Git pre-commit hook installed successfully![/bold green]"
@@ -251,14 +253,15 @@ def install_post_merge_hook(force: bool = False, non_interactive: bool = False):
                     console.print("[yellow]Hook installation cancelled.[/yellow]")
                     raise typer.Exit()
 
-        with open(post_merge_path, "w") as f:
+        # Never through a symlink (BL-154): with core.hooksPath inside the
+        # worktree, the hook file itself is repository content.
+        with file_updater.open_for_write(post_merge_path, root=hooks_dir) as f:
             f.write(hook_script_content)
-
-        current_permissions = os.stat(post_merge_path).st_mode
-        os.chmod(
-            post_merge_path,
-            current_permissions | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH,
-        )
+            current_permissions = os.fstat(f.fileno()).st_mode
+            os.fchmod(
+                f.fileno(),
+                current_permissions | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH,
+            )
 
         console.print(
             "[bold green]✓ Git post-merge hook installed successfully![/bold green]"

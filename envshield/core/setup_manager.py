@@ -156,6 +156,9 @@ def run_setup(service_name: str, output_file: Optional[str] = None) -> SetupResu
     is_python_target = local_file.endswith(".py")
 
     console.print(f"[bold]{local_file}[/bold]")
+    # Refuse an unsafe target before asking for any value (BL-154), not
+    # only when it's finally written.
+    file_updater.assert_safe_write_target(local_file)
 
     # Load the schema so we can use its authoritative 'secret' flag and
     # descriptions during prompting, instead of re-guessing from the key name.
@@ -381,9 +384,10 @@ def _write_dotenv_local_file(local_file: str, final_vars: Dict[str, str]) -> Non
             )
 
     try:
-        output_dir = os.path.dirname(local_file)
-        if output_dir:
-            os.makedirs(output_dir, exist_ok=True)
+        # Creates missing parents and leaves the file 0600 whether or not it
+        # already existed -- a hand-created '.env' from before EnvShield
+        # doesn't keep broader permissions -- and refuses a symlinked or
+        # out-of-project target (BL-154).
         with file_updater.open_new_secret_file(local_file) as f:
             f.write(
                 f"{service_discovery.ENVSHIELD_GENERATED_MARKER} on {datetime.datetime.now().strftime('%Y-%m-%d')}\n\n"
@@ -401,15 +405,6 @@ def _write_dotenv_local_file(local_file: str, final_vars: Dict[str, str]) -> Non
                     f.write(f'{key}="{safe_value}"\n')
                 else:
                     f.write(f"{key}={safe_value}\n")
-        # open_new_secret_file only guarantees 0600 when this call is what
-        # actually creates the file (POSIX open() semantics -- see its
-        # docstring); this function fully regenerates the file's content
-        # regardless of whether it pre-existed, so it takes equal
-        # responsibility for the file's permissions here rather than
-        # silently inheriting whatever an already-existing file happened to
-        # have (e.g. a hand-created '.env' from before EnvShield was ever
-        # introduced to the project).
-        os.chmod(local_file, 0o600)
         console.print(
             f"\n[bold green]✓ Successfully created your [magenta]{local_file}[/magenta] file![/bold green]"
         )
@@ -441,9 +436,6 @@ def _write_python_local_file(
                 )
 
         try:
-            output_dir = os.path.dirname(local_file)
-            if output_dir:
-                os.makedirs(output_dir, exist_ok=True)
             with file_updater.open_new_secret_file(local_file) as f:
                 f.write(
                     f"{service_discovery.ENVSHIELD_GENERATED_MARKER} on {datetime.datetime.now().strftime('%Y-%m-%d')}\n\n"
@@ -468,13 +460,8 @@ def _write_python_local_file(
         return
 
     updates = [{"key": key, "value": final_vars[key]} for key in keys_needing_write]
-    file_updater.update_variables_in_file(local_file, updates)
-    # update_variables_in_file is shared with schema_manager.sync_schema's
-    # non-secret '.env.example' template updates, so it can't unconditionally
-    # tighten permissions itself -- this call site is specifically patching a
-    # local secrets file, so it takes responsibility for 0600 here, the same
-    # way _write_dotenv_local_file does for its own write path.
-    os.chmod(local_file, 0o600)
+    # A local secrets file: left 0600, set on the open descriptor.
+    file_updater.update_variables_in_file(local_file, updates, secret=True)
     console.print(
         f"\n[bold green]✓ Updated [magenta]{local_file}[/magenta] with {len(updates)} value(s): {', '.join(sorted(keys_needing_write))}[/bold green]"
     )

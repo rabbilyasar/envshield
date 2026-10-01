@@ -961,10 +961,8 @@ def sync_schema(service_name: str) -> bool:
         return False
 
     try:
-        output_dir = os.path.dirname(output_file)
-        if output_dir:
-            os.makedirs(output_dir, exist_ok=True)
-        with open(output_file, "w") as f:
+        # Refuses a symlinked or out-of-project template (BL-154).
+        with file_updater.open_for_write(output_file, create_parents=True) as f:
             f.write(header + body)
         console.print(
             f"[bold green]✓[/bold green] Successfully created/updated [bold cyan]{output_file}[/bold cyan]!"
@@ -1022,9 +1020,6 @@ def _sync_python_local_file(
                 lines.append(f"# {safe_description}\n")
             lines.append(f"{key} = {str(details.get('defaultValue', ''))!r}\n\n")
 
-        output_dir = os.path.dirname(local_file)
-        if output_dir:
-            os.makedirs(output_dir, exist_ok=True)
         with file_updater.open_new_secret_file(local_file) as f:
             f.writelines(lines)
         console.print(

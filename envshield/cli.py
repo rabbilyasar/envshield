@@ -21,6 +21,7 @@ from .core import (
     doctor,
     evaluator,
     explain,
+    file_updater,
     generator,
     hooks_manager,
     inspector,
@@ -129,7 +130,7 @@ def _seed_schema_from_file(
         config_file,
         as_local_values=(local_file is not None and config_file == local_file),
     )
-    with open(schema_path, "w") as f:
+    with file_updater.open_for_write(schema_path) as f:
         f.write(content)
 
 
@@ -1743,7 +1744,7 @@ def generate(
             schema = config_manager.load_bare_schema()
         content = generator.generate_config(schema, lang=resolved_lang)
 
-        with open(resolved_output, "w") as f:
+        with file_updater.open_for_write(resolved_output) as f:
             f.write(content)
 
         console.print(
@@ -2205,7 +2206,7 @@ def import_command(
             as_local_values=as_local_values,
         )
 
-        with open(output, "w") as f:
+        with file_updater.open_for_write(output) as f:
             f.write(schema_content)
 
         console.print(

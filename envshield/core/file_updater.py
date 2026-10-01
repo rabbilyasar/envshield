@@ -1,51 +1,197 @@
 # envshield/core/file_updater.py
 # Contains logic for safely updating variables within configuration files.
+import errno
 import os
 import re
-from typing import List
+import stat
+from typing import List, Optional, Tuple
 
 from . import schema_types
-from .exceptions import EnvShieldException
+from .exceptions import EnvShieldException, UnsafeWriteTargetError
+
+_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_DIRECTORY = getattr(os, "O_DIRECTORY", 0)
+_NONBLOCK = getattr(os, "O_NONBLOCK", 0)
+# Every POSIX platform EnvShield supports; Windows has no dir_fd (and
+# creating a symlink there needs a privilege an ordinary user lacks).
+_HAS_DIR_FD = os.open in os.supports_dir_fd and os.mkdir in os.supports_dir_fd
 
 
-def open_new_secret_file(path: str):
+def _split_under_root(path: str, root: Optional[str]) -> Tuple[str, List[str]]:
     """
-    Opens `path` for writing, guaranteeing 0600 permissions if this call is
-    what actually creates the file on disk -- never touching the
-    permissions of a file that already exists there.
-
-    Both properties come from POSIX open()'s own semantics for O_CREAT,
-    not from any extra logic here: the `mode` argument only takes effect
-    at true creation (an existing file's permissions are left exactly as
-    they are, no matter what mode is passed), and the OS ANDs that mode
-    with the complement of the process umask before applying it -- umask
-    can only clear bits, never add them, so passing 0o600 guarantees the
-    result is never broader than 0600 regardless of how permissive the
-    umask is. A plain open(path, "w") followed by a separate os.chmod()
-    would leave a brief window where the file exists with whatever the
-    umask produced before the chmod call catches up; doing it in one
-    open() call has no such window.
-
-    Callers needing to distinguish "created a fresh file" from "reused an
-    existing one" for other reasons (e.g. a different message to print)
-    should still check os.path.exists() themselves beforehand -- this
-    function only guarantees the permission outcome, not that signal.
-
-    This function is responsible for secure permissions on a newly-created
-    file, not for project-boundary enforcement: it follows normal OS
-    symlink semantics with no containment check of its own, so a caller
-    must validate any repository-controlled path (e.g. via
-    config.manager._ensure_within_project) before passing it here.
+    (root, components of `path` relative to it), lexically -- nothing is
+    resolved, so a symlink can't redirect where the path is judged to be.
+    Raises if the path is the root itself or leaves it.
     """
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    root_abs = os.path.abspath(root or os.getcwd())
+    rel = os.path.relpath(os.path.abspath(path), root_abs)
+    if rel == os.curdir or rel == os.pardir or rel.startswith(os.pardir + os.sep):
+        raise UnsafeWriteTargetError(path, "it is outside the project directory")
+    return root_abs, rel.split(os.sep)
+
+
+def _walk_parents(
+    path: str, root: Optional[str], create: bool
+) -> Tuple[Optional[int], str, List[str]]:
+    """
+    Walks `path`'s parent directories below `root` one component at a time,
+    each opened relative to the previous one with O_NOFOLLOW|O_DIRECTORY,
+    so a symlinked (or non-directory) component anywhere below the root is
+    refused and nothing can be swapped between a check and the open.
+    Returns (fd of the final parent -- None if it doesn't exist and
+    `create` is False -- , the leaf name, the components walked).
+    """
+    root_abs, parts = _split_under_root(path, root)
+    dir_fd = os.open(root_abs, os.O_RDONLY | _DIRECTORY)
     try:
-        return os.fdopen(fd, "w")
-    except Exception:
+        for i, part in enumerate(parts[:-1]):
+            try:
+                next_fd = os.open(
+                    part, os.O_RDONLY | _DIRECTORY | _NOFOLLOW, dir_fd=dir_fd
+                )
+            except FileNotFoundError:
+                if not create:
+                    os.close(dir_fd)
+                    return None, parts[-1], parts
+                os.mkdir(part, 0o777, dir_fd=dir_fd)
+                next_fd = os.open(
+                    part, os.O_RDONLY | _DIRECTORY | _NOFOLLOW, dir_fd=dir_fd
+                )
+            except OSError as e:
+                if e.errno in (errno.ELOOP, errno.ENOTDIR):
+                    where = os.path.join(*parts[: i + 1])
+                    raise UnsafeWriteTargetError(
+                        path, f"'{where}' is a symlink or not a directory"
+                    )
+                raise
+            os.close(dir_fd)
+            dir_fd = next_fd
+    except BaseException:
+        os.close(dir_fd)
+        raise
+    return dir_fd, parts[-1], parts
+
+
+def _check_leaf(path: str, st: os.stat_result) -> None:
+    if stat.S_ISLNK(st.st_mode):
+        raise UnsafeWriteTargetError(path, "it is a symlink")
+    if stat.S_ISDIR(st.st_mode):
+        raise UnsafeWriteTargetError(path, "it is a directory")
+    if not stat.S_ISREG(st.st_mode):
+        raise UnsafeWriteTargetError(path, "it is not a regular file")
+
+
+def assert_safe_write_target(path: str, root: Optional[str] = None) -> None:
+    """
+    Raises UnsafeWriteTargetError if writing `path` would be refused by
+    open_for_write -- without creating or modifying anything. For a caller
+    that should refuse *before* collecting what it would write (e.g.
+    'setup', before prompting for secrets). open_for_write still enforces
+    the same rules at the moment it opens the file.
+    """
+    if not _HAS_DIR_FD:
+        _assert_safe_write_target_lexically(path, root)
+        return
+    dir_fd, leaf, _parts = _walk_parents(path, root, create=False)
+    if dir_fd is None:
+        return
+    try:
+        st = os.stat(leaf, dir_fd=dir_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    finally:
+        os.close(dir_fd)
+    _check_leaf(path, st)
+
+
+def _assert_safe_write_target_lexically(path: str, root: Optional[str]) -> None:
+    """Fallback without dir_fd (Windows): lstat each component. Not race-free."""
+    root_abs, parts = _split_under_root(path, root)
+    current = root_abs
+    for part in parts[:-1]:
+        current = os.path.join(current, part)
+        if os.path.islink(current):
+            raise UnsafeWriteTargetError(path, f"'{current}' is a symlink")
+    target = os.path.join(current, parts[-1])
+    if os.path.lexists(target):
+        _check_leaf(path, os.lstat(target))
+
+
+def open_for_write(
+    path: str,
+    root: Optional[str] = None,
+    append: bool = False,
+    mode: int = 0o666,
+    secret: bool = False,
+    create_parents: bool = False,
+):
+    """
+    The one way EnvShield opens a file it writes (BL-154). `path` must be
+    a regular file inside `root` (default: the project directory, the
+    current working directory) reached without any symlink: a symlinked
+    file, a symlinked parent directory at any depth below `root`, a
+    directory, or a special file raises UnsafeWriteTargetError. `root`
+    itself is trusted (the project directory, or a Git hooks directory)
+    and may be reached through a symlink.
+
+    Creates the file with `mode` (umask applies) if it doesn't exist;
+    truncates it, or with `append` appends to it, if it does -- an existing
+    file keeps its permissions, except that `secret` always leaves it 0600
+    (set on the open descriptor, never by path, so it can't follow a
+    swapped-in symlink). `create_parents` creates missing parent
+    directories under the same no-symlink rule, in place of os.makedirs
+    (which follows symlinks).
+    """
+    flags = os.O_WRONLY | os.O_CREAT | _NOFOLLOW | _NONBLOCK
+    flags |= os.O_APPEND if append else os.O_TRUNC
+    if secret:
+        mode = 0o600
+    if _HAS_DIR_FD:
+        dir_fd, leaf, _parts = _walk_parents(path, root, create=create_parents)
+        if dir_fd is None:
+            raise FileNotFoundError(errno.ENOENT, "No such directory", path)
+        try:
+            fd = os.open(leaf, flags, mode, dir_fd=dir_fd)
+        except OSError as e:
+            if e.errno == errno.ELOOP:
+                raise UnsafeWriteTargetError(path, "it is a symlink")
+            if e.errno == errno.EISDIR:
+                raise UnsafeWriteTargetError(path, "it is a directory")
+            if e.errno == errno.ENXIO:
+                raise UnsafeWriteTargetError(path, "it is not a regular file")
+            raise
+        finally:
+            os.close(dir_fd)
+    else:
+        _assert_safe_write_target_lexically(path, root)
+        if create_parents and os.path.dirname(path):
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+        fd = os.open(path, flags, mode)
+    try:
+        _check_leaf(path, os.fstat(fd))
+        if secret:
+            os.fchmod(fd, 0o600)
+        # O_NONBLOCK only mattered for refusing a FIFO at open time.
+        if _NONBLOCK and hasattr(os, "set_blocking"):
+            os.set_blocking(fd, True)
+        return os.fdopen(fd, "a" if append else "w")
+    except BaseException:
         os.close(fd)
         raise
 
 
-def update_variables_in_file(file_path: str, updates: List[dict]):
+def open_new_secret_file(path: str):
+    """
+    Opens a local secrets file for writing through open_for_write: refused
+    if it isn't a plain file inside the project reached without a symlink
+    (BL-154), created 0600 in the same open() call if it doesn't exist
+    (umask can only clear bits, so it's never broader), and left 0600 if it
+    does. Missing parent directories are created under the same rule.
+    """
+    return open_for_write(path, secret=True, create_parents=True)
+
+
+def update_variables_in_file(file_path: str, updates: List[dict], secret: bool = False):
     """
     Updates one or more variables in a given file in-place, preserving
     everything else in the file untouched.
@@ -61,7 +207,12 @@ def update_variables_in_file(file_path: str, updates: List[dict]):
     and 'setup' add newly-declared schema variables to an existing,
     hand-maintained config file (e.g. a Python module) without touching its
     other content.
+
+    The write goes through open_for_write (BL-154): an unsafe target raises
+    UnsafeWriteTargetError rather than being silently skipped like an I/O
+    error. `secret` leaves the file 0600 (a local secrets file).
     """
+    assert_safe_write_target(file_path)
     try:
         with open(file_path, "r") as f:
             lines = f.readlines()
@@ -129,7 +280,7 @@ def update_variables_in_file(file_path: str, updates: List[dict]):
             new_lines.append(_render(key, value))
 
     try:
-        with open(file_path, "w") as f:
+        with open_for_write(file_path, secret=secret) as f:
             f.writelines(new_lines)
     except IOError:
         pass

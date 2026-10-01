@@ -115,6 +115,26 @@ class UnsafePathError(EnvShieldException):
         super().__init__(self.message)
 
 
+class UnsafeWriteTargetError(UnsafePathError):
+    """
+    Raised instead of writing to a path EnvShield can't prove is a plain
+    file inside the project (BL-154): the file itself or one of its parent
+    directories is a symlink, it's a directory or other non-regular file,
+    or it's outside the project. A repository can commit any of those, so
+    writing through one could put collected values -- secrets included --
+    into an arbitrary file. The message names the path and the reason,
+    never anything that was about to be written.
+    """
+
+    def __init__(self, path: str, reason: str):
+        self.message = (
+            f"Refusing to write '{path}': {reason}. EnvShield never writes "
+            "through a symlink or outside the project -- replace it with a "
+            "regular file (or remove it) and run the command again."
+        )
+        EnvShieldException.__init__(self, self.message)
+
+
 class InvalidManifestDefinitionError(EnvShieldException):
     """
     Raised when a `manifests:` entry in envshield.yml is malformed --

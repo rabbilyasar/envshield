@@ -599,6 +599,11 @@ class TestNewLocalFilesGetRestrictivePermissions:
     common case in an existing-project onboarding.
     """
 
+    @pytest.fixture(autouse=True)
+    def _project_root(self, tmp_path, monkeypatch):
+        # Writers only write inside the project directory (BL-154).
+        monkeypatch.chdir(tmp_path)
+
     def test_dotenv_writer_creates_a_fresh_file_as_0600(self, tmp_path):
         target = tmp_path / ".env"
 

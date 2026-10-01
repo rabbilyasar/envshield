@@ -33,7 +33,7 @@ is proven.
 | 13. Documentation | Done (this file, BACKLOG Part 5c, decision records, ROADMAP "Now", README) |
 | 14. MCP | Not started (separate phase) |
 
-**Open before the next step:** BL-158 (unowned code), BL-159 (staged undeclared check).
+**BL-154** (P0, writes through repository-controlled symlinks): fixed in the working tree with regression coverage (`tests/test_write_safety.py`); must ship in the next release. **Open before the next step:** BL-158 (unowned code), BL-159 (staged undeclared check).
 
 ---
 
