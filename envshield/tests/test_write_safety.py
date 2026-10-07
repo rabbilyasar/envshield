@@ -404,7 +404,7 @@ def test_assert_safe_write_target_changes_nothing(world):
 
 
 def test_update_variables_in_file_refuses_instead_of_silently_skipping(world):
-    """Its I/O errors are swallowed on purpose; a refusal must not be."""
+    """A refusal raises, as any read or write failure now does."""
     project, outside = world
     (outside / "victim").write_text("API_KEY=old\n")
     os.symlink(outside / "victim", ".env")
@@ -512,3 +512,39 @@ def test_init_works_when_the_project_itself_is_reached_through_a_symlink(
         assert os.path.isfile(project / name), name
         assert not os.path.islink(project / name), name
     assert _snapshot(outside) == before
+
+
+# --- A failed permission change is a failed setup (BL-154 regression) -------
+
+
+def test_setup_fails_and_keeps_the_python_file_when_permissions_fail(world, mocker):
+    _write("envshield.yml", ONE_SERVICE + "    local_file: settings.py\n")
+    _write("env.schema.toml", SCHEMA)
+    _write("settings.py", "# keep me\nPORT = '8000'\n")
+    mocker.patch("envshield.core.setup_manager.Prompt.ask", return_value=SECRET)
+
+    def eperm(fd, mode):
+        raise PermissionError(1, "Operation not permitted")
+
+    mocker.patch("os.fchmod", eperm)
+
+    result = _invoke(["setup"])
+
+    assert result.exit_code != 0
+    assert "Could not write to 'settings.py'" in result.stdout
+    assert "Updated" not in result.stdout
+    assert "Configuration complete" not in result.stdout
+    with open("settings.py") as f:
+        assert f.read() == "# keep me\nPORT = '8000'\n"
+
+
+def test_hook_install_without_fchmod_writes_the_hook(world, monkeypatch):
+    monkeypatch.delattr(os, "fchmod")
+
+    result = _invoke(["hook", "install", "--yes"])
+
+    assert result.exit_code == 0, result.stdout
+    path = os.path.join(".git", "hooks", "pre-commit")
+    assert os.path.isfile(path) and not os.path.islink(path)
+    with open(path) as f:
+        assert "envshield hook run pre-commit" in f.read()

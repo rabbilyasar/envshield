@@ -210,3 +210,127 @@ class TestOpenNewSecretFileGuaranteesRestrictivePermissions:
                 f.write("SECRET_DO_NOT_LEAK\n")
 
         assert not dangling_target.exists()
+
+
+# --- Truncation waits for the permission change (BL-154 regression) ---------
+
+
+def _eperm(fd, mode):
+    raise PermissionError(1, "Operation not permitted")
+
+
+@pytest.fixture
+def opened_fds(monkeypatch):
+    """Every descriptor os.open hands out during the test."""
+    fds = []
+    real_open = os.open
+
+    def recording_open(*args, **kwargs):
+        fd = real_open(*args, **kwargs)
+        fds.append(fd)
+        return fd
+
+    monkeypatch.setattr(os, "open", recording_open)
+    return fds
+
+
+def _assert_all_closed(fds):
+    assert fds
+    for fd in fds:
+        with pytest.raises(OSError):
+            os.fstat(fd)
+
+
+class TestPermissionFailureKeepsTheExistingFile:
+    def test_secret_open_leaves_content_intact_and_closes_descriptors(
+        self, monkeypatch, opened_fds
+    ):
+        with open(".env", "w") as f:
+            f.write("API_KEY=keep-me\n")
+        monkeypatch.setattr(os, "fchmod", _eperm)
+
+        with pytest.raises(PermissionError):
+            file_updater.open_new_secret_file(".env")
+
+        with open(".env", "rb") as f:
+            assert f.read() == b"API_KEY=keep-me\n"
+        _assert_all_closed(opened_fds)
+
+    def test_update_raises_instead_of_reporting_success(self, monkeypatch):
+        with open("settings.py", "w") as f:
+            f.write("# keep me\nPORT = '8000'\n")
+        monkeypatch.setattr(os, "fchmod", _eperm)
+
+        with pytest.raises(
+            EnvShieldException, match="Could not write to 'settings.py'"
+        ):
+            file_updater.update_variables_in_file(
+                "settings.py", [{"key": "API_KEY", "value": "x"}], secret=True
+            )
+
+        with open("settings.py", "rb") as f:
+            assert f.read() == b"# keep me\nPORT = '8000'\n"
+
+
+def test_update_raises_when_the_file_cannot_be_read(monkeypatch):
+    with open("settings.py", "w") as f:
+        f.write("# keep me\nPORT = '8000'\n")
+
+    def unreadable(*args, **kwargs):
+        raise PermissionError(13, "Permission denied")
+
+    # Only file_updater's own open() (its read); nothing else is affected.
+    monkeypatch.setattr(file_updater, "open", unreadable, raising=False)
+
+    with pytest.raises(EnvShieldException, match="Could not read 'settings.py'"):
+        file_updater.update_variables_in_file(
+            "settings.py", [{"key": "API_KEY", "value": "x"}], secret=True
+        )
+
+    with open("settings.py", "rb") as f:
+        assert f.read() == b"# keep me\nPORT = '8000'\n"
+
+
+class TestWithoutFchmod:
+    """Windows before Python 3.13 has no os.fchmod (simulated here)."""
+
+    def test_secret_write_to_an_existing_file_succeeds(self, monkeypatch):
+        with open(".env", "w") as f:
+            f.write("OLD=1\n")
+        monkeypatch.delattr(os, "fchmod")
+
+        with file_updater.open_new_secret_file(".env") as f:
+            f.write("NEW=2\n")
+
+        with open(".env") as f:
+            assert f.read() == "NEW=2\n"
+
+    def test_a_new_secret_file_is_still_created_0600(self, monkeypatch):
+        monkeypatch.delattr(os, "fchmod")
+
+        with file_updater.open_new_secret_file("fresh.env") as f:
+            f.write("NEW=2\n")
+
+        assert _mode("fresh.env") == 0o600
+
+
+class TestTruncationAndAppend:
+    def test_shorter_content_fully_replaces_a_longer_file(self):
+        with open("notes.txt", "w") as f:
+            f.write("a much longer original line\n")
+
+        with file_updater.open_for_write("notes.txt") as f:
+            f.write("short\n")
+
+        with open("notes.txt") as f:
+            assert f.read() == "short\n"
+
+    def test_append_keeps_existing_content(self):
+        with open("notes.txt", "w") as f:
+            f.write("first\n")
+
+        with file_updater.open_for_write("notes.txt", append=True) as f:
+            f.write("second\n")
+
+        with open("notes.txt") as f:
+            assert f.read() == "first\nsecond\n"

@@ -1343,6 +1343,18 @@ Component: `config/manager.py::load_config` and its callers
 
 - `load_config` returns whatever `yaml.safe_load` produced; a file whose content is a YAML scalar or list (reproduced with a symlinked `envshield.yml` pointing at a plain text file) makes the next `.get(...)` raise `AttributeError: 'str' object has no attribute 'get'`, shown as a traceback-level failure instead of a `ConfigParseError`. No write happens (BL-154's test for `init` uses a dangling link for that reason). Fix: raise `ConfigParseError` when the parsed document isn't a mapping.
 
+### BL-162 — A failed permission change emptied an existing secrets file (BL-154 regression)
+
+Type: `BUG` / `DATA LOSS` · Evidence: `CONFIRMED` on Linux by simulation (a patched `os.fchmod`); not run on Windows · Priority: **P1** · Status: **fixed in the working tree, not yet committed** · Introduced by `987acdd` (BL-154), never released
+Component: `core/file_updater.py::open_for_write`, `update_variables_in_file`; `core/hooks_manager.py` hook install
+
+- **Problem:** `open_for_write` opened with `O_TRUNC`, then called `os.fchmod` for a secret file. When `fchmod` failed, the existing file was already empty. v4.7.4 wrote first and changed permissions afterwards, so it never lost content.
+- **Triggers:** `fchmod` raising (e.g. `EPERM` on a file you can write but don't own); `os.fchmod` missing, which per the Python docs is Windows before 3.13 (an `AttributeError` that also broke hook install).
+- **Worse case:** `update_variables_in_file` swallowed write errors (`except IOError: pass`, present since before BL-154), so `setup` on a Python local file exited 0 and printed "✓ Updated … Configuration complete" over an empty file.
+- **Fix:** truncate with `os.ftruncate` only after the leaf check and permission change succeed; skip `fchmod` where `os` has none (file and hooks); `update_variables_in_file` raises `EnvShieldException` on a read or write failure. No atomic replace: a failure *during* the write still leaves a partial file, as before.
+- **Tests:** `test_file_updater.py::TestPermissionFailureKeepsTheExistingFile`, `test_update_raises_when_the_file_cannot_be_read`, `TestWithoutFchmod`, `TestTruncationAndAppend`; `test_write_safety.py::test_setup_fails_and_keeps_the_python_file_when_permissions_fail`, `test_hook_install_without_fchmod_writes_the_hook`. Seven fail against `987acdd`'s code; `TestTruncationAndAppend` passes there and guards the move from `O_TRUNC` to `ftruncate`.
+- **Open:** no real Windows run yet.
+
 ### BL-155 — JS/TS discovery reported matches inside comments and strings
 
 Type: `DISCOVERY` (false positive) · Evidence: `CONFIRMED` (fixture run, 2026-09-30) · Priority: **P2** · Status: **fixed**

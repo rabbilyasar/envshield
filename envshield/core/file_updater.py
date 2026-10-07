@@ -136,14 +136,18 @@ def open_for_write(
 
     Creates the file with `mode` (umask applies) if it doesn't exist;
     truncates it, or with `append` appends to it, if it does -- an existing
-    file keeps its permissions, except that `secret` always leaves it 0600
-    (set on the open descriptor, never by path, so it can't follow a
-    swapped-in symlink). `create_parents` creates missing parent
-    directories under the same no-symlink rule, in place of os.makedirs
-    (which follows symlinks).
+    file keeps its permissions. `secret` creates a new file with mode 0600
+    and, where os.fchmod exists (not on Windows before Python 3.13), also
+    sets an existing one to 0600 (on the open descriptor, never by path, so
+    it can't follow a swapped-in symlink). Truncation happens only after
+    the checks and that permission change succeed, so a failure there
+    leaves an existing file's content as it was. `create_parents` creates
+    missing parent directories under the same no-symlink rule, in place of
+    os.makedirs (which follows symlinks).
     """
     flags = os.O_WRONLY | os.O_CREAT | _NOFOLLOW | _NONBLOCK
-    flags |= os.O_APPEND if append else os.O_TRUNC
+    if append:
+        flags |= os.O_APPEND
     if secret:
         mode = 0o600
     if _HAS_DIR_FD:
@@ -169,8 +173,12 @@ def open_for_write(
         fd = os.open(path, flags, mode)
     try:
         _check_leaf(path, os.fstat(fd))
-        if secret:
+        # os.fchmod is missing on Windows before Python 3.13, where POSIX
+        # mode bits don't exist anyway (chmod there only toggles read-only).
+        if secret and hasattr(os, "fchmod"):
             os.fchmod(fd, 0o600)
+        if not append:
+            os.ftruncate(fd, 0)
         # O_NONBLOCK only mattered for refusing a FIFO at open time.
         if _NONBLOCK and hasattr(os, "set_blocking"):
             os.set_blocking(fd, True)
@@ -185,8 +193,9 @@ def open_new_secret_file(path: str):
     Opens a local secrets file for writing through open_for_write: refused
     if it isn't a plain file inside the project reached without a symlink
     (BL-154), created 0600 in the same open() call if it doesn't exist
-    (umask can only clear bits, so it's never broader), and left 0600 if it
-    does. Missing parent directories are created under the same rule.
+    (umask can only clear bits, so it's never broader), and set to 0600 if
+    it does, where os.fchmod exists. Missing parent directories are created
+    under the same rule.
     """
     return open_for_write(path, secret=True, create_parents=True)
 
@@ -209,15 +218,16 @@ def update_variables_in_file(file_path: str, updates: List[dict], secret: bool =
     other content.
 
     The write goes through open_for_write (BL-154): an unsafe target raises
-    UnsafeWriteTargetError rather than being silently skipped like an I/O
-    error. `secret` leaves the file 0600 (a local secrets file).
+    UnsafeWriteTargetError. A file that can't be read or written raises
+    EnvShieldException, so a caller never reports an update that didn't
+    happen. `secret` leaves the file 0600 (a local secrets file).
     """
     assert_safe_write_target(file_path)
     try:
         with open(file_path, "r") as f:
             lines = f.readlines()
-    except IOError:
-        return
+    except OSError as e:
+        raise EnvShieldException(f"Could not read '{file_path}': {e}")
 
     is_python = file_path.endswith(".py")
 
@@ -282,5 +292,5 @@ def update_variables_in_file(file_path: str, updates: List[dict], secret: bool =
     try:
         with open_for_write(file_path, secret=secret) as f:
             f.writelines(new_lines)
-    except IOError:
-        pass
+    except OSError as e:
+        raise EnvShieldException(f"Could not write to '{file_path}': {e}")

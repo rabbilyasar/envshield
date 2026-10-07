@@ -184,11 +184,15 @@ def install_pre_commit_hook(force: bool = False, non_interactive: bool = False):
         # worktree, the hook file itself is repository content.
         with file_updater.open_for_write(pre_commit_path, root=hooks_dir) as f:
             f.write(hook_script_content)
-            current_permissions = os.fstat(f.fileno()).st_mode
-            os.fchmod(
-                f.fileno(),
-                current_permissions | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH,
-            )
+            # No os.fchmod on Windows before Python 3.13. There the
+            # path-based chmod this replaced only toggled read-only, so the
+            # executable bit was never set either.
+            if hasattr(os, "fchmod"):
+                current_permissions = os.fstat(f.fileno()).st_mode
+                os.fchmod(
+                    f.fileno(),
+                    current_permissions | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH,
+                )
 
         console.print(
             "[bold green]✓ Git pre-commit hook installed successfully![/bold green]"
@@ -257,11 +261,15 @@ def install_post_merge_hook(force: bool = False, non_interactive: bool = False):
         # worktree, the hook file itself is repository content.
         with file_updater.open_for_write(post_merge_path, root=hooks_dir) as f:
             f.write(hook_script_content)
-            current_permissions = os.fstat(f.fileno()).st_mode
-            os.fchmod(
-                f.fileno(),
-                current_permissions | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH,
-            )
+            # No os.fchmod on Windows before Python 3.13. There the
+            # path-based chmod this replaced only toggled read-only, so the
+            # executable bit was never set either.
+            if hasattr(os, "fchmod"):
+                current_permissions = os.fstat(f.fileno()).st_mode
+                os.fchmod(
+                    f.fileno(),
+                    current_permissions | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH,
+                )
 
         console.print(
             "[bold green]✓ Git post-merge hook installed successfully![/bold green]"
