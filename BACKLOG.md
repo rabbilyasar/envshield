@@ -48,8 +48,8 @@ All are live-reproduced, not inferred.
 **2026-10-01: `BL-154`** (Part 5c) — EnvShield wrote through
 repository-controlled symlinks to files outside the project (`setup`,
 `schema sync`, `generate`, `import`, `init`, `service add`, hook install).
-**Fixed in the working tree with regression coverage; not yet committed.**
-The released `v4.7.4` is affected: the next release must include the fix.
+**Fixed with regression coverage; committed as `987acdd`, unreleased.**
+The released `v4.7.4` is affected: the next release (v4.8.0) must include the fix, together with `BL-162`.
 
 **Status as of 2026-08-30: every item in this Part is fixed AND released in
 `v4.6.1`.** `BL-001`–`BL-004` (commits `63d6581`, `77be1e5`, `f478f9f`,
@@ -1323,7 +1323,7 @@ Component: `core/setup_manager.py` (`run_setup`)
 
 ### BL-154 — EnvShield wrote through repository-controlled symlinks, to paths outside the project
 
-Type: `SECURITY` · Evidence: `CONFIRMED` (live reproduction, 2026-10-01) · Priority: **P0** (untrusted repository contents → a secret-bearing write outside the trust boundary; §4 invariant 3) · Status: **fixed 2026-10-01 in the working tree, regression-tested — not yet committed or released**
+Type: `SECURITY` · Evidence: `CONFIRMED` (live reproduction, 2026-10-01) · Priority: **P0** (untrusted repository contents → a secret-bearing write outside the trust boundary; §4 invariant 3) · Status: **fixed 2026-10-01, regression-tested; committed as `987acdd`, unreleased — ships in v4.8.0 together with `BL-162`** (issue [#7](https://github.com/rabbilyasar/envshield/issues/7))
 Component: `core/file_updater.py` (`open_for_write`, `assert_safe_write_target`) and every writer
 Source: evaluator migration, while adapting `setup` (reported unverified by the 2026-09-30 audit, reproduced here).
 
@@ -1334,7 +1334,7 @@ Source: evaluator migration, while adapting `setup` (reported unverified by the 
 - **Regression coverage:** `tests/test_write_safety.py` (34 tests): each writer through the real CLI against a symlink to an outside file, with a planted secret and a byte-for-byte snapshot of the outside directory; in-project symlinks (dotenv and Python local file, `setup` and `sync`); symlinked parents inside and outside; directory and FIFO targets; an explicit output path outside the project; and normal create/overwrite/patch paths (content, comments, `0600`, executable hooks). Run against the pre-fix write behavior (the primitive swapped for plain `open`/`makedirs`, in an isolated copy with its own venv): 17 security cases fail and the FIFO case hangs; 5 pass there because `_ensure_within_project` already refuses an *overridden* path resolving outside (two layers now). **Parent-symlink cases added 2026-10-01 (follow-up):** `generate` and `import --output` with an output under a symlinked directory, pointing both outside and inside the project, are refused; the same commands still write through a regular parent directory. All four refusal cases fail against the pre-fix write behavior. `init` writes only files directly in the project root (`env.schema.toml`, `envshield.yml`, `.gitignore`, `.env.example`), so no directory below the root can be a symlink; its test instead pins that the root is trusted: `init` run through a symlinked path to the project works and writes only into the real directory. No implementation change was needed. Three tests in `test_file_updater.py` that documented the old contract ("a symlink … is followed, not rejected", a dangling symlink "materializes a new file at its target", existing permissions untouched) were rewritten to assert refusal and an unchanged target.
 - **Behavior changes:** an explicit output path outside the project (`generate /elsewhere/config.py`, `setup ../x/.env`, `import --output /elsewhere/…`) is now refused; a project that keeps `.env` (or any written file) as a deliberate symlink must replace it with a regular file. `open_new_secret_file` now leaves an existing file `0600` (every caller already did this right after).
 - **Residual risk:** on a platform without `dir_fd` (Windows) the fallback checks each component with `lstat` before a plain open: correct against committed symlinks, not race-free. Hard links aren't detected (Git can't commit one, so repository contents can't plant one). Reads still follow symlinks (a symlinked `envshield.yml` is read; see BL-161); a read never outputs values, so that's a robustness issue, not this vulnerability.
-- **Decision:** **resolved in code** — the blocker is cleared once this is committed; until then the released `v4.7.4` remains affected.
+- **Decision:** **resolved in code and committed (`987acdd`)** — the blocker clears when it is released. It must not ship without `BL-162` (its regression, fixed in `e31c8f5`); both ship together in v4.8.0. Until then the released `v4.7.4` remains affected.
 
 ### BL-161 — A non-mapping `envshield.yml` crashes commands with an uncaught `AttributeError`
 
@@ -1345,14 +1345,15 @@ Component: `config/manager.py::load_config` and its callers
 
 ### BL-162 — A failed permission change emptied an existing secrets file (BL-154 regression)
 
-Type: `BUG` / `DATA LOSS` · Evidence: `CONFIRMED` on Linux by simulation (a patched `os.fchmod`); not run on Windows · Priority: **P1** · Status: **fixed in the working tree, not yet committed** · Introduced by `987acdd` (BL-154), never released
+Type: `BUG` / `DATA LOSS` · Evidence: `CONFIRMED` on Linux by simulation (a patched `os.fchmod`); not run on Windows · Priority: **P1** · Status: **fixed; committed as `e31c8f5`, unreleased — ships in v4.8.0 together with `BL-154`** (issue [#7](https://github.com/rabbilyasar/envshield/issues/7)) · Introduced by `987acdd` (BL-154), never released
 Component: `core/file_updater.py::open_for_write`, `update_variables_in_file`; `core/hooks_manager.py` hook install
 
 - **Problem:** `open_for_write` opened with `O_TRUNC`, then called `os.fchmod` for a secret file. When `fchmod` failed, the existing file was already empty. v4.7.4 wrote first and changed permissions afterwards, so it never lost content.
 - **Triggers:** `fchmod` raising (e.g. `EPERM` on a file you can write but don't own); `os.fchmod` missing, which per the Python docs is Windows before 3.13 (an `AttributeError` that also broke hook install).
 - **Worse case:** `update_variables_in_file` swallowed write errors (`except IOError: pass`, present since before BL-154), so `setup` on a Python local file exited 0 and printed "✓ Updated … Configuration complete" over an empty file.
 - **Fix:** truncate with `os.ftruncate` only after the leaf check and permission change succeed; skip `fchmod` where `os` has none (file and hooks); `update_variables_in_file` raises `EnvShieldException` on a read or write failure. No atomic replace: a failure *during* the write still leaves a partial file, as before.
-- **Tests:** `test_file_updater.py::TestPermissionFailureKeepsTheExistingFile`, `test_update_raises_when_the_file_cannot_be_read`, `TestWithoutFchmod`, `TestTruncationAndAppend`; `test_write_safety.py::test_setup_fails_and_keeps_the_python_file_when_permissions_fail`, `test_hook_install_without_fchmod_writes_the_hook`. Seven fail against `987acdd`'s code; `TestTruncationAndAppend` passes there and guards the move from `O_TRUNC` to `ftruncate`.
+- **Tests:** `test_file_updater.py::TestPermissionFailureKeepsTheExistingFile`, `test_update_raises_when_the_file_cannot_be_read`, `TestWithoutFchmod`, `TestTruncationAndAppend`; `test_write_safety.py::test_setup_fails_and_keeps_the_python_file_when_permissions_fail`, `test_hook_install_without_fchmod_writes_the_hook`. Seven fail against `987acdd`'s code; `TestTruncationAndAppend` (2 tests) passes there and guards the move from `O_TRUNC` to `ftruncate`.
+- **Verification (2026-10-09, issue #7):** the 9 tests above, run with `987acdd`'s `file_updater.py` and `hooks_manager.py` substituted into a copy of `HEAD` (`e0f9d2d`'s tree): **7 failed, the 2 `TestTruncationAndAppend` tests passed** (the whole two files: 7 failed, 48 passed). Failures: the two `TestPermissionFailureKeepsTheExistingFile` tests (file read back as `b''`, not `b'API_KEY=keep-me\n'`), `test_update_raises_when_the_file_cannot_be_read`, both `TestWithoutFchmod` tests and the two `test_write_safety.py` tests (`AttributeError: module 'os' has no attribute 'fchmod'`). At `HEAD` all 55 tests in the two files pass. The plan's "six" was wrong; seven is the observed number. No defect found in the fix on review.
 - **Open:** no real Windows run yet.
 
 ### BL-155 — JS/TS discovery reported matches inside comments and strings
