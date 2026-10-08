@@ -243,9 +243,49 @@ erode.
 ## Engineering Task Workflow
 
 Every engineering task — bug fix, feature, refactor, or architectural
-change — follows this loop. Most steps are already governed in full by the
-section named; this is the index that makes the sequence itself mandatory,
-not a restatement of rules that live elsewhere.
+change — runs under the delivery loop below, and its engineering steps
+follow the loop after it. This is the index that makes the sequence itself
+mandatory, not a restatement of rules that live elsewhere.
+
+### Delivery loop
+
+Work is delivered through GitHub Issues, in this order:
+
+1. create the issue
+2. create a dedicated branch
+3. implement only the approved scope
+4. add or update tests
+5. run verification
+6. commit
+7. open a PR
+8. review
+9. merge only with explicit authorization
+10. close the issue
+
+**GitHub Issues are the execution tracker. BACKLOG.md remains the record of
+findings and their evidence.**
+
+**What an approved issue authorizes:** creating its dedicated branch,
+implementing its scope, committing on that branch, pushing that branch, and
+opening a PR. It authorizes nothing beyond that.
+
+**What still needs explicit authorization each time:** merging, version
+bumps (`bump2version`), tags, pushing tags, and publishing a release.
+Approval of an issue, or of an earlier merge or release, does not carry over.
+
+**Return to planning.** If implementation shows the approved architecture
+is insufficient, stop work on the issue and return the question to planning.
+Do not redesign it inside the issue or silently expand the issue's scope.
+
+**Findings.** A finding discovered during an issue goes into BACKLOG.md. If
+it needs work, it becomes a *proposed* issue for review; it does not expand
+the current issue. A BL entry that has an issue links to it, and the issue
+links back to the BL entry.
+
+### Engineering steps
+
+The loop below governs the engineering inside delivery steps 3-6. Each step
+is already governed in full by the section named.
 
 1. **Read.** Before changing anything: read the relevant BACKLOG.md
    item(s), the relevant ROADMAP.md phase/direction, the applicable rules
@@ -281,8 +321,8 @@ not a restatement of rules that live elsewhere.
    unless it was run, never claim a bug is fixed without regression
    coverage where practical, never claim the working tree is clean without
    checking it.
-9. **Commit boundary.** Per §22 — do not commit automatically; wait for
-   explicit instruction.
+9. **Commit.** Per §22 — commit on the issue's dedicated branch, then
+   continue with delivery steps 7-10. Merging is never part of this step.
 
 For feature work, also run §20's Pass 2 (Product Review) — user value,
 competitive overlap, differentiation, adoption friction — and apply §14's
@@ -290,8 +330,9 @@ rule against building a feature merely because a competitor has it.
 
 **Scope discipline.** This loop does not mean "fix every problem
 discovered." It means: discover → classify → record → decide separately. A
-newly discovered issue normally becomes a BACKLOG.md item, not a silent
-expansion of the current change.
+newly discovered problem normally becomes a BACKLOG.md item (and, if it
+needs work, a proposed issue — see the delivery loop's Findings rule), not a
+silent expansion of the current change.
 
 ---
 
@@ -1047,17 +1088,21 @@ Commit messages should follow the repository's existing conventional style.
 
 ### Normal development commits
 
-Codex may create commits when explicitly instructed to do so. Codex must
-NOT automatically commit every change. The normal workflow is:
+Commits follow the delivery loop (see "Engineering Task Workflow"). An
+approved issue authorizes Codex to create its dedicated branch, commit on
+that branch, push that branch, and open a PR. Codex must NOT commit to
+`main`, and must NOT merge, bump versions, tag, push tags, or publish
+without explicit authorization (§23).
 
 ```
-implementation → tests → self-review → finding reconciliation
-  → documentation consistency → user review
-  → explicit instruction to commit → commit
+approved issue → dedicated branch → implementation → tests → verification
+  → self-review → finding reconciliation → documentation consistency
+  → commit → push branch → PR → review
+  → merge (explicit authorization only) → close issue
 ```
 
-Do not create commits merely because a task is complete unless the user
-explicitly asks for the commit. Never include unrelated changes in a commit.
+Work with no approved issue still requires an explicit instruction to
+commit. Never include unrelated changes in a commit.
 
 Before committing:
 
