@@ -1,12 +1,14 @@
 # EnvShield Roadmap
 
-EnvShield is built around one idea: environment variables should be a
-version-controlled configuration contract, not a folder of `.env` files and
-tribal knowledge. `env.schema.toml` is that contract — everything else
-follows from it.
+EnvShield makes sure every service and every deploy gets the configuration
+it needs, and tells you before something breaks. It does that from one
+committed contract, `env.schema.toml`, checked against your code, your local
+files and your deployment manifests. Development and deployment are where it
+leads; onboarding works with the secret tool your team already uses.
 
 This page describes direction, not a schedule. Items under **Now** are
-shipped and in real use today. Items under **Next** are directions we
+shipped and in real use today. **v5** is the release in progress, in the
+order it is being built. Items under **After v5** are directions we
 intend to pursue, but not on committed dates — sequencing can shift based
 on what we learn from real usage. Items under **Exploring** depend on
 actual user demand showing up before we'd build them at all. For the exact
@@ -33,6 +35,8 @@ What you can already do with EnvShield:
 - **Discover configuration usage in source code** (`undeclared`) — catch a
   variable your code just started reading that the contract doesn't know
   about yet. Python is AST-based; JavaScript/TypeScript is pattern-based.
+  `undeclared --sarif` annotates each finding on its file and line in GitHub
+  Code Scanning or any other SARIF consumer.
 - **Review how the contract itself changes** (`schema diff`) — compare two
   git revisions and classify what changed (breaking, security-sensitive,
   informational), so a configuration change is reviewable like any other
@@ -43,19 +47,101 @@ What you can already do with EnvShield:
 - **Catch a hardcoded secret before it's committed** (`scan`, git hooks) —
   a supporting safety check alongside the contract, not the product's main
   job.
-- **Run this across a monorepo** — one schema per service, shared
-  variables composed via `extends`, every command service-aware.
+- **Run this across a monorepo** — one schema shared by several services,
+  with each variable scoped to the services that use it (`services = [...]`),
+  or one schema per service composed via `extends`. Every command is
+  service-aware, and registered Compose files map each container to its
+  service.
 
 ---
 
-## Next
+## v5 — in progress
 
-Directions we intend to pursue after the current release, roughly in this
-order. The immediate sequence is **v4.8.0 first, then v5**: v4.8.0 makes
-`check` stop reporting confidence it does not have (empty values, values
-EnvShield cannot see, a `requiredIf` trigger it cannot resolve) and ships the
-write-safety fixes (`BL-154`, `BL-162`); v5 follows with the changes that
-alter what the gate itself decides. The items below come after both.
+v5 makes EnvShield trustworthy on real projects and gives it one clear job:
+**every service and every deploy gets the configuration it needs, and you
+find out before something breaks.** It was shaped by running v4.8.0 on nine
+real repositories (2026-10-14), which showed both what works (real drift
+caught in production code) and what doesn't yet (first-run setup, CI output,
+multi-container deployments, per-environment requirements).
+
+The steps below are built in this order and merged as they finish; v5.0.0
+is released once, at the end. Each step links to its tracking issue.
+
+1. **Secret-safety fix first** — no command ever prints a line of your
+   source code because Python warned while parsing it. Today a warning can
+   echo a hardcoded secret past `scan`'s redaction.
+   ([#47](https://github.com/rabbilyasar/envshield/issues/47))
+2. **Decisions and public story** — the v5 decisions recorded in the
+   repository; README, website and docs rewritten to describe what v4.8.0
+   actually does, led by the story above, with a recorded demo.
+   ([#14](https://github.com/rabbilyasar/envshield/issues/14),
+   [#43](https://github.com/rabbilyasar/envshield/issues/43))
+3. **Honest verdicts** — `check` reports one of five verdicts per variable
+   and never calls a value valid unless it actually read and validated it.
+   Values EnvShield can't see (a Kubernetes Secret, a Compose `${VAR}`)
+   fail the gate unless you accept that specific reason explicitly with
+   `--accept-unverified`.
+   ([#15](https://github.com/rabbilyasar/envshield/issues/15),
+   [#16](https://github.com/rabbilyasar/envshield/issues/16),
+   [#17](https://github.com/rabbilyasar/envshield/issues/17))
+4. **Environments** — a variable can be optional on a laptop and required
+   in production (`requiredIn`, `--env`), and `schema diff`, `explain` and
+   `generate` show which environment a requirement applies to.
+   ([#23](https://github.com/rabbilyasar/envshield/issues/23),
+   [#24](https://github.com/rabbilyasar/envshield/issues/24))
+5. **Deploy-time check** — `check --runtime --env production` checks the
+   environment it runs in, so a deploy missing a required variable fails at
+   that step instead of at startup.
+   ([#25](https://github.com/rabbilyasar/envshield/issues/25))
+6. **One project contract** — one schema for the whole project by default,
+   which `init` and the service commands add to. `init` builds the first
+   contract from what the code actually reads, the manifests that deploy
+   it and the services it finds, and never invents a requirement.
+   ([#18](https://github.com/rabbilyasar/envshield/issues/18),
+   [#19](https://github.com/rabbilyasar/envshield/issues/19),
+   [#44](https://github.com/rabbilyasar/envshield/issues/44))
+7. **A smaller, consistent CLI** — commands grouped by stage, overlapping
+   ones deprecated (they keep working through v5); the same answer in a
+   terminal and in CI; output that stays readable in CI logs; the
+   pull request that adopts EnvShield doesn't fail its own check.
+   ([#42](https://github.com/rabbilyasar/envshield/issues/42),
+   [#45](https://github.com/rabbilyasar/envshield/issues/45))
+8. **Onboarding that works with your vault** — `setup` reports exactly what
+   is ready, what needs access and what you must set yourself, never hangs
+   without a terminal, and never overwrites a value without asking. Secret
+   provider support (1Password first) is being redesigned to work with what
+   providers already offer rather than copying secret values to disk.
+   ([#20](https://github.com/rabbilyasar/envshield/issues/20),
+   [#21](https://github.com/rabbilyasar/envshield/issues/21),
+   [#22](https://github.com/rabbilyasar/envshield/issues/22))
+9. **Moving existing projects** — `schema merge` turns several schemas into
+   one project contract and refuses any merge that would change a result.
+   ([#26](https://github.com/rabbilyasar/envshield/issues/26))
+10. **Verify and release** — an end-to-end lifecycle suite, a re-run of the
+    real-repository trial, a GitHub Action and pre-commit hooks for one-line
+    CI adoption, v5 documentation with a migration guide, a beta with teams
+    outside the project, then v5.0.0.
+    ([#27](https://github.com/rabbilyasar/envshield/issues/27),
+    [#46](https://github.com/rabbilyasar/envshield/issues/46),
+    [#28](https://github.com/rabbilyasar/envshield/issues/28),
+    [#29](https://github.com/rabbilyasar/envshield/issues/29))
+
+**For AI coding agents:** v5 positions EnvShield as the deterministic
+configuration check in an agent's loop — hooks and `--json` output an agent
+can act on when it adds code that needs configuration. No MCP server is
+planned for v5.
+
+**Compatibility:** v5.0.0 is a major release. Verdicts, the gate, `setup`
+behavior and the JSON report change; exit codes (0/1/2) don't. Existing
+layouts (one schema per service, `extends`) keep working, and v5.0.0 ships
+with a migration guide.
+
+---
+
+## After v5
+
+Directions we intend to pursue after v5.0.0, roughly in this order. None
+of them is scheduled.
 
 1. **Configuration Graph & Impact Analysis** — connect the schema to where
    variables are actually used in source, which services depend on them,
@@ -63,46 +149,31 @@ alter what the gate itself decides. The items below come after both.
 2. **Deployment Integrity** — continue closing gaps in how EnvShield
    validates real deployment manifests (Docker Compose, Kubernetes) as
    they're found.
-3. **CI / PR Integration** — surface a configuration-contract change or a
-   newly undeclared variable directly on a pull request, not just from the
-   CLI. First slice implemented (`BL-131`): `undeclared --sarif` — a SARIF
-   2.1.0 log, for GitHub Code Scanning or another SARIF-consuming CI tool,
-   annotating a missing declaration on its exact file and line. Deliberately
-   narrow: `schema diff`'s findings describe the contract, not a source
-   location, so they stay on `--json`/exit-code (already documented in
-   README's "Git / CI workflow"); no GitHub API integration, hosted
-   dashboard, PR bot, or reusable Action exists yet.
-4. **AI-Agent Configuration Safety** — let a coding agent inspect, validate,
-   and reason about a project's configuration contract without ever
-   exposing a secret value to it.
-5. **Product-Market Validation** — before building further, learn from real
-   adoption: does the configuration-contract idea land, which capability
-   creates the strongest "this is useful" moment, and what do real users
-   actually ask for next.
-
-None of the above exist today, except item 3's first slice noted above
-(fixed and tested in the working tree, not yet committed or released).
-This is the order we currently expect to work through them, not a release
-schedule.
+3. **CI / PR Integration beyond v5** — v4.7.2 shipped `undeclared --sarif`
+   and v5 adds a GitHub Action and pre-commit hooks. A PR bot, hosted
+   dashboard or GitHub API integration would come only from real demand.
+4. **AI-agent interfaces** — a direct interface for agents (for example
+   MCP), once the questions about what an agent may safely ask are
+   answered.
+5. **Product-Market Validation** — continue learning from real adoption:
+   which capability creates the strongest "this is useful" moment, and what
+   real users ask for next.
 
 ---
 
 ## Exploring
 
 Ideas we're open to, but won't build until real usage demonstrates the
-need. None of these exist in any form today, and none are committed:
+need. None of these exist in any form today, and none are committed
+(except where an item says it moved into v5):
 
-- **References to external secret providers** — a schema field that
-  describes *where* a secret is expected to come from (a provider like
-  1Password, HashiCorp Vault, AWS Secrets Manager, or a platform-native
-  Kubernetes Secret), without EnvShield ever storing, retrieving, or
-  transmitting the value itself. The boundary here is permanent, not just
-  a current limitation: **EnvShield owns the contract describing the
-  secret; the external provider owns the secret value.** This will never
-  turn EnvShield into a place secret values pass through.
-- **A more direct interface for AI agents** (e.g. MCP) to query the
-  configuration contract, once the underlying agent-safety work above is
-  real.
+- **External secret providers** — moved out of Exploring into v5 (step 8),
+  where provider support is being redesigned to work with what providers
+  such as 1Password already offer. The boundary is permanent: **EnvShield
+  owns the contract describing a secret; the provider owns the value.**
+  EnvShield never stores, caches, logs or prints a secret value, and never
+  sends one anywhere but the developer's own machine. Vault, AWS Secrets
+  Manager and platform-native Kubernetes Secrets remain exploratory.
 - **Deployment targets beyond Docker Compose and Kubernetes** — nothing
   specific is planned; we'd add one when real usage asks for it, held to
   the same accuracy bar as the two we already support.
@@ -174,4 +245,4 @@ Have a use case that doesn't fit anywhere above, or a direction you'd like
 to see prioritized differently? Open a
 [discussion](https://github.com/rabbilyasar/envshield/discussions) or an
 [issue](https://github.com/rabbilyasar/envshield/issues) — real usage is
-exactly what moves an item from Exploring to Next.
+exactly what moves an item from Exploring to After v5.
