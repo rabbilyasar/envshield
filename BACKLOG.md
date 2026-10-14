@@ -373,6 +373,8 @@ Type: `DEPLOYMENT` · Evidence: `CONFIRMED` (all five sub-cases live-reproduced)
 Source(s): 2026-08-21 audit; every sub-case independently live-reproduced this pass.
 Component: `parsers/_docker_compose.py`, `parsers/_kubernetes.py`
 
+Related (2026-10-14): `BL-163` (F1), `BL-166` (F4) and `BL-169` (F7) are about what the report and gate *claim* for values these parsers can't or don't inspect, not parser accuracy; this entry's five sub-cases are all fixed.
+
 Grouped as one backlog item per the instruction to avoid five near-duplicate entries — kept as distinct, independently-closeable sub-items underneath, since each has its own fix location and its own regression test.
 
 1. **Compose `${VAR-default}` (no colon) is not resolved to the default.** Live-reproduced precisely: `${VAR:-default2}` correctly resolves and validates as `"default2"`; `${VAR-default1}` does not match `_INTERPOLATION_RE` (`^\$\{([A-Za-z_][A-Za-z0-9_]*)(:-(.*))?\}$`) at all and falls through to the raw, un-interpolated literal text, which then gets flagged `invalid` against a schema pattern the real default would have passed. **Worse than "unsupported": produces an actively misleading validation error on syntactically valid Compose**, not a clean "unrecognized syntax" signal.
@@ -392,6 +394,7 @@ Grouped as one backlog item per the instruction to avoid five near-duplicate ent
 
 ### BL-094 — Generated TypeScript `int`/`float`/`port` coercion diverges from EnvShield's own validator
 Type: `GENERATION` · Evidence: `CONFIRMED` · Priority: P2
+Related: the `""` → `0` sub-case below is tracked separately as `BL-170` (F8, fixed in v4.8.0 by [#12](https://github.com/rabbilyasar/envshield/issues/12)); hex, whitespace and exponent remain open here.
 Source(s): Discovered this pass while investigating `BL-003`, checking whether boolean coercion was an isolated bug or a broader failure class.
 Component: `generator.py::_zod_base_type` (TypeScript `int`/`float`/`port` field rendering — `z.coerce.number()` / `z.coerce.number().min(1).max(65535)`)
 
@@ -464,7 +467,7 @@ Component: `config/manager.py`
 - **Fix (2026-09-01):** `add_service` now reads any existing entry for `name` first and merges into it — `entry: Dict[str, Any] = dict(existing) if isinstance(existing, dict) else {}`, then each explicitly-given field overwrites its key, and any field left unset (`None`) keeps whatever the entry already had — matching `add_manifest`'s existing additive pattern exactly. Docstring corrected from "Adds (or overwrites)" to "Adds (or updates) ... A second call for the same name merges into the existing entry." `service discover`'s call site is unaffected by design: `discover_candidates` only ever returns directories not already in `known_dirs` (computed from `get_services()`), so it never re-registers an existing name and this fix changes nothing about its behavior.
 - **Tests:** `test_config_manager.py::test_add_service_merges_into_an_existing_entry_for_the_same_name` — two calls, disjoint field sets, asserts the final entry is the union with the second call's values winning on overlap. The pre-existing `test_add_service_overwrites_a_service_registered_under_the_same_name` (same field given both calls, second value wins) still passes unmodified — the merge fix doesn't change same-field-overwrite semantics, only what happens to fields *not* repeated.
 - **Verification:** Full suite 1044/1044 passed (was 1043; +1 new test), `ruff check .` clean.
-- **Decision:** **Fixed 2026-09-01, committed (`c5b6247`) — not yet released.** Reconciled 2026-09-03: previously said "not yet committed," stale since that commit landed.
+- **Decision:** **Fixed 2026-09-01; committed as `a849d2a`; released in `v4.7.0` (2026-09-03).** Reconciled 2026-10-14 (R0-3, [#8](https://github.com/rabbilyasar/envshield/issues/8)): this entry cited `c5b6247`, a pre-rebase SHA that is not in `main`'s history, and said "not yet released." `git describe --contains a849d2a` gives `v4.7.0~12`; CHANGELOG's `[4.7.0]` section lists the fix. (Earlier reconciliation, 2026-09-03: it previously said "not yet committed.")
 
 ### BL-024 (aka G-5) — No batch "reverse undeclared" / stale-schema-variable command
 Type: `FEATURE` · Evidence: `CONFIRMED` (absence) · Priority: P3
@@ -1046,7 +1049,7 @@ Component: `parsers/_docker_compose.py`, `parsers/_deployment.py` (new `safe_yam
 - **Dependencies/relationships:** Found via `BL-031`; `BL-093` (Kubernetes parser has no error handling around its own YAML parse at all) must reuse this same helper when it's eventually fixed, or it will introduce this identical leak the moment a `try`/`except` is added there — noted explicitly in `BL-093`'s own entry.
 - **Tests:** `test_docker_compose_parser.py::test_yaml_parse_error_never_echoes_the_offending_lines_content` — same secret-shaped fixture, asserts `"AKIA"`/`"SECRET"` are absent from the raised message while `"line"`/`"column"` are still present (message quality preserved). The pre-existing `test_parser_raises_clean_error_for_multi_document_yaml` (matches only on `"multiple YAML documents"`) is unaffected and still passes unmodified.
 - **Verification:** Full suite 1045/1045 passed (was 1044; +1 new test), `ruff check .` clean. Live-reproduced both before (leak present) and after (leak absent) the fix, not assumed from the diff alone.
-- **Decision:** **Fixed 2026-09-01, committed (`fbf9d1d`) — not yet released.** Given this charter's explicit "Any bug that can expose a secret is P0" rule, this is a release blocker once a release is next proposed (Part 0-equivalent severity), even though it was discovered and fixed outside of a release-prep pass. Reconciled 2026-09-03: previously said "not yet committed," stale since that commit landed — this fix is already committed and should be included in the next release.
+- **Decision:** **Fixed 2026-09-01; committed as `4b6bd64`; released in `v4.7.0` (2026-09-03).** Given this charter's explicit "Any bug that can expose a secret is P0" rule, this was a release blocker for the next release, which `v4.7.0` was. Reconciled 2026-10-14 (R0-3, [#8](https://github.com/rabbilyasar/envshield/issues/8)): this entry cited `fbf9d1d`, a pre-rebase SHA that is not in `main`'s history, and said "not yet released." `git describe --contains 4b6bd64` gives `v4.7.0~10`; CHANGELOG's `[4.7.0]` section lists the fix. (Earlier reconciliation, 2026-09-03: it previously said "not yet committed.")
 
 ### BL-032 (aka AD-1) — Satisfaction Modes rejected
 Type: `ARCHITECTURE` (decision record) · Evidence: `STRATEGIC`
@@ -1277,7 +1280,7 @@ Component: `core/service_manager.py` (`_infer_from_invocation_dir` and its calle
 
 ## Part 5c — Evaluator migration
 
-Decisions: [docs/architecture/evaluator-decisions.md](docs/architecture/evaluator-decisions.md). Phase status: [progress.md](progress.md). Found and, unless marked open, fixed in the working tree on 2026-10-01 (not yet committed).
+Decisions: [docs/architecture/evaluator-decisions.md](docs/architecture/evaluator-decisions.md). Phase status: [progress.md](progress.md). Found and, unless marked open, fixed on 2026-10-01. The evaluator migration is committed as `bcf2133`, `BL-154` as `987acdd` and `BL-162` as `e31c8f5`; none of it is released (latest tag `v4.7.4`). Reconciled 2026-10-14 (R0-3, [#8](https://github.com/rabbilyasar/envshield/issues/8)): this header said "in the working tree ... not yet committed."
 
 ### BL-149 — `defaultValue` meant two different things: `explain` and `schema diff` called a defaulted variable optional
 
@@ -1402,6 +1405,129 @@ Type: `SECURITY` (hardening) · Evidence: `CONFIRMED` (code reading) · Priority
 Component: `cli.py` (`_render_explain_report`)
 
 - `setup` and `schema sync` render a condition through `schema_types.requiredif_condition_text`, which withholds the literal when the trigger is `secret`. `explain`'s Rich output prints `when VAR == "<equals>"` directly. The literal is schema-authored, not a value from a file, but the same reasoning `requiredif_condition_text` documents applies. Fix: use `requiredif_condition_text`.
+
+---
+
+## Part 5d — v5 planning audit: false-confidence findings (F1–F8)
+
+Source: the EnvShield v5 planning audit, 2026-10-07, which found eight places where `check` reports confidence it does not have. Recorded 2026-10-14 by R0-3 ([#8](https://github.com/rabbilyasar/envshield/issues/8)). Each entry carries the audit's `F`-id as an alias, was re-reproduced against `HEAD` (`fe4ff32`) with `envshield check --json` in a scratch project (nothing here is copied from the audit's wording), and links its fixing issue(s). Fix sequencing is a plan decision: v4.8.0 fixes the report (and, for F3, F5, F6, F8, the behavior); for F1, F2, F4 and F7 the **gate** (exit code / `success`) is deliberately left as is in v4.8.0 and is fixed in v5 ([#16](https://github.com/rabbilyasar/envshield/issues/16), [#17](https://github.com/rabbilyasar/envshield/issues/17)).
+
+**Severity reasoning (charter §19's release philosophy).** P1 = a silent false-clean on invalid or missing required configuration (question 3) or a generated loader that silently changes a value. A value EnvShield *cannot see* (an external Secret, a shell variable) is not "genuinely invalid", so the gate half of F1/F2 is P2; the *report* saying `valid: true` for it is a false statement and stays P1 until #10 lands. F4's gate half is P1: the value is written in the manifest and EnvShield doesn't look at it.
+
+**Release gate.** F4's gate half is an open P1. Shipping v4.8.0 with it open needs the user's explicit override at R0-8 ([#13](https://github.com/rabbilyasar/envshield/issues/13)), per CLAUDE.md "Release blockers". F1/F2/F7's gate halves are P2 and need no override; their report halves close in v4.8.0.
+
+### BL-163 — A reference to a value outside the file is reported `ok, present, valid: true` (F1)
+
+Type: `ROBUSTNESS` / `REPORT HONESTY` · Evidence: `CONFIRMED` (live, 2026-10-14) · Priority: **P1** until [#10](https://github.com/rabbilyasar/envshield/issues/10) lands (the report claims `valid: true` for a value never seen); **P2** afterwards (the gate half, deliberate, v5) · Status: **open**
+Component: `parsers/_base.py` (`UNRESOLVED_VALUE`), `parsers/_kubernetes.py`, `parsers/_docker_compose.py`, `core/schema_manager.py::diff_against_schema`, `core/evaluator.py` (variable entry, `valid`)
+Source: v5 planning audit, 2026-10-07 — alias **F1**.
+
+- **Problem:** parsers represent a value that lives outside the file with one shared placeholder, `UNRESOLVED_VALUE`. `diff_against_schema` skips type/enum/pattern validation for it, then counts it as present, and the evaluator turns "present, no error" into `valid: true`.
+- **Current behavior:** a Kubernetes `env` entry with `valueFrom.secretKeyRef`/`configMapKeyRef` naming a Secret/ConfigMap that is not in the supplied manifest, a Compose `${VAR}` with no default, and a bare Compose `KEY:` are each reported `status: ok`, `present: true`, `valid: true`, `reason: null`. Reproduced: an `int` variable `PORT` fed by an external `configMapKeyRef`, a `url` variable `API_URL` given as a bare `API_URL:`, and a secret `DB_PASSWORD` via an external `secretKeyRef` all pass; `success: true`, exit 0.
+- **Expected behavior:** the report says the value was not seen (never `valid: true`); the gate's treatment of such values is a v5 decision (see Decision).
+- **Impact:** a CI consumer of `--json` reads `valid: true` as "EnvShield checked this." It did not. For a `type`/`enum`/`pattern` field a wrong value deployed through the external reference is never caught.
+- **Relationships:** `BL-166` (F4, in-manifest Secret whose value is visible but not inspected), `BL-164` (F2, same placeholder in `completeness: union`), `BL-169` (F7). `BL-011` sub-items 2–3 deliberately left an external reference present/unresolved (no keys are knowable) and are fixed; this finding is about the *claim*, not the parsing. `has_unresolved_source` (envFrom to an external source) already reports `unresolved`; per-variable references do not.
+- **Decision:** **Report: fixed in v4.8.0 by [#10](https://github.com/rabbilyasar/envshield/issues/10).** **Gate: a deliberate, documented limitation in v4.8.0 — `check` keeps passing these values — fixed in v5 ([#16](https://github.com/rabbilyasar/envshield/issues/16), [#17](https://github.com/rabbilyasar/envshield/issues/17)).** The static/runtime boundary in charter §7 means an external value cannot be validated here; v5 is where "unverified" becomes a visible verdict the gate can act on.
+
+### BL-164 — `completeness: union` treats a placeholder as satisfying a key (F2)
+
+Type: `ROBUSTNESS` / `REPORT HONESTY` · Evidence: `CONFIRMED` (live, 2026-10-14) · Priority: **P1** until [#10](https://github.com/rabbilyasar/envshield/issues/10) lands; **P2** afterwards (gate half, v5) · Status: **open**
+Component: `core/schema_manager.py::_union_key_status`, `core/evaluator.py` (union branch)
+Source: v5 planning audit, 2026-10-07 — alias **F2**.
+
+- **Problem:** `_union_key_status` returns `"ok"` the moment any source holds `UNRESOLVED_VALUE`, before looking at any other source, so a key satisfied only by a placeholder is "satisfied".
+- **Current behavior:** with `completeness: union` over `.env` (has `API_URL`) and `docker-compose.yml` (has `PORT: ${PORT}`), a schema `PORT` of type `int` is reported `present: true`, `valid: true` for the service as a whole; `success: true`, exit 0. By code reading of the loop (not run): an `int` key that appears in another source with a *non-integer* value is also masked, because the placeholder returns `"ok"` before the recorded invalid reason is used.
+- **Expected behavior:** a key satisfied only by something EnvShield could not see is reported as such, not as `ok`.
+- **Impact:** same as `BL-163`, in the one mode that is supposed to prove "present *and valid* somewhere."
+- **Relationships:** `BL-163` (F1), `BL-030` (union design; its "union means presence, not values" rule is unchanged). Not a regression of `BL-030`: the carve-out mirrors the single-source one.
+- **Decision:** **Report: fixed in v4.8.0 by [#10](https://github.com/rabbilyasar/envshield/issues/10).** **Gate: deliberate limitation in v4.8.0; fixed in v5.**
+
+### BL-165 — A `requiredIf` trigger that EnvShield cannot see silently drops the dependent requirement (F3)
+
+Type: `BUG` / `FALSE-CLEAN` · Evidence: `CONFIRMED` (live, 2026-10-14) · Priority: **P1** (silent false-clean, release-philosophy question 3) · Status: **open**
+Component: `core/schema_types.py::_condition_holds`, `core/schema_manager.py::diff_against_schema`
+Source: v5 planning audit, 2026-10-07 — alias **F3**.
+
+- **Problem:** `_condition_holds` is `local_values.get(var) == expected`. A trigger supplied as `UNRESOLVED_VALUE` is a string that never equals `expected`, so the condition is false.
+- **Current behavior:** schema `MODE` plus `DEPENDENT` with `requiredIf = { var = "MODE", equals = "prod" }`; a Kubernetes manifest whose only entry is `MODE` from an external `secretKeyRef`. `check` reports `DEPENDENT` as `not_required`, `clean: true`, `success: true`, exit 0. If `MODE` is `prod` at runtime, `DEPENDENT` is required and nothing says so.
+- **Expected behavior:** when the trigger's value is unknowable, the dependent requirement is reported as unknown/unresolved, not as not required.
+- **Impact:** a required variable can be dropped from validation with a clean exit, which is exactly the false-clean this project treats as a blocker.
+- **Relationships:** `BL-163` (same placeholder); `BL-030` (union already records a *conflicting* trigger as ambiguous rather than guessing; an *unseen* trigger is the unhandled case).
+- **Decision:** **Fixed in v4.8.0 by [#11](https://github.com/rabbilyasar/envshield/issues/11).**
+
+### BL-166 — An in-manifest Kubernetes Secret whose key exists is reported valid without inspecting its value (F4)
+
+Type: `BUG` / `FALSE-CLEAN` · Evidence: `CONFIRMED` (live, 2026-10-14) · Priority: **P1**, both halves (the value is in the file EnvShield was given) · Status: **open**
+Component: `parsers/_kubernetes.py` (`env` loop, `secretKeyRef` branch), `core/schema_manager.py::diff_against_schema`
+Source: v5 planning audit, 2026-10-07 — alias **F4**.
+
+- **Problem:** when the referenced Secret is defined in the same manifest, the parser checks only that the *key* exists (`BL-011` sub-item 3), then emits `UNRESOLVED_VALUE` for the variable instead of the Secret's `stringData`/`data` value, so no type/enum/pattern check ever runs.
+- **Current behavior:** a Secret with `stringData: {PORT: "notanumber", API_URL: "not a url"}` consumed by `secretKeyRef` for an `int` `PORT` and a `url` `API_URL`: both `status: ok`, `valid: true`; `success: true`, exit 0. The same values written inline as `value:` are reported `invalid`.
+- **Expected behavior:** the value in the manifest is validated like any inline value, or the report says it was not inspected.
+- **Impact:** an invalid value, visible in the committed manifest, passes the gate. Unlike `BL-163` this is knowable.
+- **Relationships:** `BL-163` (F1); `BL-011` sub-item 3 (key cross-check — fixed, and left value decoding explicitly out).
+- **Decision:** **Report: fixed in v4.8.0 by [#10](https://github.com/rabbilyasar/envshield/issues/10).** **Gate: deliberate limitation in v4.8.0; fixed in v5 ([#16](https://github.com/rabbilyasar/envshield/issues/16), [#17](https://github.com/rabbilyasar/envshield/issues/17)).** **Release gate:** this is an open P1. Shipping v4.8.0 with the gate half open **requires the user's explicit override at R0-8 ([#13](https://github.com/rabbilyasar/envshield/issues/13))**; it is not waived by this entry.
+
+### BL-167 — The JSON report says `valid: true` for a blank value (F5)
+
+Type: `BUG` / `REPORT` · Evidence: `CONFIRMED` (live, 2026-10-14) · Priority: **P2** (the exit code and the `blank` list are correct) · Status: **open**
+Component: `core/evaluator.py` (variable entry, `present`/`valid`)
+Source: v5 planning audit, 2026-10-07 — alias **F5**.
+
+- **Problem:** the evaluator counts `blank` as present (`any(s in ("ok", "blank", "invalid"))`) and sets `valid` to `True` whenever `present` is `True` and nothing is invalid.
+- **Current behavior:** `.env` with `NAME=` and `PORT=` (both required): `check` exits 1 and the legacy `results[].blank` lists both, but `reports[].variables[]` has `status: blank` with `present: true`, `valid: true`, `reason: null`.
+- **Expected behavior:** a blank required value is not `valid: true`.
+- **Impact:** a consumer that reads `reports` rather than `results` or the exit code sees a contradiction on a failing run.
+- **Decision:** **Fixed in v4.8.0 by [#9](https://github.com/rabbilyasar/envshield/issues/9)** (together with `BL-168`).
+
+### BL-168 — An optional typed variable that is empty passes validation (F6)
+
+Type: `BUG` · Evidence: `CONFIRMED` (live, 2026-10-14) · Priority: **P2** (optional variable) · Status: **open**
+Component: `core/schema_manager.py::diff_against_schema` (`if key in schema and value and ...`)
+Source: v5 planning audit, 2026-10-07 — alias **F6**.
+
+- **Problem:** validation is skipped for any falsy value. Blank is only reported for variables that must be present, so an optional one has no empty check.
+- **Current behavior:** `OPT_PORT=` (`int`, `required = false`) and `OPT_URL=` (`url`, `required = false`) are `ok`, `valid: true`, exit 0. `OPT_PORT=abc` is correctly `invalid`.
+- **Expected behavior:** an empty value for a typed optional variable is validated (or reported), not passed.
+- **Impact:** code that does `int(os.environ["OPT_PORT"])` crashes on a file `check` accepted.
+- **Relationships:** `BL-167` (F5). Changing it makes existing files with an empty optional value start failing; call out in CHANGELOG at R0-8.
+- **Decision:** **Fixed in v4.8.0 by [#9](https://github.com/rabbilyasar/envshield/issues/9).**
+
+### BL-169 — A Compose `${VAR-x}` / `${VAR:-x}` fallback is validated as the deployed value, and `-` and `:-` are treated alike (F7)
+
+Type: `DEPLOYMENT` / `REPORT HONESTY` · Evidence: `CONFIRMED` (live, 2026-10-14) · Priority: **P2** (same class as `BL-011`) · Status: **open**
+Component: `parsers/_docker_compose.py` (`_INTERPOLATION_RE`, `_resolve_interpolation`)
+Source: v5 planning audit, 2026-10-07 — alias **F7**.
+
+- **Problem:** the fallback after `-`/`:-` is only used when the variable is unset (`-`) or unset-or-empty (`:-`), and the real value comes from the shell or an `env_file`, which EnvShield does not see. The parser resolves to the fallback and validates that.
+- **Current behavior:** `PORT: ${PORT-notanumber}` and `PORT: ${PORT:-notanumber}` are both `invalid: "must be an integer"` (and `success: false`), as if `notanumber` were the deployed value. The two operators are indistinguishable (`_INTERPOLATION_RE` matches `:?-`, so both yield the same groups).
+- **Expected behavior:** the fallback is reported as a fallback, with `-` and `:-` distinguished; whether an invalid fallback should fail the gate is a v5 decision.
+- **Impact:** a failing or passing result describes a value that may never be deployed.
+- **Relationships:** `BL-011` sub-item 1 (made `${VAR-default}` resolve at all, fixed 2026-09-03; this entry is the validation semantics on top of it); `BL-163`.
+- **Decision:** **Report: fixed in v4.8.0 by [#10](https://github.com/rabbilyasar/envshield/issues/10).** **Gate: deliberate limitation in v4.8.0; fixed in v5.** No override needed (P2).
+
+### BL-170 — The generated zod loader turns an empty `int`/`float`/`port` into `0` (F8)
+
+Type: `GENERATION` / `BUG` · Evidence: `CONFIRMED` (live, 2026-10-14; `node` v22.17.1: `Number("")` → `0`) · Priority: **P1** (a missing value silently becomes a valid-looking number; same class as `BL-003`, `z.coerce.boolean()` turning `"false"` into `true`, which was P1) · Status: **open**
+Component: `core/generator.py::_zod_base_type`
+Source: v5 planning audit, 2026-10-07 — alias **F8**.
+
+- **Problem:** `int`, `float` and `port` render as `z.coerce.number()`, which is `Number(input)`; `Number("")` is `0`.
+- **Current behavior:** `envshield generate env.ts --lang ts` for `COUNT: int`, `RATE: float`, `PORT: port` emits `z.coerce.number()`, `z.coerce.number()` and `z.coerce.number().min(1).max(65535)`. An empty `COUNT=` parses to `0`; an empty `RATE=` to `0`; only `port` is caught, and only by `min(1)`.
+- **Expected behavior:** an empty value is rejected (or treated as unset) by the loader, as `check` reports it.
+- **Impact:** the loader and `check` disagree: `check` calls the file blank; the generated code reads `0` and carries on.
+- **Relationships:** `BL-094` (the broader divergence; its `""` observation is this entry — hex, whitespace and exponent remain there), `BL-003`.
+- **Decision:** **Fixed in v4.8.0 by [#12](https://github.com/rabbilyasar/envshield/issues/12).**
+
+### BL-171 — Eight more entries cite pre-rebase commit SHAs that are not in `main`'s history
+
+Type: `DOCS` · Evidence: `CONFIRMED` (2026-10-14: `git merge-base --is-ancestor <sha> HEAD` fails for each) · Priority: **P3** · Status: **open — proposed follow-up, not done in R0-3**
+Component: `BACKLOG.md`
+Source: found while verifying the SHAs R0-3 was asked to correct (`BL-023`, `BL-115`).
+
+- **Problem:** each SHA below still resolves (`git cat-file -e`) but is only reachable from the object database, not from `main`. The commit on `main` with the same subject is listed.
+- **Mapping:** `0886dcb` → `1b61834` (BL-030, lines 1022/1024); `194cd58` → `8633464` (BL-106); `32b3098` → `0d5fdcb` (BL-109); `619c307` → `458b5a6` (env_file/extends hardening); `632c185` → `bd3635b` (BL-113); `87a42d6` → `1791dbd` (BL-110); `b48ff7f` → `52e55f5` (BL-114); `ceb8f0c` → `24fac9b` (BL-112).
+- **Decision:** left uncorrected here because R0-3's scope names `BL-023`/`BL-115` only; a mechanical follow-up (one issue, `BACKLOG.md` only) is proposed for review.
 
 ---
 
@@ -1621,6 +1747,7 @@ independent verification is outstanding.
 | G-3 Rev 3 (runtime-boundary re-review) | Yes — same artifact, revised | **Yes** — including the two items (`G3-11`, `G3-12`) missed on the first backlog-creation pass, added this pass | `BL-031`; `BL-030`'s checklist | None outstanding. |
 | 2026-08-21 release-readiness audit | Yes — `docs/reports/2026-08-21-release-readiness-audit.md` | **Partially.** Every P0–P3 code-correctness finding (items 4–19) is reconciled with live-verification evidence. Items 1–3 (PyPI/hosted-docs/website staleness) are tracked but not independently re-verified. | `BL-001`–`BL-018`; items 1–3 → `BL-101` | `BL-101` needs its own live-verification pass (PyPI listing, hosted docs, website repo content) before it can be marked resolved either way. |
 | 2026-08-24 comprehensive audit | **Yes** (as of 2026-08-26 — pasted in full in-session; very likely the same document, per its own matching claims and CVE-style IDs) | **Yes** — reconciled claim-by-claim; most of it does not describe this repository | `BL-060` (reconciled); `BL-102` (a genuinely new, independently-discovered finding surfaced while checking one of its claims) | None outstanding. The report's own architecture section describes a codebase (`cli/`, `providers/`, `scanners/`, `exporters/`, Pydantic, Click) that does not exist here — most of its specific code-level claims are unverifiable against this repo for that reason, not merely "unconfirmed." |
+| v5 planning audit (2026-10-07) | Yes — recorded in the approved v5 plan; each finding re-reproduced against `HEAD` 2026-10-14 | **Yes** — F1–F8 | `BL-163`–`BL-170` (F1–F8); `BL-171` (found while correcting SHAs) | None outstanding. Gate halves of F1/F2/F4/F7 are deliberate, documented, v5. |
 | AI/Varlock/MCP strategic discussion | Yes — this engagement's own conversation record | **Yes** | `BL-040`, `BL-041`, `BL-042`, `BL-080` | None outstanding — these are `STRATEGIC`/`RESEARCH` entries by nature, not findings awaiting verification. |
 | DEV.to `.env.example` feedback | Yes — this engagement's own conversation record | **Yes** | `BL-070` | None outstanding. |
 | "3.8" / "3.10" numbering | **No** — referenced only by CLAUDE.md/AGENTS.md §19, source of the numbering scheme itself unknown | No — cannot map to anything | None (explicitly unmapped) | Genuinely unresolved. Not converted into a fabricated `BL-NNN` entry — the numbering is preserved as a named, open loose end in §19 and here, nothing more. |
@@ -1632,6 +1759,7 @@ independent verification is outstanding.
 | Source | Findings it produced |
 |---|---|
 | Original Zeus adoption audit | BL-020–BL-026 (G-1–G-7), motivated BL-030 |
+| v5 planning audit (2026-10-07) | BL-163–BL-170 (`F1`–`F8`) |
 | G-3 architecture review (Satisfaction Modes) | BL-032 |
 | G-3 implementation spec, Rev 2 adversarial pass | BL-030's checklist (requiredIf, JSON shape, exit-code flow, source-health separation, doctor wording) |
 | G-3 implementation spec, Rev 3 (runtime-boundary re-review) | BL-031, the resolved-environment-boundary item in BL-030's checklist, `G3-11`/`G3-12` (also folded into BL-030's checklist) |

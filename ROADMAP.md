@@ -51,7 +51,11 @@ What you can already do with EnvShield:
 ## Next
 
 Directions we intend to pursue after the current release, roughly in this
-order:
+order. The immediate sequence is **v4.8.0 first, then v5**: v4.8.0 makes
+`check` stop reporting confidence it does not have (empty values, values
+EnvShield cannot see, a `requiredIf` trigger it cannot resolve) and ships the
+write-safety fixes (`BL-154`, `BL-162`); v5 follows with the changes that
+alter what the gate itself decides. The items below come after both.
 
 1. **Configuration Graph & Impact Analysis** — connect the schema to where
    variables are actually used in source, which services depend on them,

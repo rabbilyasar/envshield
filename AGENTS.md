@@ -880,13 +880,24 @@ backlog (revision-aware service-directory resolution for the explicit
 two-revision form, discovered-file size cap, `DEFAULT_EXCLUDED_DIRS`-style
 pruning) — none are blockers, and none require another Phase 2C milestone.
 
-**Current phase (updated 2026-09-30): Shared System Schema.** Latest
+**Current phase (updated 2026-10-01; commit status corrected 2026-10-14): Evaluator migration.** `check` now
+runs on one evaluator (`envshield/core/evaluator.py`) with a versioned,
+value-free report; decisions are in
+[docs/architecture/evaluator-decisions.md](docs/architecture/evaluator-decisions.md),
+step status in [progress.md](progress.md), findings in BACKLOG.md Part 5c.
+It is committed (`bcf2133`) and unreleased. `BL-154` (P0, writes through
+repository-controlled symlinks) is fixed and committed as `987acdd`, and its
+regression `BL-162` as `e31c8f5`; the released `v4.7.4` is affected until
+both ship. Shared System Schema Phase 6 is committed (`26b821b`); the
+paragraph below is its record.
+
+**Previous phase (updated 2026-09-30): Shared System Schema.** Latest
 release tag is `v4.7.4`. Phase 1 (shared schema projection) is committed as
 `f34bfb9`, Phase 2 (explicit service `dir`) as `a2be864`, Phase 3
 (physical-file contracts) as `e336812`, Phase 4 (out-of-scope
 reporting) as `5a2c61e`, and Phase 5 (hooks) as `50720ad`, all
-unreleased. Phase 6 (lifecycle acceptance) is implemented in the working
-tree and pending review before commit; 1639 tests passing. See
+unreleased. Phase 6 (lifecycle acceptance) is committed as `26b821b`;
+1639 tests passing. See
 [progress.md](progress.md) for phase status. The
 paragraphs below are the post-`v4.6.1` record, kept as history.
 
