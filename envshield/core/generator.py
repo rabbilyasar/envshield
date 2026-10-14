@@ -282,18 +282,30 @@ def _zod_base_type(
     The zod builder expression for a field's declared type, before
     '.default()'/'.optional()' is appended.
 
-    `default_value` is consumed here for exactly one type -- 'bool' -- which
-    is the only type whose accepted *input* (a string) differs from its
-    parsed *output* (a boolean), and therefore the only one where it matters
-    which end of the chain the default sits on. Every other type renders its
-    default the ordinary way, appended by the caller.
+    `default_value` is consumed here for the types whose accepted *input* (a
+    string) differs from their parsed *output* -- 'bool' and the numeric
+    types -- which makes it matter which end of the chain the default sits
+    on. Every other type renders its default the ordinary way, appended by
+    the caller.
     """
     if field_type == "enum":
         values = schema_types.enum_values(details)
         literal = ", ".join(json.dumps(v) for v in values)
         return f"z.enum([{literal}])"
-    if field_type in ("int", "float"):
-        return "z.coerce.number()"
+    if field_type in ("int", "float", "port"):
+        # z.coerce.number() is Number(input), and Number("") === 0: an empty
+        # binding would silently become a valid 0 (see BL-170). An empty
+        # string is rejected first, by z.string().min(1), and only then
+        # coerced -- so "8000" still parses to 8000. The default sits on the
+        # inner z.string() for the same reason as 'bool' below: zod 3
+        # re-parses it through the inner schema, which would reject a number.
+        inner = "z.string().min(1)"
+        if default_value is not None:
+            inner += f".default({json.dumps(str(default_value))})"
+        number = "z.coerce.number()"
+        if field_type == "port":
+            number += ".min(1).max(65535)"
+        return f"{inner}.pipe({number})"
     if field_type == "bool":
         # z.coerce.boolean() is JS truthiness (Boolean("false") === true) --
         # it would silently invert an explicit "false" to true (see BL-003).
@@ -319,8 +331,6 @@ def _zod_base_type(
             f"{inner}.transform((s) => s.toLowerCase())"
             '.pipe(z.enum(["true", "false"])).transform((s) => s === "true")'
         )
-    if field_type == "port":
-        return "z.coerce.number().min(1).max(65535)"
     if field_type == "url":
         return "z.string().url()"
     if field_type == "email":
@@ -385,9 +395,10 @@ def _render_ts_field(key: str, details: dict[str, Any]) -> str:
     else:
         zod_type = _zod_base_type(field_type, details, default_value)
         if default_value is not None:
-            # 'bool' already carries its default on the inner z.string() --
-            # see _zod_base_type for why it cannot be appended here.
-            if field_type != "bool":
+            # 'bool' and the numeric types already carry their default on
+            # the inner z.string() -- see _zod_base_type for why it cannot
+            # be appended here.
+            if field_type not in ("bool", "int", "float", "port"):
                 zod_type += (
                     f".default({_zod_default_literal(field_type, str(default_value))})"
                 )

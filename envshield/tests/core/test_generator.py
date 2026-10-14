@@ -125,7 +125,12 @@ def test_generate_typescript_infers_types_from_default_values():
     content = generator.generate_config(schema, lang="typescript")
 
     assert '"LOG_LEVEL": z.string().default("info"),' in content
-    assert '"MAX_RETRIES": z.coerce.number().default(3),' in content
+    # Numeric defaults sit on the inner z.string(), as strings, for the same
+    # reason as bool below (BL-170): see TestTypeScriptNumbersRejectEmpty.
+    assert (
+        '"MAX_RETRIES": z.string().min(1).default("3").pipe(z.coerce.number()),'
+        in content
+    )
     # The bool default sits on the inner z.string(), as a string -- not
     # appended to the end of the chain, where zod 3 would re-parse a
     # boolean through z.string() and throw. See
@@ -295,7 +300,10 @@ def test_generate_typescript_explicit_port_type_with_default():
 
     content = generator.generate_config(schema, lang="typescript")
 
-    assert '"API_PORT": z.coerce.number().min(1).max(65535).default(8080),' in content
+    assert (
+        '"API_PORT": z.string().min(1).default("8080")'
+        ".pipe(z.coerce.number().min(1).max(65535))," in content
+    )
 
 
 def test_generate_typescript_secret_with_default_never_embeds_the_literal():
@@ -499,8 +507,9 @@ def _extract_field_expr(content: str, key: str) -> str:
     return line.strip()[len(prefix) :].rstrip(",")
 
 
-# A minimal, faithful stand-in for the exact five zod methods BL-003's fix
-# uses (z.string, z.enum, .transform, .pipe, .default, .optional) -- NOT a
+# A minimal, faithful stand-in for the exact zod methods BL-003's and BL-170's
+# fixes use (z.string, z.enum, z.coerce.number, .min, .max, .transform, .pipe,
+# .default, .optional) -- NOT a
 # general zod reimplementation, and not a substitute for verifying against
 # the real npm package. This repo has no package.json/npm dependency
 # management and no node/npm setup step in CI (see BL-003's BACKLOG.md
@@ -542,8 +551,41 @@ class MiniSchema {
     return new MiniSchema((input) => (input === undefined ? undefined : this._parse(input)));
   }
 }
+class MiniString extends MiniSchema {
+  min(n) {
+    return new MiniString((input) => {
+      const value = this._parse(input);
+      if (value.length < n) throw new Error("string too short");
+      return value;
+    });
+  }
+}
+class MiniNumber extends MiniSchema {
+  min(n) {
+    return new MiniNumber((input) => {
+      const value = this._parse(input);
+      if (value < n) throw new Error("number too small");
+      return value;
+    });
+  }
+  max(n) {
+    return new MiniNumber((input) => {
+      const value = this._parse(input);
+      if (value > n) throw new Error("number too large");
+      return value;
+    });
+  }
+}
 const z = {
-  string: () => new MiniSchema((input) => {
+  coerce: {
+    // zod: Number(input), and NaN is rejected (undefined coerces to NaN).
+    number: () => new MiniNumber((input) => {
+      const value = Number(input);
+      if (Number.isNaN(value)) throw new Error("expected number, received nan");
+      return value;
+    }),
+  },
+  string: () => new MiniString((input) => {
     if (typeof input !== "string") throw new Error("expected string, got " + typeof input);
     return input;
   }),
@@ -815,3 +857,63 @@ class TestTypeScriptBooleanCoercionMatchesTheContract:
 
         assert results["undefined"] == "ok:undefined"
         assert results['"false"'] == "ok:false"
+
+
+class TestTypeScriptNumbersRejectEmpty:
+    """
+    BL-170 (F8): z.coerce.number() is Number(input) and Number("") === 0, so an
+    empty `COUNT=` silently became a valid 0. An empty string must be
+    rejected before coercion; everything else behaves as before.
+    """
+
+    @staticmethod
+    def _expr(field_type, default=None):
+        details = {"type": field_type, "description": "n"}
+        if default is not None:
+            details["defaultValue"] = default
+        content = generator.generate_config({"N": details}, lang="typescript")
+        return _extract_field_expr(content, "N")
+
+    @pytest.mark.parametrize(
+        "field_type,good,default",
+        [("int", "8000", "5"), ("float", "1.5", "2.5"), ("port", "8000", "8080")],
+    )
+    def test_runtime_behavior(self, tmp_path, field_type, good, default):
+        required = _run_bool_matrix(tmp_path, self._expr(field_type), ["", None, good])
+        assert required['""'] == "rejected"
+        assert required["undefined"] == "rejected"
+        assert required[json.dumps(good)] == f"ok:{good}"
+
+        defaulted = _run_bool_matrix(
+            tmp_path, self._expr(field_type, default), ["", None, good]
+        )
+        assert defaulted['""'] == "rejected"
+        assert defaulted["undefined"] == f"ok:{default}"
+        assert defaulted[json.dumps(good)] == f"ok:{good}"
+
+    def test_port_still_rejects_out_of_range(self, tmp_path):
+        results = _run_bool_matrix(
+            tmp_path, self._expr("port"), ["0", "65536", "65535"]
+        )
+        assert results['"0"'] == "rejected"
+        assert results['"65536"'] == "rejected"
+        assert results['"65535"'] == "ok:65535"
+
+    def test_the_default_is_not_appended_after_the_pipe(self):
+        # A trailing .default(5) is re-parsed through z.string() on zod 3.
+        assert ".default(5)" not in self._expr("int", "5")
+
+    def test_the_python_loader_types_int_strictly(self):
+        content = generator.generate_config(
+            {"N": {"type": "int", "description": "n"}}, lang="python"
+        )
+        assert "n: int = Field(" in content
+
+    def test_the_python_loader_rejects_empty_int(self, monkeypatch):
+        pytest.importorskip("pydantic_settings")
+        content = generator.generate_config(
+            {"N": {"type": "int", "description": "n"}}, lang="python"
+        )
+        monkeypatch.setenv("N", "")
+        with pytest.raises(Exception):
+            exec(compile(content, "<generated>", "exec"), {})

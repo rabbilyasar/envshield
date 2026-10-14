@@ -394,7 +394,7 @@ Grouped as one backlog item per the instruction to avoid five near-duplicate ent
 
 ### BL-094 — Generated TypeScript `int`/`float`/`port` coercion diverges from EnvShield's own validator
 Type: `GENERATION` · Evidence: `CONFIRMED` · Priority: P2
-Related: the `""` → `0` sub-case below is tracked separately as `BL-170` (F8, fixed in v4.8.0 by [#12](https://github.com/rabbilyasar/envshield/issues/12)); hex, whitespace and exponent remain open here.
+Related: the `""` → `0` sub-case below is tracked separately as `BL-170` (F8, fixed in v4.8.0 by [#12](https://github.com/rabbilyasar/envshield/issues/12), R0-7); hex, whitespace and exponent remain open here.
 Source(s): Discovered this pass while investigating `BL-003`, checking whether boolean coercion was an isolated bug or a broader failure class.
 Component: `generator.py::_zod_base_type` (TypeScript `int`/`float`/`port` field rendering — `z.coerce.number()` / `z.coerce.number().min(1).max(65535)`)
 
@@ -1509,7 +1509,7 @@ Source: v5 planning audit, 2026-10-07 — alias **F7**.
 
 ### BL-170 — The generated zod loader turns an empty `int`/`float`/`port` into `0` (F8)
 
-Type: `GENERATION` / `BUG` · Evidence: `CONFIRMED` (live, 2026-10-14; `node` v22.17.1: `Number("")` → `0`) · Priority: **P1** (a missing value silently becomes a valid-looking number; same class as `BL-003`, `z.coerce.boolean()` turning `"false"` into `true`, which was P1) · Status: **open**
+Type: `GENERATION` / `BUG` · Evidence: `CONFIRMED` (live, 2026-10-14; `node` v22.17.1: `Number("")` → `0`) · Priority: **P1** (a missing value silently becomes a valid-looking number; same class as `BL-003`, `z.coerce.boolean()` turning `"false"` into `true`, which was P1) · Status: **fixed in the working tree for R0-7, not yet merged**
 Component: `core/generator.py::_zod_base_type`
 Source: v5 planning audit, 2026-10-07 — alias **F8**.
 
@@ -1518,7 +1518,7 @@ Source: v5 planning audit, 2026-10-07 — alias **F8**.
 - **Expected behavior:** an empty value is rejected (or treated as unset) by the loader, as `check` reports it.
 - **Impact:** the loader and `check` disagree: `check` calls the file blank; the generated code reads `0` and carries on.
 - **Relationships:** `BL-094` (the broader divergence; its `""` observation is this entry — hex, whitespace and exponent remain there), `BL-003`.
-- **Decision:** **Fixed in v4.8.0 by [#12](https://github.com/rabbilyasar/envshield/issues/12).**
+- **Decision:** **Fixed in v4.8.0 by [#12](https://github.com/rabbilyasar/envshield/issues/12)** (R0-7). `int`, `float` and `port` now render `z.string().min(1)[.default("<n>")].pipe(z.coerce.number()[.min(1).max(65535)])`: an empty string is rejected before coercion, `"8000"` still parses to `8000`, an absent value with a default gets the default and one without is rejected, and `port` still rejects `0` and `65536`. The default moved onto the inner `z.string()` (as a string) for the same zod 3 re-parse reason as `bool`. Tests: `test_generator.py::TestTypeScriptNumbersRejectEmpty` (mini-zod stand-in run on zod 3 and 4 semantics; fails against the previous generator for `int`/`float`), plus the two existing default-rendering assertions updated. Also run ad hoc against real `zod@3.25.76` and `zod@4.6.7` (not committed; no npm setup in the repo): identical results on both. The Python loader already types `int` strictly; pydantic isn't installed here, so the runtime parity test is `importorskip`'d and the static one runs. **Still open under `BL-094`:** hex, whitespace (`" "` → 0) and exponent input. **CHANGELOG (R0-8):** a TypeScript consumer that relied on an empty numeric variable parsing as `0` now gets a validation error.
 
 ### BL-172 — `completeness: union` still passes an empty optional value (F6 divergence)
 
