@@ -40,6 +40,12 @@ class BaseParser(ABC):
     # absent.
     has_unresolved_source = False
 
+    # Set by a parser's own get_vars() to the names whose returned value is
+    # a fallback written in the file (Compose '${VAR-x}'/'${VAR:-x}') rather
+    # than the value the deployment will actually receive -- validated like
+    # any value, but never proof the real one is valid (R0-5, F7).
+    fallback_keys: frozenset = frozenset()
+
     # True for a parser whose target is a deployment manifest (docker-
     # compose, Kubernetes) rather than a local config file (.env, a Python
     # config module). schema_manager.check_target uses this to pick a

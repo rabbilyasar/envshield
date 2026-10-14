@@ -1709,6 +1709,7 @@ def test_check_json_reports_clean_state(tmp_path):
         assert payload.pop("reports")[0]["summary"] == {
             "clean": True,
             "complete": True,
+            "unverified": [],
         }
         assert payload == {
             "success": True,

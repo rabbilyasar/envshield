@@ -211,7 +211,7 @@ class TestReportShape:
         report = evaluator.build_report(evaluations[0])
 
         assert report["report_version"] == 1
-        assert report["summary"] == {"clean": False, "complete": True}
+        assert report["summary"] == {"clean": False, "complete": True, "unverified": []}
         by_name = {v["name"]: v for v in report["variables"]}
         assert by_name["A"]["present"] is False
         assert by_name["A"]["sources"] == [{"path": ".env", "status": "missing"}]
@@ -227,7 +227,11 @@ class TestReportShape:
         report = evaluator.build_report(evaluations[0])
 
         assert report["sources"][0]["status"] == "missing"
-        assert report["summary"] == {"clean": False, "complete": False}
+        assert report["summary"] == {
+            "clean": False,
+            "complete": False,
+            "unverified": [],
+        }
         assert report["variables"][0]["present"] == "unknown"
 
     def test_an_unresolved_manifest_is_incomplete(self, tmp_path):
@@ -245,13 +249,17 @@ class TestReportShape:
 
         assert report["sources"][0]["status"] == "error"
         assert report["variables"] == []
-        assert report["summary"] == {"clean": False, "complete": False}
+        assert report["summary"] == {
+            "clean": False,
+            "complete": False,
+            "unverified": [],
+        }
 
     def test_union_decides_presence(self, tmp_path):
         _, evaluations = _evaluate_scenario("union_satisfied_across_sources", tmp_path)
         report = evaluator.build_report(evaluations[0])
 
-        assert report["summary"] == {"clean": True, "complete": True}
+        assert report["summary"] == {"clean": True, "complete": True, "unverified": []}
         by_name = {v["name"]: v for v in report["variables"]}
         # Missing from .env on its own, but the union has it.
         assert by_name["FROM_COMPOSE"]["present"] is True
@@ -315,7 +323,7 @@ class TestCodeReferences:
 
         assert sorted(evaluation.undeclared_references) == ["API_URL", "NEW_KEY"]
         assert evaluation.passed is False
-        assert report["summary"] == {"clean": False, "complete": True}
+        assert report["summary"] == {"clean": False, "complete": True, "unverified": []}
         by_name = {v["name"]: v for v in report["variables"]}
         assert by_name["DECLARED"]["referenced"] is True
         assert by_name["NEW_KEY"]["declared"] is False
@@ -467,7 +475,7 @@ def test_union_success_and_report_summary_agree_with_an_unresolved_manifest(tmp_
         payload = evaluator.legacy_check_payload([evaluation])
 
     assert payload["success"] is True
-    assert report["summary"] == {"clean": True, "complete": True}
+    assert report["summary"] == {"clean": True, "complete": True, "unverified": []}
     assert report["sources"][1]["status"] == "unresolved"
 
 
@@ -491,3 +499,152 @@ def test_a_blank_variable_is_never_reported_valid(tmp_path):
     assert variables["B"]["sources"][0]["status"] == "blank"
     assert variables["B"]["valid"] is False
     assert variables["B"]["reason"] == "required but blank"
+
+
+ONE_SERVICE = "services:\n  app:\n    schema: env.schema.toml\n"
+PORT_SCHEMA = '[PORT]\ntype = "port"\n'
+
+K8S_POD = (
+    "apiVersion: v1\nkind: Pod\nmetadata: {name: p}\nspec:\n  containers:\n"
+    "  - name: c\n    image: x\n    env:\n"
+)
+
+
+def _check(tmp_path, files, file=None):
+    from envshield.cli import app
+
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _materialize(files)
+        result = runner.invoke(app, ["check"] + ([file] if file else []) + ["--json"])
+        human = runner.invoke(app, ["check"] + ([file] if file else []))
+    payload = json.loads(result.stdout)
+    return result.exit_code, payload, human.stdout
+
+
+def _port(payload):
+    report = payload["reports"][0]
+    var = next(v for v in report["variables"] if v["name"] == "PORT")
+    return var, report["summary"]
+
+
+class TestValuesEnvShieldNeverSaw:
+    """
+    R0-5 (F1, F2, F4, F7): a value EnvShield didn't inspect is never reported
+    valid. The report changes; the gate (exit code, success, results) doesn't.
+    """
+
+    MANIFESTS = {
+        "k8s_external_secret": (
+            "k.yaml",
+            K8S_POD + "    - name: PORT\n"
+            "      valueFrom: {secretKeyRef: {name: ext, key: port}}\n",
+        ),
+        "k8s_external_configmap": (
+            "k.yaml",
+            K8S_POD + "    - name: PORT\n"
+            "      valueFrom: {configMapKeyRef: {name: ext, key: port}}\n",
+        ),
+        "k8s_same_file_secret": (
+            "k.yaml",
+            "apiVersion: v1\nkind: Secret\nmetadata: {name: s}\n"
+            'stringData: {port: "notanumber"}\n---\n' + K8S_POD + "    - name: PORT\n"
+            "      valueFrom: {secretKeyRef: {name: s, key: port}}\n",
+        ),
+        "compose_forwarded": (
+            "docker-compose.yml",
+            "services:\n  app:\n    image: x\n    environment:\n      PORT: ${PORT}\n",
+        ),
+        "compose_bare_key_mapping": (
+            "docker-compose.yml",
+            "services:\n  app:\n    image: x\n    environment:\n      PORT:\n",
+        ),
+        "compose_bare_key_list": (
+            "docker-compose.yml",
+            "services:\n  app:\n    image: x\n    environment:\n      - PORT\n",
+        ),
+        "compose_fallback_dash": (
+            "docker-compose.yml",
+            "services:\n  app:\n    image: x\n    environment:\n"
+            "      PORT: ${PORT-8000}\n",
+        ),
+        "compose_fallback_colon_dash": (
+            "docker-compose.yml",
+            "services:\n  app:\n    image: x\n    environment:\n"
+            "      PORT: ${PORT:-8000}\n",
+        ),
+    }
+
+    @pytest.mark.parametrize("name", sorted(MANIFESTS))
+    def test_reported_unverified_and_the_gate_is_unchanged(self, tmp_path, name):
+        path, content = self.MANIFESTS[name]
+        files = {"envshield.yml": ONE_SERVICE, "env.schema.toml": PORT_SCHEMA}
+        files[path] = content
+        code, payload, human = _check(tmp_path, files, file=path)
+
+        var, summary = _port(payload)
+        assert var["valid"] is None
+        assert var["sources"][0]["status"] == "not_visible"
+        assert summary["unverified"] == ["PORT"]
+        # The v4 gate is unchanged: these values still pass.
+        assert code == 0
+        assert payload["success"] is True
+        assert payload["results"][0]["clean"] is True
+        assert "perfectly in sync" not in human
+        assert "PORT" in human
+        assert "notanumber" not in human + json.dumps(payload)
+
+    def test_an_invalid_fallback_still_fails(self, tmp_path):
+        files = {
+            "envshield.yml": ONE_SERVICE,
+            "env.schema.toml": PORT_SCHEMA,
+            "docker-compose.yml": (
+                "services:\n  app:\n    image: x\n    environment:\n"
+                "      PORT: ${PORT:-abc}\n"
+            ),
+        }
+        code, payload, _ = _check(tmp_path, files, file="docker-compose.yml")
+
+        var, summary = _port(payload)
+        assert code == 1
+        assert var["valid"] is False
+        assert var["sources"][0]["status"] == "invalid"
+        assert summary["unverified"] == []
+
+    def test_a_concrete_value_is_still_valid(self, tmp_path):
+        files = {
+            "envshield.yml": ONE_SERVICE,
+            "env.schema.toml": PORT_SCHEMA,
+            "docker-compose.yml": (
+                "services:\n  app:\n    image: x\n    environment:\n"
+                '      PORT: "8000"\n'
+            ),
+        }
+        code, payload, human = _check(tmp_path, files, file="docker-compose.yml")
+
+        var, summary = _port(payload)
+        assert (code, var["valid"], summary["unverified"]) == (0, True, [])
+        assert "perfectly in sync" in human
+
+    def test_union_never_shows_a_placeholder_as_ok(self, tmp_path):
+        files = {
+            "envshield.yml": (
+                ONE_SERVICE + "    completeness: union\n"
+                "manifests:\n  - file: docker-compose.yml\n"
+                "    containers:\n      app: app\n"
+            ),
+            "env.schema.toml": PORT_SCHEMA + '\n[LOCAL]\ndescription = "l"\n',
+            ".env": "LOCAL=1\n",
+            "docker-compose.yml": (
+                "services:\n  app:\n    image: x\n    environment:\n"
+                "      PORT: ${PORT}\n"
+            ),
+        }
+        code, payload, _ = _check(tmp_path, files)
+
+        var, summary = _port(payload)
+        statuses = {s["path"]: s["status"] for s in var["sources"]}
+        assert statuses["docker-compose.yml"] == "not_visible"
+        assert var["valid"] is None
+        assert summary["unverified"] == ["PORT"]
+        # Union pass/fail is unchanged.
+        assert code == 0 and payload["success"] is True

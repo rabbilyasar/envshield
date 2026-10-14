@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from ..config import manager as config_manager
+from ..parsers._base import BaseParser
 from ..parsers.factory import get_manifest_parser_and_vars
 from ..utils import git_utils
 from . import discovery, schema_manager, schema_types, source_files
@@ -40,6 +41,10 @@ class SourceEvaluation:
     is_deployment_manifest: bool = False
     # Names the process environment supplied (D-3); never their values.
     overlaid: Tuple[str, ...] = ()
+    # Names whose value EnvShield didn't inspect (R0-5): a placeholder for a
+    # value outside the file, or a Compose fallback. Report only; the gate
+    # is unchanged.
+    not_inspected: Tuple[str, ...] = ()
     # The file exists but no parser recognizes it (a kind of "error").
     unparseable: bool = False
 
@@ -127,6 +132,14 @@ def evaluate_source(
 
     diff = schema_manager.diff_against_schema(
         schema, local_values, has_unresolved_source=parser.has_unresolved_source
+    )
+    placeholders = {
+        name
+        for name, value in local_values.items()
+        if value == BaseParser.UNRESOLVED_VALUE
+    }
+    source.not_inspected = tuple(
+        sorted((placeholders | set(parser.fallback_keys)) - set(source.overlaid))
     )
     # An undeclared requiredIf trigger taken from the environment decides
     # requiredness only; it isn't this file's extra variable.
@@ -402,7 +415,8 @@ def _source_entry(source: SourceEvaluation) -> Dict[str, Any]:
     return entry
 
 
-def _variable_status(name: str, diff: schema_manager.SchemaDiff) -> str:
+def _variable_status(name: str, source: SourceEvaluation) -> str:
+    diff = source.diff
     if name in diff.missing:
         return "missing"
     if name in diff.blank:
@@ -416,8 +430,12 @@ def _variable_status(name: str, diff: schema_manager.SchemaDiff) -> str:
     if name in diff.extra:
         return "extra"
     if name in diff.present:
-        return "ok"
+        # Present and not invalid, but the value was never seen (R0-5).
+        return "not_visible" if name in source.not_inspected else "ok"
     return "not_required"
+
+
+_PRESENT = ("ok", "not_visible", "blank", "invalid")
 
 
 def _aggregate_presence(statuses: List[str], any_source_failed: bool):
@@ -425,7 +443,7 @@ def _aggregate_presence(statuses: List[str], any_source_failed: bool):
         return False
     if "unresolved" in statuses or any_source_failed:
         return "unknown"
-    return any(s in ("ok", "blank", "invalid") for s in statuses)
+    return any(s in _PRESENT for s in statuses)
 
 
 def build_report(evaluation: ServiceEvaluation) -> Dict[str, Any]:
@@ -453,10 +471,11 @@ def build_report(evaluation: ServiceEvaluation) -> Dict[str, Any]:
         names |= source.diff.extra
 
     variables = []
+    unverified: List[str] = []
     for name in sorted(names):
         declared = name in fields
         per_source = [
-            {"path": s.path, "status": _variable_status(name, s.diff)} for s in checked
+            {"path": s.path, "status": _variable_status(name, s)} for s in checked
         ]
         statuses = [entry["status"] for entry in per_source]
         entry: Dict[str, Any] = {
@@ -480,7 +499,7 @@ def build_report(evaluation: ServiceEvaluation) -> Dict[str, Any]:
                 elif name in union.unresolved:
                     present = "unknown"
                 else:
-                    present = any(s in ("ok", "blank", "invalid") for s in statuses)
+                    present = any(s in _PRESENT for s in statuses)
                 # Valid if any source has a valid value, as union decides.
                 invalid_reasons = [union.invalid[name]] if name in union.invalid else []
                 blank = name in union.blank
@@ -489,14 +508,22 @@ def build_report(evaluation: ServiceEvaluation) -> Dict[str, Any]:
             # A blank value was read and breaks the contract: never valid.
             if blank and not invalid_reasons:
                 invalid_reasons = ["required but blank"]
+            if invalid_reasons:
+                valid = False
+            elif present is True and "ok" in statuses:
+                valid = True
+            else:
+                # Not present, or present only as values EnvShield never
+                # saw (R0-5): no claim either way.
+                valid = None
+                if present is True:
+                    unverified.append(name)
             entry.update(
                 {
                     "secret": bool(field_schema.get("secret", False)),
                     "requiredness": schema_types.requiredness_label(field_schema),
                     "present": present,
-                    "valid": False
-                    if invalid_reasons
-                    else (True if present is True else None),
+                    "valid": valid,
                     "reason": invalid_reasons[0] if invalid_reasons else None,
                 }
             )
@@ -536,7 +563,12 @@ def build_report(evaluation: ServiceEvaluation) -> Dict[str, Any]:
             if code is not None
             else {"status": "not_checked"}
         ),
-        "summary": {"clean": evaluation.passed and complete, "complete": complete},
+        "summary": {
+            "clean": evaluation.passed and complete,
+            "complete": complete,
+            # Valid-looking values EnvShield never saw; they pass the gate.
+            "unverified": unverified,
+        },
     }
 
 

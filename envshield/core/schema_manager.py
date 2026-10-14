@@ -714,7 +714,18 @@ def render_source(source: Any, schema: Dict[str, Any]) -> None:
         return
     diff = source.diff
     file_path = source.path
-    if diff.is_clean:
+    unchecked = sorted(
+        name
+        for name in getattr(source, "not_inspected", ())
+        if name in diff.present and name not in diff.invalid
+    )
+    if diff.is_clean and unchecked:
+        console.print(
+            "[bold green]✓ In sync with the schema,[/bold green] [yellow]but these "
+            "values aren't in this file, so EnvShield couldn't check them: "
+            f"{', '.join(unchecked)}[/yellow]"
+        )
+    elif diff.is_clean:
         console.print(
             "[bold green]✓ Your configuration is perfectly in sync with the schema![/bold green]"
         )
