@@ -73,7 +73,8 @@ class DockerComposeParser(BaseParser):
         container = self._resolve_container(services, file_path)
         service_def = services.get(container) or {}
         base_dir = os.path.dirname(os.path.abspath(file_path))
-        variables = self._extract_service_environment(service_def, base_dir)
+        variables, fallbacks = self._extract_service_environment(service_def, base_dir)
+        self.fallback_keys = frozenset(fallbacks)
 
         return variables if get_values else set(variables.keys())
 
@@ -123,6 +124,7 @@ class DockerComposeParser(BaseParser):
             )
 
         merged: dict[str, str] = {}
+        fallbacks: set[str] = set()
         resolved_container: str | None = self.container
 
         for file_path in file_paths:
@@ -138,8 +140,14 @@ class DockerComposeParser(BaseParser):
 
             service_def = services.get(resolved_container) or {}
             base_dir = os.path.dirname(os.path.abspath(file_path))
-            merged.update(self._extract_service_environment(service_def, base_dir))
+            layer, layer_fallbacks = self._extract_service_environment(
+                service_def, base_dir
+            )
+            merged.update(layer)
+            # A later layer's entry replaces the earlier one, fallback or not.
+            fallbacks = (fallbacks - set(layer)) | layer_fallbacks
 
+        self.fallback_keys = frozenset(fallbacks)
         return merged if get_values else set(merged.keys())
 
     def _load_yaml_document(self, file_path: str) -> dict:
@@ -172,8 +180,18 @@ class DockerComposeParser(BaseParser):
 
     def _extract_service_environment(
         self, service_def: dict, base_dir: str
-    ) -> dict[str, str]:
+    ) -> tuple[dict[str, str], set[str]]:
+        """The service's {var: value} map, and the names whose value is a
+        '${VAR-x}'/'${VAR:-x}' fallback (see BaseParser.fallback_keys)."""
         variables: dict[str, str] = {}
+        fallbacks: set[str] = set()
+
+        def assign(name: str, value: str, is_fallback: bool) -> None:
+            variables[name] = value
+            if is_fallback:
+                fallbacks.add(name)
+            else:
+                fallbacks.discard(name)
 
         env_files = service_def.get("env_file")
         if env_files:
@@ -199,21 +217,21 @@ class DockerComposeParser(BaseParser):
         if isinstance(environment, dict):
             for key, value in environment.items():
                 raw = str(value) if value is not None else self.UNRESOLVED_VALUE
-                host_var, resolved = self._resolve_interpolation(raw)
-                variables[host_var or key] = resolved
+                host_var, resolved, is_fallback = self._resolve_interpolation(raw)
+                assign(host_var or key, resolved, is_fallback)
         elif isinstance(environment, list):
             for entry in environment:
                 entry = str(entry)
                 if "=" in entry:
                     key, value = entry.split("=", 1)
-                    host_var, resolved = self._resolve_interpolation(value)
-                    variables[host_var or key.strip()] = resolved
+                    host_var, resolved, is_fallback = self._resolve_interpolation(value)
+                    assign(host_var or key.strip(), resolved, is_fallback)
                 else:
-                    variables[entry.strip()] = self.UNRESOLVED_VALUE
+                    assign(entry.strip(), self.UNRESOLVED_VALUE, False)
 
-        return variables
+        return variables, fallbacks
 
-    def _resolve_interpolation(self, value: str) -> tuple[str | None, str]:
+    def _resolve_interpolation(self, value: str) -> tuple[str | None, str, bool]:
         """
         Resolves a value that is entirely one '${VAR}'/'${VAR:-default}'/
         '${VAR-default}' Compose variable-substitution reference. With a fallback, the
@@ -230,11 +248,12 @@ class DockerComposeParser(BaseParser):
         statement about PG_PASS, not about AUTHENTIK_POSTGRESQL__PASSWORD,
         which is purely a container-internal rename. The caller compares
         against the schema using this name instead of the container key
-        whenever one is returned.
+        whenever one is returned. The third value says whether the resolved
+        value is a fallback (BaseParser.fallback_keys).
         """
         match = _INTERPOLATION_RE.match(value.strip())
         if not match:
-            return None, value
+            return None, value, False
         var_name, has_default, default = match.groups()
         resolved = default if has_default else self.UNRESOLVED_VALUE
-        return var_name, resolved
+        return var_name, resolved, bool(has_default)

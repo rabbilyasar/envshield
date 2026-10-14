@@ -877,3 +877,29 @@ class TestMultiFileLayering:
         )
 
         assert variables == {"FOO": "base", "FROM_OVERRIDE_ENV_FILE": "value"}
+
+
+class TestFallbackKeys:
+    """R0-5 (F7): which values are a '${VAR-x}'/'${VAR:-x}' fallback."""
+
+    def test_fallbacks_are_named_and_concrete_values_are_not(self, tmp_path):
+        path = tmp_path / "docker-compose.yml"
+        path.write_text(
+            "services:\n  app:\n    image: x\n    environment:\n"
+            "      A: ${A-1}\n      B: ${B:-2}\n      C: '3'\n      D: ${D}\n"
+        )
+        parser = DockerComposeParser()
+        assert parser.get_vars(str(path), get_values=True)["A"] == "1"
+        assert parser.fallback_keys == {"A", "B"}
+
+    def test_a_later_layer_replaces_a_fallback(self, tmp_path):
+        base = tmp_path / "docker-compose.yml"
+        override = tmp_path / "docker-compose.override.yml"
+        base.write_text(
+            "services:\n  app:\n    image: x\n    environment:\n"
+            "      A: ${A-1}\n      B: ${B-2}\n"
+        )
+        override.write_text("services:\n  app:\n    environment:\n      A: '9'\n")
+        parser = DockerComposeParser()
+        parser.get_vars_for_layers([str(base), str(override)], get_values=True)
+        assert parser.fallback_keys == {"B"}

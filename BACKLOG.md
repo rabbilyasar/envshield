@@ -394,7 +394,7 @@ Grouped as one backlog item per the instruction to avoid five near-duplicate ent
 
 ### BL-094 — Generated TypeScript `int`/`float`/`port` coercion diverges from EnvShield's own validator
 Type: `GENERATION` · Evidence: `CONFIRMED` · Priority: P2
-Related: the `""` → `0` sub-case below is tracked separately as `BL-170` (F8, fixed in v4.8.0 by [#12](https://github.com/rabbilyasar/envshield/issues/12), R0-7); hex, whitespace and exponent remain open here.
+Related: the `""` → `0` sub-case below is tracked separately as `BL-170` (F8, fixed in v4.8.0 by [#12](https://github.com/rabbilyasar/envshield/issues/12), R0-7); hex, whitespace and exponent remain open here, tracked as issue [#37](https://github.com/rabbilyasar/envshield/issues/37).
 Source(s): Discovered this pass while investigating `BL-003`, checking whether boolean coercion was an isolated bug or a broader failure class.
 Component: `generator.py::_zod_base_type` (TypeScript `int`/`float`/`port` field rendering — `z.coerce.number()` / `z.coerce.number().min(1).max(65535)`)
 
@@ -1418,7 +1418,7 @@ Source: the EnvShield v5 planning audit, 2026-10-07, which found eight places wh
 
 ### BL-163 — A reference to a value outside the file is reported `ok, present, valid: true` (F1)
 
-Type: `ROBUSTNESS` / `REPORT HONESTY` · Evidence: `CONFIRMED` (live, 2026-10-14) · Priority: **P1** until [#10](https://github.com/rabbilyasar/envshield/issues/10) lands (the report claims `valid: true` for a value never seen); **P2** afterwards (the gate half, deliberate, v5) · Status: **open**
+Type: `ROBUSTNESS` / `REPORT HONESTY` · Evidence: `CONFIRMED` (live, 2026-10-14) · Priority: **P1** until [#10](https://github.com/rabbilyasar/envshield/issues/10) lands (the report claims `valid: true` for a value never seen); **P2** afterwards (the gate half, deliberate, v5) · Status: **report fixed in the working tree (R0-5), gate open (v5)**
 Component: `parsers/_base.py` (`UNRESOLVED_VALUE`), `parsers/_kubernetes.py`, `parsers/_docker_compose.py`, `core/schema_manager.py::diff_against_schema`, `core/evaluator.py` (variable entry, `valid`)
 Source: v5 planning audit, 2026-10-07 — alias **F1**.
 
@@ -1427,11 +1427,11 @@ Source: v5 planning audit, 2026-10-07 — alias **F1**.
 - **Expected behavior:** the report says the value was not seen (never `valid: true`); the gate's treatment of such values is a v5 decision (see Decision).
 - **Impact:** a CI consumer of `--json` reads `valid: true` as "EnvShield checked this." It did not. For a `type`/`enum`/`pattern` field a wrong value deployed through the external reference is never caught.
 - **Relationships:** `BL-166` (F4, in-manifest Secret whose value is visible but not inspected), `BL-164` (F2, same placeholder in `completeness: union`), `BL-169` (F7). `BL-011` sub-items 2–3 deliberately left an external reference present/unresolved (no keys are knowable) and are fixed; this finding is about the *claim*, not the parsing. `has_unresolved_source` (envFrom to an external source) already reports `unresolved`; per-variable references do not.
-- **Decision:** **Report: fixed in v4.8.0 by [#10](https://github.com/rabbilyasar/envshield/issues/10).** **Gate: a deliberate, documented limitation in v4.8.0 — `check` keeps passing these values — fixed in v5 ([#16](https://github.com/rabbilyasar/envshield/issues/16), [#17](https://github.com/rabbilyasar/envshield/issues/17)).** The static/runtime boundary in charter §7 means an external value cannot be validated here; v5 is where "unverified" becomes a visible verdict the gate can act on.
+- **Decision:** **Report: fixed in v4.8.0 by [#10](https://github.com/rabbilyasar/envshield/issues/10).** **Report fixed in the working tree for R0-5 ([#10](https://github.com/rabbilyasar/envshield/issues/10)), not yet merged:** the variable is `valid: null` (never `true`), its per-source status is `not_visible`, its name is in `summary.unverified`, and the human `check` line names it instead of saying "perfectly in sync". Exit code, `success` and `results` are unchanged. Tests: `test_evaluator.py::TestValuesEnvShieldNeverSaw` (fail against the previous code). **Gate: a deliberate, documented limitation in v4.8.0 — `check` keeps passing these values — fixed in v5 ([#16](https://github.com/rabbilyasar/envshield/issues/16), [#17](https://github.com/rabbilyasar/envshield/issues/17)).** The static/runtime boundary in charter §7 means an external value cannot be validated here; v5 is where "unverified" becomes a visible verdict the gate can act on.
 
 ### BL-164 — `completeness: union` treats a placeholder as satisfying a key (F2)
 
-Type: `ROBUSTNESS` / `REPORT HONESTY` · Evidence: `CONFIRMED` (live, 2026-10-14) · Priority: **P1** until [#10](https://github.com/rabbilyasar/envshield/issues/10) lands; **P2** afterwards (gate half, v5) · Status: **open**
+Type: `ROBUSTNESS` / `REPORT HONESTY` · Evidence: `CONFIRMED` (live, 2026-10-14) · Priority: **P1** until [#10](https://github.com/rabbilyasar/envshield/issues/10) lands; **P2** afterwards (gate half, v5) · Status: **report fixed in the working tree (R0-5), gate open (v5)**
 Component: `core/schema_manager.py::_union_key_status`, `core/evaluator.py` (union branch)
 Source: v5 planning audit, 2026-10-07 — alias **F2**.
 
@@ -1440,7 +1440,7 @@ Source: v5 planning audit, 2026-10-07 — alias **F2**.
 - **Expected behavior:** a key satisfied only by something EnvShield could not see is reported as such, not as `ok`.
 - **Impact:** same as `BL-163`, in the one mode that is supposed to prove "present *and valid* somewhere."
 - **Relationships:** `BL-163` (F1), `BL-030` (union design; its "union means presence, not values" rule is unchanged). Not a regression of `BL-030`: the carve-out mirrors the single-source one.
-- **Decision:** **Report: fixed in v4.8.0 by [#10](https://github.com/rabbilyasar/envshield/issues/10).** **Gate: deliberate limitation in v4.8.0; fixed in v5.**
+- **Decision:** **Report: fixed in v4.8.0 by [#10](https://github.com/rabbilyasar/envshield/issues/10).** **Report fixed in the working tree for R0-5 ([#10](https://github.com/rabbilyasar/envshield/issues/10)), not yet merged:** the variable is `valid: null` (never `true`), its per-source status is `not_visible`, its name is in `summary.unverified`, and the human `check` line names it instead of saying "perfectly in sync". Exit code, `success` and `results` are unchanged. Tests: `test_evaluator.py::TestValuesEnvShieldNeverSaw` (fail against the previous code). The union pass/fail decision (`_union_key_status`) is unchanged. **Gate: deliberate limitation in v4.8.0; fixed in v5.**
 
 ### BL-165 — A `requiredIf` trigger that EnvShield cannot see silently drops the dependent requirement (F3)
 
@@ -1457,7 +1457,7 @@ Source: v5 planning audit, 2026-10-07 — alias **F3**.
 
 ### BL-166 — An in-manifest Kubernetes Secret whose key exists is reported valid without inspecting its value (F4)
 
-Type: `BUG` / `FALSE-CLEAN` · Evidence: `CONFIRMED` (live, 2026-10-14) · Priority: **P1**, both halves (the value is in the file EnvShield was given) · Status: **open**
+Type: `BUG` / `FALSE-CLEAN` · Evidence: `CONFIRMED` (live, 2026-10-14) · Priority: **P1**, both halves (the value is in the file EnvShield was given) · Status: **report fixed in the working tree (R0-5), gate open (v5)**
 Component: `parsers/_kubernetes.py` (`env` loop, `secretKeyRef` branch), `core/schema_manager.py::diff_against_schema`
 Source: v5 planning audit, 2026-10-07 — alias **F4**.
 
@@ -1466,7 +1466,7 @@ Source: v5 planning audit, 2026-10-07 — alias **F4**.
 - **Expected behavior:** the value in the manifest is validated like any inline value, or the report says it was not inspected.
 - **Impact:** an invalid value, visible in the committed manifest, passes the gate. Unlike `BL-163` this is knowable.
 - **Relationships:** `BL-163` (F1); `BL-011` sub-item 3 (key cross-check — fixed, and left value decoding explicitly out).
-- **Decision:** **Report: fixed in v4.8.0 by [#10](https://github.com/rabbilyasar/envshield/issues/10).** **Gate: deliberate limitation in v4.8.0; fixed in v5 ([#16](https://github.com/rabbilyasar/envshield/issues/16), [#17](https://github.com/rabbilyasar/envshield/issues/17)).** **Release gate:** this is an open P1. Shipping v4.8.0 with the gate half open **requires the user's explicit override at R0-8 ([#13](https://github.com/rabbilyasar/envshield/issues/13))**; it is not waived by this entry.
+- **Decision:** **Report: fixed in v4.8.0 by [#10](https://github.com/rabbilyasar/envshield/issues/10).** **Report fixed in the working tree for R0-5 ([#10](https://github.com/rabbilyasar/envshield/issues/10)), not yet merged:** the variable is `valid: null` (never `true`), its per-source status is `not_visible`, its name is in `summary.unverified`, and the human `check` line names it instead of saying "perfectly in sync". Exit code, `success` and `results` are unchanged. Tests: `test_evaluator.py::TestValuesEnvShieldNeverSaw` (fail against the previous code). **Gate: deliberate limitation in v4.8.0; fixed in v5 ([#16](https://github.com/rabbilyasar/envshield/issues/16), [#17](https://github.com/rabbilyasar/envshield/issues/17)).** **Release gate:** this is an open P1. Shipping v4.8.0 with the gate half open **requires the user's explicit override at R0-8 ([#13](https://github.com/rabbilyasar/envshield/issues/13))**; it is not waived by this entry.
 
 ### BL-167 — The JSON report says `valid: true` for a blank value (F5)
 
@@ -1496,7 +1496,7 @@ Source: v5 planning audit, 2026-10-07 — alias **F6**.
 
 ### BL-169 — A Compose `${VAR-x}` / `${VAR:-x}` fallback is validated as the deployed value, and `-` and `:-` are treated alike (F7)
 
-Type: `DEPLOYMENT` / `REPORT HONESTY` · Evidence: `CONFIRMED` (live, 2026-10-14) · Priority: **P2** (same class as `BL-011`) · Status: **open**
+Type: `DEPLOYMENT` / `REPORT HONESTY` · Evidence: `CONFIRMED` (live, 2026-10-14) · Priority: **P2** (same class as `BL-011`) · Status: **report fixed in the working tree (R0-5), gate open (v5)**
 Component: `parsers/_docker_compose.py` (`_INTERPOLATION_RE`, `_resolve_interpolation`)
 Source: v5 planning audit, 2026-10-07 — alias **F7**.
 
@@ -1505,7 +1505,7 @@ Source: v5 planning audit, 2026-10-07 — alias **F7**.
 - **Expected behavior:** the fallback is reported as a fallback, with `-` and `:-` distinguished; whether an invalid fallback should fail the gate is a v5 decision.
 - **Impact:** a failing or passing result describes a value that may never be deployed.
 - **Relationships:** `BL-011` sub-item 1 (made `${VAR-default}` resolve at all, fixed 2026-09-03; this entry is the validation semantics on top of it); `BL-163`.
-- **Decision:** **Report: fixed in v4.8.0 by [#10](https://github.com/rabbilyasar/envshield/issues/10).** **Gate: deliberate limitation in v4.8.0; fixed in v5.** No override needed (P2).
+- **Decision:** **Report: fixed in v4.8.0 by [#10](https://github.com/rabbilyasar/envshield/issues/10).** **Report fixed in the working tree for R0-5 ([#10](https://github.com/rabbilyasar/envshield/issues/10)), not yet merged:** the variable is `valid: null` (never `true`), its per-source status is `not_visible`, its name is in `summary.unverified`, and the human `check` line names it instead of saying "perfectly in sync". Exit code, `success` and `results` are unchanged. Tests: `test_evaluator.py::TestValuesEnvShieldNeverSaw` (fail against the previous code). The Compose parser now records which values are fallbacks (`BaseParser.fallback_keys`); a valid fallback is `not_visible`, an invalid one still fails as before. `-` and `:-` are still treated alike (v5). **Gate: deliberate limitation in v4.8.0; fixed in v5.** No override needed (P2).
 
 ### BL-170 — The generated zod loader turns an empty `int`/`float`/`port` into `0` (F8)
 
@@ -1530,7 +1530,7 @@ Source: found while fixing `BL-168` (R0-4, [#9](https://github.com/rabbilyasar/e
 - **Current behavior:** `completeness: union`, schema `PORT` (`type = "port"`, `required = false`), `.env` with `PORT=`. The per-source `.env` result says `invalid` (`must be a port number from 1-65535`), but `check --json` reports `success: true` and exits 0, because the union verdict decides.
 - **Expected behavior:** the same rule as a single source: an empty optional value is validated.
 - **Relationships:** `BL-168`, `BL-030`.
-- **Decision:** **open, not fixed** — R0-4's non-goals exclude the union classifier. Proposed follow-up issue.
+- **Decision:** **open, not fixed** — R0-4's non-goals exclude the union classifier. Tracked as issue [#36](https://github.com/rabbilyasar/envshield/issues/36).
 
 ### BL-171 — Eight more entries cite pre-rebase commit SHAs that are not in `main`'s history
 
