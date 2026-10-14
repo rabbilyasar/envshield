@@ -1051,7 +1051,7 @@ Component: `check <file>` ad-hoc path, `init`, `doctor`
 
 ### BL-182 — Discovery echoes the user's source lines (including secret literals) through Python `SyntaxWarning`s
 
-Type: `SECURITY` / `BUG` · Evidence: `CONFIRMED` (real-repo trial and synthetic reproduction, 2026-10-14) · Priority: **P0** (CLAUDE.md §4: any bug that can expose a secret is P0) · Status: **fixed; merged as `094d662` (PR #49); to be released in `v4.8.1`**
+Type: `SECURITY` / `BUG` · Evidence: `CONFIRMED` (real-repo trial and synthetic reproduction, 2026-10-14) · Priority: **P0** (CLAUDE.md §4: any bug that can expose a secret is P0) · Status: **fixed; merged as `094d662` (PR #49); released in `v4.8.1` (2026-10-14)**
 Component: Python discovery (`ast.parse` of user files)
 
 - **Current behavior:** `check` on issuebear and issuebear-management prints `tools/mysql.py:103: SyntaxWarning: "\s" is an invalid escape sequence` plus the offending source line, before EnvShield's own output. The warning is raised by parsing the user's file, not by EnvShield code.
