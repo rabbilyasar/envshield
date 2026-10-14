@@ -481,3 +481,13 @@ def test_report_summary_agrees_with_the_verdict(name, tmp_path):
         assert summary["clean"] == evaluation.passed
         if evaluation.passed:
             assert summary["complete"] is True
+
+
+def test_a_blank_variable_is_never_reported_valid(tmp_path):
+    """R0-4 (F5): the report agrees with the exit code about a blank value."""
+    _, evaluations = _evaluate_scenario("missing_blank_invalid_extra", tmp_path)
+    report = evaluator.build_report(evaluations[0])
+    variables = {v["name"]: v for v in report["variables"]}
+    assert variables["B"]["sources"][0]["status"] == "blank"
+    assert variables["B"]["valid"] is False
+    assert variables["B"]["reason"] == "required but blank"

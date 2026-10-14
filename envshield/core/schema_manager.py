@@ -206,7 +206,9 @@ def diff_against_schema(
     file actually falls back the same way the schema documents, or falls
     back at all, so its own copy has to be explicit rather than implied. A
     present, non-blank value still needs to match its declared
-    type/enum/pattern.
+    type/enum/pattern. An empty value that isn't required (optional, or a
+    `requiredIf` that doesn't hold) is validated too, as "": a typed field,
+    or a `pattern` that doesn't match "", is invalid; a plain string is fine.
 
     `has_unresolved_source` (default False, so every caller that has no
     such concept -- a dotenv file, a Python module, a Compose file -- is
@@ -249,7 +251,12 @@ def diff_against_schema(
         # that placeholder string against a declared type/enum/pattern would
         # otherwise always fail, misreporting a legitimately-unknown value
         # as an invalid one.
-        if key in schema and value and value != BaseParser.UNRESOLVED_VALUE:
+        #
+        # An empty value is judged the same way: a required one is already
+        # `blank` (above) and isn't also `invalid`; any other one (optional,
+        # or a `requiredIf` that doesn't currently hold) is validated as ""
+        # because the application receives "", so a typed field fails.
+        if key in schema and key not in blank and value != BaseParser.UNRESOLVED_VALUE:
             error = schema_types.validate_value(value, schema[key])
             if error:
                 invalid[key] = error

@@ -1470,7 +1470,7 @@ Source: v5 planning audit, 2026-10-07 — alias **F4**.
 
 ### BL-167 — The JSON report says `valid: true` for a blank value (F5)
 
-Type: `BUG` / `REPORT` · Evidence: `CONFIRMED` (live, 2026-10-14) · Priority: **P2** (the exit code and the `blank` list are correct) · Status: **open**
+Type: `BUG` / `REPORT` · Evidence: `CONFIRMED` (live, 2026-10-14) · Priority: **P2** (the exit code and the `blank` list are correct) · Status: **fixed in the working tree for R0-4, not yet merged**
 Component: `core/evaluator.py` (variable entry, `present`/`valid`)
 Source: v5 planning audit, 2026-10-07 — alias **F5**.
 
@@ -1478,11 +1478,11 @@ Source: v5 planning audit, 2026-10-07 — alias **F5**.
 - **Current behavior:** `.env` with `NAME=` and `PORT=` (both required): `check` exits 1 and the legacy `results[].blank` lists both, but `reports[].variables[]` has `status: blank` with `present: true`, `valid: true`, `reason: null`.
 - **Expected behavior:** a blank required value is not `valid: true`.
 - **Impact:** a consumer that reads `reports` rather than `results` or the exit code sees a contradiction on a failing run.
-- **Decision:** **Fixed in v4.8.0 by [#9](https://github.com/rabbilyasar/envshield/issues/9)** (together with `BL-168`).
+- **Decision:** **Fixed in v4.8.0 by [#9](https://github.com/rabbilyasar/envshield/issues/9)** (together with `BL-168`). `build_report` now sets `valid: false` and `reason: "required but blank"` for a blank variable (`core/evaluator.py`); the legacy `results` shape is unchanged. Tests: `test_cli.py::TestEmptyValues`, `test_evaluator.py::test_a_blank_variable_is_never_reported_valid`; they fail against the previous code and pass now. No golden scenario changed.
 
 ### BL-168 — An optional typed variable that is empty passes validation (F6)
 
-Type: `BUG` · Evidence: `CONFIRMED` (live, 2026-10-14) · Priority: **P2** (optional variable) · Status: **open**
+Type: `BUG` · Evidence: `CONFIRMED` (live, 2026-10-14) · Priority: **P2** (optional variable) · Status: **fixed in the working tree for R0-4, not yet merged**
 Component: `core/schema_manager.py::diff_against_schema` (`if key in schema and value and ...`)
 Source: v5 planning audit, 2026-10-07 — alias **F6**.
 
@@ -1491,7 +1491,8 @@ Source: v5 planning audit, 2026-10-07 — alias **F6**.
 - **Expected behavior:** an empty value for a typed optional variable is validated (or reported), not passed.
 - **Impact:** code that does `int(os.environ["OPT_PORT"])` crashes on a file `check` accepted.
 - **Relationships:** `BL-167` (F5). Changing it makes existing files with an empty optional value start failing; call out in CHANGELOG at R0-8.
-- **Decision:** **Fixed in v4.8.0 by [#9](https://github.com/rabbilyasar/envshield/issues/9).**
+- **Decision:** **Fixed in v4.8.0 by [#9](https://github.com/rabbilyasar/envshield/issues/9).** `diff_against_schema` validates every non-required empty value as `""` (a typed field, or a pattern that doesn't match `""`, is `invalid`; a plain string is fine); a required empty value stays `blank` and is not also `invalid`; a `defaultValue` never excuses an empty one. Covers `.env`, a Python config and the `--process-env` overlay; the pinned `PORT` table is `test_cli.py::TestEmptyValues`, the rest `test_schema_manager.py::TestEmptyValues`. No golden scenario changed. **CHANGELOG (R0-8):** configurations that were broken now fail: an optional typed variable set to an empty value was accepted before.
+- **Union mode not covered:** see `BL-172`.
 
 ### BL-169 — A Compose `${VAR-x}` / `${VAR:-x}` fallback is validated as the deployed value, and `-` and `:-` are treated alike (F7)
 
@@ -1519,6 +1520,18 @@ Source: v5 planning audit, 2026-10-07 — alias **F8**.
 - **Relationships:** `BL-094` (the broader divergence; its `""` observation is this entry — hex, whitespace and exponent remain there), `BL-003`.
 - **Decision:** **Fixed in v4.8.0 by [#12](https://github.com/rabbilyasar/envshield/issues/12).**
 
+### BL-172 — `completeness: union` still passes an empty optional value (F6 divergence)
+
+Type: `BUG` · Evidence: `CONFIRMED` (live, 2026-10-14) · Priority: **P2** · Status: **open**
+Component: `core/schema_manager.py::_union_key_status`, `evaluate_union_completeness`
+Source: found while fixing `BL-168` (R0-4, [#9](https://github.com/rabbilyasar/envshield/issues/9)), which excluded the union classifier from its scope.
+
+- **Problem:** `_union_key_status` returns `"blank"` for an empty value and `evaluate_union_completeness` then skips a key that isn't required, so an optional typed variable that is empty is never validated.
+- **Current behavior:** `completeness: union`, schema `PORT` (`type = "port"`, `required = false`), `.env` with `PORT=`. The per-source `.env` result says `invalid` (`must be a port number from 1-65535`), but `check --json` reports `success: true` and exits 0, because the union verdict decides.
+- **Expected behavior:** the same rule as a single source: an empty optional value is validated.
+- **Relationships:** `BL-168`, `BL-030`.
+- **Decision:** **open, not fixed** — R0-4's non-goals exclude the union classifier. Proposed follow-up issue.
+
 ### BL-171 — Eight more entries cite pre-rebase commit SHAs that are not in `main`'s history
 
 Type: `DOCS` · Evidence: `CONFIRMED` (2026-10-14: `git merge-base --is-ancestor <sha> HEAD` fails for each) · Priority: **P3** · Status: **open — proposed follow-up, not done in R0-3**
@@ -1527,7 +1540,7 @@ Source: found while verifying the SHAs R0-3 was asked to correct (`BL-023`, `BL-
 
 - **Problem:** each SHA below still resolves (`git cat-file -e`) but is only reachable from the object database, not from `main`. The commit on `main` with the same subject is listed.
 - **Mapping:** `0886dcb` → `1b61834` (BL-030, lines 1022/1024); `194cd58` → `8633464` (BL-106); `32b3098` → `0d5fdcb` (BL-109); `619c307` → `458b5a6` (env_file/extends hardening); `632c185` → `bd3635b` (BL-113); `87a42d6` → `1791dbd` (BL-110); `b48ff7f` → `52e55f5` (BL-114); `ceb8f0c` → `24fac9b` (BL-112).
-- **Decision:** left uncorrected here because R0-3's scope names `BL-023`/`BL-115` only; a mechanical follow-up (one issue, `BACKLOG.md` only) is proposed for review.
+- **Decision:** left uncorrected here because R0-3's scope names `BL-023`/`BL-115` only. Tracked as issue [#33](https://github.com/rabbilyasar/envshield/issues/33) (proposed, `BACKLOG.md` only).
 
 ---
 

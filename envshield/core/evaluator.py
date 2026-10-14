@@ -483,6 +483,12 @@ def build_report(evaluation: ServiceEvaluation) -> Dict[str, Any]:
                     present = any(s in ("ok", "blank", "invalid") for s in statuses)
                 # Valid if any source has a valid value, as union decides.
                 invalid_reasons = [union.invalid[name]] if name in union.invalid else []
+                blank = name in union.blank
+            else:
+                blank = "blank" in statuses
+            # A blank value was read and breaks the contract: never valid.
+            if blank and not invalid_reasons:
+                invalid_reasons = ["required but blank"]
             entry.update(
                 {
                     "secret": bool(field_schema.get("secret", False)),
