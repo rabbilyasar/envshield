@@ -48,8 +48,8 @@ All are live-reproduced, not inferred.
 **2026-10-01: `BL-154`** (Part 5c) — EnvShield wrote through
 repository-controlled symlinks to files outside the project (`setup`,
 `schema sync`, `generate`, `import`, `init`, `service add`, hook install).
-**Fixed with regression coverage; committed as `987acdd`, unreleased.**
-The released `v4.7.4` is affected: the next release (v4.8.0) must include the fix, together with `BL-162`.
+**Fixed with regression coverage; committed as `987acdd`; released in `v4.8.0`** (2026-10-14), together with `BL-162`.
+`v4.7.4` and earlier are affected.
 
 **Status as of 2026-08-30: every item in this Part is fixed AND released in
 `v4.6.1`.** `BL-001`–`BL-004` (commits `63d6581`, `77be1e5`, `f478f9f`,
@@ -1281,7 +1281,7 @@ Component: `core/service_manager.py` (`_infer_from_invocation_dir` and its calle
 
 ## Part 5c — Evaluator migration
 
-Decisions: [docs/architecture/evaluator-decisions.md](docs/architecture/evaluator-decisions.md). Phase status: [progress.md](progress.md). Found and, unless marked open, fixed on 2026-10-01. The evaluator migration is committed as `bcf2133`, `BL-154` as `987acdd` and `BL-162` as `e31c8f5`; none of it is released (latest tag `v4.7.4`). Reconciled 2026-10-14 (R0-3, [#8](https://github.com/rabbilyasar/envshield/issues/8)): this header said "in the working tree ... not yet committed."
+Decisions: [docs/architecture/evaluator-decisions.md](docs/architecture/evaluator-decisions.md). Phase status: [progress.md](progress.md). Found and, unless marked open, fixed on 2026-10-01. The evaluator migration is committed as `bcf2133`, `BL-154` as `987acdd` and `BL-162` as `e31c8f5`; all of it is released in `v4.8.0` (2026-10-14). Reconciled 2026-10-14 (R0-3, [#8](https://github.com/rabbilyasar/envshield/issues/8)): this header said "in the working tree ... not yet committed."
 
 ### BL-149 — `defaultValue` meant two different things: `explain` and `schema diff` called a defaulted variable optional
 
@@ -1327,7 +1327,7 @@ Component: `core/setup_manager.py` (`run_setup`)
 
 ### BL-154 — EnvShield wrote through repository-controlled symlinks, to paths outside the project
 
-Type: `SECURITY` · Evidence: `CONFIRMED` (live reproduction, 2026-10-01) · Priority: **P0** (untrusted repository contents → a secret-bearing write outside the trust boundary; §4 invariant 3) · Status: **fixed 2026-10-01, regression-tested; committed as `987acdd`, unreleased — ships in v4.8.0 together with `BL-162`** (issue [#7](https://github.com/rabbilyasar/envshield/issues/7))
+Type: `SECURITY` · Evidence: `CONFIRMED` (live reproduction, 2026-10-01) · Priority: **P0** (untrusted repository contents → a secret-bearing write outside the trust boundary; §4 invariant 3) · Status: **fixed 2026-10-01, regression-tested; committed as `987acdd`; released in `v4.8.0` together with `BL-162`** (issue [#7](https://github.com/rabbilyasar/envshield/issues/7))
 Component: `core/file_updater.py` (`open_for_write`, `assert_safe_write_target`) and every writer
 Source: evaluator migration, while adapting `setup` (reported unverified by the 2026-09-30 audit, reproduced here).
 
@@ -1338,7 +1338,7 @@ Source: evaluator migration, while adapting `setup` (reported unverified by the 
 - **Regression coverage:** `tests/test_write_safety.py` (34 tests): each writer through the real CLI against a symlink to an outside file, with a planted secret and a byte-for-byte snapshot of the outside directory; in-project symlinks (dotenv and Python local file, `setup` and `sync`); symlinked parents inside and outside; directory and FIFO targets; an explicit output path outside the project; and normal create/overwrite/patch paths (content, comments, `0600`, executable hooks). Run against the pre-fix write behavior (the primitive swapped for plain `open`/`makedirs`, in an isolated copy with its own venv): 17 security cases fail and the FIFO case hangs; 5 pass there because `_ensure_within_project` already refuses an *overridden* path resolving outside (two layers now). **Parent-symlink cases added 2026-10-01 (follow-up):** `generate` and `import --output` with an output under a symlinked directory, pointing both outside and inside the project, are refused; the same commands still write through a regular parent directory. All four refusal cases fail against the pre-fix write behavior. `init` writes only files directly in the project root (`env.schema.toml`, `envshield.yml`, `.gitignore`, `.env.example`), so no directory below the root can be a symlink; its test instead pins that the root is trusted: `init` run through a symlinked path to the project works and writes only into the real directory. No implementation change was needed. Three tests in `test_file_updater.py` that documented the old contract ("a symlink … is followed, not rejected", a dangling symlink "materializes a new file at its target", existing permissions untouched) were rewritten to assert refusal and an unchanged target.
 - **Behavior changes:** an explicit output path outside the project (`generate /elsewhere/config.py`, `setup ../x/.env`, `import --output /elsewhere/…`) is now refused; a project that keeps `.env` (or any written file) as a deliberate symlink must replace it with a regular file. `open_new_secret_file` now leaves an existing file `0600` (every caller already did this right after).
 - **Residual risk:** on a platform without `dir_fd` (Windows) the fallback checks each component with `lstat` before a plain open: correct against committed symlinks, not race-free. Hard links aren't detected (Git can't commit one, so repository contents can't plant one). Reads still follow symlinks (a symlinked `envshield.yml` is read; see BL-161); a read never outputs values, so that's a robustness issue, not this vulnerability.
-- **Decision:** **resolved in code and committed (`987acdd`)** — the blocker clears when it is released. It must not ship without `BL-162` (its regression, fixed in `e31c8f5`); both ship together in v4.8.0. Until then the released `v4.7.4` remains affected.
+- **Decision:** **resolved in code and committed (`987acdd`); released in `v4.8.0` (2026-10-14)** — the blocker is cleared. It must not ship without `BL-162` (its regression, fixed in `e31c8f5`); both ship together in v4.8.0. Until then the released `v4.7.4` remains affected.
 
 ### BL-161 — A non-mapping `envshield.yml` crashes commands with an uncaught `AttributeError`
 
@@ -1349,7 +1349,7 @@ Component: `config/manager.py::load_config` and its callers
 
 ### BL-162 — A failed permission change emptied an existing secrets file (BL-154 regression)
 
-Type: `BUG` / `DATA LOSS` · Evidence: `CONFIRMED` on Linux by simulation (a patched `os.fchmod`); not run on Windows · Priority: **P1** · Status: **fixed; committed as `e31c8f5`, unreleased — ships in v4.8.0 together with `BL-154`** (issue [#7](https://github.com/rabbilyasar/envshield/issues/7)) · Introduced by `987acdd` (BL-154), never released
+Type: `BUG` / `DATA LOSS` · Evidence: `CONFIRMED` on Linux by simulation (a patched `os.fchmod`); not run on Windows · Priority: **P1** · Status: **fixed; committed as `e31c8f5`; released in `v4.8.0` together with `BL-154`** (issue [#7](https://github.com/rabbilyasar/envshield/issues/7)) · Introduced by `987acdd` (BL-154), never released
 Component: `core/file_updater.py::open_for_write`, `update_variables_in_file`; `core/hooks_manager.py` hook install
 
 - **Problem:** `open_for_write` opened with `O_TRUNC`, then called `os.fchmod` for a secret file. When `fchmod` failed, the existing file was already empty. v4.7.4 wrote first and changed permissions afterwards, so it never lost content.
@@ -1419,7 +1419,7 @@ Source: the EnvShield v5 planning audit, 2026-10-07, which found eight places wh
 
 ### BL-163 — A reference to a value outside the file is reported `ok, present, valid: true` (F1)
 
-Type: `ROBUSTNESS` / `REPORT HONESTY` · Evidence: `CONFIRMED` (live, 2026-10-14) · Priority: **P1** until [#10](https://github.com/rabbilyasar/envshield/issues/10) lands (the report claims `valid: true` for a value never seen); **P2** afterwards (the gate half, deliberate, v5) · Status: **report fixed (`6e9dbec`, merged to `main`, unreleased — ships in v4.8.0); gate open (v5, P2)**
+Type: `ROBUSTNESS` / `REPORT HONESTY` · Evidence: `CONFIRMED` (live, 2026-10-14) · Priority: **P1** until [#10](https://github.com/rabbilyasar/envshield/issues/10) lands (the report claims `valid: true` for a value never seen); **P2** afterwards (the gate half, deliberate, v5) · Status: **report fixed (`6e9dbec`, released in `v4.8.0`); gate open (v5, P2)**
 Component: `parsers/_base.py` (`UNRESOLVED_VALUE`), `parsers/_kubernetes.py`, `parsers/_docker_compose.py`, `core/schema_manager.py::diff_against_schema`, `core/evaluator.py` (variable entry, `valid`)
 Source: v5 planning audit, 2026-10-07 — alias **F1**.
 
@@ -1432,7 +1432,7 @@ Source: v5 planning audit, 2026-10-07 — alias **F1**.
 
 ### BL-164 — `completeness: union` treats a placeholder as satisfying a key (F2)
 
-Type: `ROBUSTNESS` / `REPORT HONESTY` · Evidence: `CONFIRMED` (live, 2026-10-14) · Priority: **P1** until [#10](https://github.com/rabbilyasar/envshield/issues/10) lands; **P2** afterwards (gate half, v5) · Status: **report fixed (`6e9dbec`, merged to `main`, unreleased — ships in v4.8.0); gate open (v5, P2)**
+Type: `ROBUSTNESS` / `REPORT HONESTY` · Evidence: `CONFIRMED` (live, 2026-10-14) · Priority: **P1** until [#10](https://github.com/rabbilyasar/envshield/issues/10) lands; **P2** afterwards (gate half, v5) · Status: **report fixed (`6e9dbec`, released in `v4.8.0`); gate open (v5, P2)**
 Component: `core/schema_manager.py::_union_key_status`, `core/evaluator.py` (union branch)
 Source: v5 planning audit, 2026-10-07 — alias **F2**.
 
@@ -1445,7 +1445,7 @@ Source: v5 planning audit, 2026-10-07 — alias **F2**.
 
 ### BL-165 — A `requiredIf` trigger that EnvShield cannot see silently drops the dependent requirement (F3)
 
-Type: `BUG` / `FALSE-CLEAN` · Evidence: `CONFIRMED` (live, 2026-10-14) · Priority: **P1** (silent false-clean, release-philosophy question 3) · Status: **fixed (`4496ac1`, merged to `main`, unreleased — ships in v4.8.0)**
+Type: `BUG` / `FALSE-CLEAN` · Evidence: `CONFIRMED` (live, 2026-10-14) · Priority: **P1** (silent false-clean, release-philosophy question 3) · Status: **fixed (`4496ac1`, released in `v4.8.0`)**
 Component: `core/schema_types.py::_condition_holds`, `core/schema_manager.py::diff_against_schema`
 Source: v5 planning audit, 2026-10-07 — alias **F3**.
 
@@ -1458,7 +1458,7 @@ Source: v5 planning audit, 2026-10-07 — alias **F3**.
 
 ### BL-166 — An in-manifest Kubernetes Secret whose key exists is reported valid without inspecting its value (F4)
 
-Type: `BUG` / `FALSE-CLEAN` · Evidence: `CONFIRMED` (live, 2026-10-14) · Priority: **P1**, both halves (the value is in the file EnvShield was given) · Status: **report fixed (`6e9dbec`, merged to `main`, unreleased — ships in v4.8.0); gate open (v5) — overridden for v4.8.0**
+Type: `BUG` / `FALSE-CLEAN` · Evidence: `CONFIRMED` (live, 2026-10-14) · Priority: **P1**, both halves (the value is in the file EnvShield was given) · Status: **report fixed (`6e9dbec`, released in `v4.8.0`); gate open (v5) — overridden for v4.8.0**
 Component: `parsers/_kubernetes.py` (`env` loop, `secretKeyRef` branch), `core/schema_manager.py::diff_against_schema`
 Source: v5 planning audit, 2026-10-07 — alias **F4**.
 
@@ -1472,7 +1472,7 @@ Source: v5 planning audit, 2026-10-07 — alias **F4**.
 
 ### BL-167 — The JSON report says `valid: true` for a blank value (F5)
 
-Type: `BUG` / `REPORT` · Evidence: `CONFIRMED` (live, 2026-10-14) · Priority: **P2** (the exit code and the `blank` list are correct) · Status: **fixed (`828d15f`, merged to `main`, unreleased — ships in v4.8.0)**
+Type: `BUG` / `REPORT` · Evidence: `CONFIRMED` (live, 2026-10-14) · Priority: **P2** (the exit code and the `blank` list are correct) · Status: **fixed (`828d15f`, released in `v4.8.0`)**
 Component: `core/evaluator.py` (variable entry, `present`/`valid`)
 Source: v5 planning audit, 2026-10-07 — alias **F5**.
 
@@ -1484,7 +1484,7 @@ Source: v5 planning audit, 2026-10-07 — alias **F5**.
 
 ### BL-168 — An optional typed variable that is empty passes validation (F6)
 
-Type: `BUG` · Evidence: `CONFIRMED` (live, 2026-10-14) · Priority: **P2** (optional variable) · Status: **fixed (`828d15f`, merged to `main`, unreleased — ships in v4.8.0)**
+Type: `BUG` · Evidence: `CONFIRMED` (live, 2026-10-14) · Priority: **P2** (optional variable) · Status: **fixed (`828d15f`, released in `v4.8.0`)**
 Component: `core/schema_manager.py::diff_against_schema` (`if key in schema and value and ...`)
 Source: v5 planning audit, 2026-10-07 — alias **F6**.
 
@@ -1498,7 +1498,7 @@ Source: v5 planning audit, 2026-10-07 — alias **F6**.
 
 ### BL-169 — A Compose `${VAR-x}` / `${VAR:-x}` fallback is validated as the deployed value, and `-` and `:-` are treated alike (F7)
 
-Type: `DEPLOYMENT` / `REPORT HONESTY` · Evidence: `CONFIRMED` (live, 2026-10-14) · Priority: **P2** (same class as `BL-011`) · Status: **report fixed (`6e9dbec`, merged to `main`, unreleased — ships in v4.8.0); gate open (v5, P2)**
+Type: `DEPLOYMENT` / `REPORT HONESTY` · Evidence: `CONFIRMED` (live, 2026-10-14) · Priority: **P2** (same class as `BL-011`) · Status: **report fixed (`6e9dbec`, released in `v4.8.0`); gate open (v5, P2)**
 Component: `parsers/_docker_compose.py` (`_INTERPOLATION_RE`, `_resolve_interpolation`)
 Source: v5 planning audit, 2026-10-07 — alias **F7**.
 
@@ -1511,7 +1511,7 @@ Source: v5 planning audit, 2026-10-07 — alias **F7**.
 
 ### BL-170 — The generated zod loader turns an empty `int`/`float`/`port` into `0` (F8)
 
-Type: `GENERATION` / `BUG` · Evidence: `CONFIRMED` (live, 2026-10-14; `node` v22.17.1: `Number("")` → `0`) · Priority: **P1** (a missing value silently becomes a valid-looking number; same class as `BL-003`, `z.coerce.boolean()` turning `"false"` into `true`, which was P1) · Status: **fixed (`5b74e57`, merged to `main`, unreleased — ships in v4.8.0)**
+Type: `GENERATION` / `BUG` · Evidence: `CONFIRMED` (live, 2026-10-14; `node` v22.17.1: `Number("")` → `0`) · Priority: **P1** (a missing value silently becomes a valid-looking number; same class as `BL-003`, `z.coerce.boolean()` turning `"false"` into `true`, which was P1) · Status: **fixed (`5b74e57`, released in `v4.8.0`)**
 Component: `core/generator.py::_zod_base_type`
 Source: v5 planning audit, 2026-10-07 — alias **F8**.
 

@@ -880,15 +880,28 @@ backlog (revision-aware service-directory resolution for the explicit
 two-revision form, discovered-file size cap, `DEFAULT_EXCLUDED_DIRS`-style
 pruning) — none are blockers, and none require another Phase 2C milestone.
 
-**Current phase (updated 2026-10-01; commit status corrected 2026-10-14): Evaluator migration.** `check` now
+**Current phase (updated 2026-10-14): `v4.8.0` released; v5 next.**
+`v4.8.0` is the current released version: release commit `3483705`
+(`v4.8.0^{commit}`; the annotated tag object is `0d1c956`), published by
+`publish.yml` run `38571673133` with every job green (tests on 3.10-3.12,
+PyPI trusted publishing with attestations generated, GitHub Release
+created). `pip index versions envshield` lists `4.8.0` as latest, and a
+clean-venv `pip install envshield` yields `4.8.0`: both verified, not
+assumed. It ships `BL-154` (P0) and `BL-162`, the evaluator-backed `check`,
+shared-schema Phases 1-6, and R0-1 to R0-7 (`BL-165`, `BL-167`, `BL-168`,
+`BL-170`, and the report halves of `BL-163`/`BL-164`/`BL-166`/`BL-169`). It
+was released with the user's explicit, v4.8.0-only overrides for two open
+P1s: `BL-095` and `BL-166`'s gate half (recorded in BACKLOG.md). Next is
+V0-1 (#14), the v5 decision record.
+
+**Previous phase (updated 2026-10-01; commit status corrected 2026-10-14): Evaluator migration.** `check` now
 runs on one evaluator (`envshield/core/evaluator.py`) with a versioned,
 value-free report; decisions are in
 [docs/architecture/evaluator-decisions.md](docs/architecture/evaluator-decisions.md),
 step status in [progress.md](progress.md), findings in BACKLOG.md Part 5c.
 It is committed (`bcf2133`) and unreleased. `BL-154` (P0, writes through
 repository-controlled symlinks) is fixed and committed as `987acdd`, and its
-regression `BL-162` as `e31c8f5`; the released `v4.7.4` is affected until
-both ship. Shared System Schema Phase 6 is committed (`26b821b`); the
+regression `BL-162` as `e31c8f5`; both shipped in `v4.8.0`. Shared System Schema Phase 6 is committed (`26b821b`); the
 paragraph below is its record.
 
 **Previous phase (updated 2026-09-30): Shared System Schema.** Latest
