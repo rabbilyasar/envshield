@@ -5,6 +5,7 @@ import ast
 import os
 from typing import Dict, Set, Union
 
+from ..core.discovery import parse_python
 from ..core.exceptions import EnvShieldException
 from ._base import BaseParser
 
@@ -28,7 +29,7 @@ class PythonParser(BaseParser):
         with open(file_path, "r") as f:
             try:
                 # Parse the file content into an AST
-                tree = ast.parse(f.read(), filename=file_path)
+                tree = parse_python(f.read(), file_path)
 
                 # Walk through the top-level nodes in the tree
                 for node in tree.body:
