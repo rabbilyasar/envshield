@@ -1,7 +1,7 @@
 # envshield/core/schema_manager.py
 import datetime
 import os
-from typing import Any, Dict, List, NamedTuple, Optional, Tuple
+from typing import Any, Collection, Dict, List, NamedTuple, Optional, Tuple
 
 from rich.console import Console
 from rich.table import Table
@@ -99,6 +99,9 @@ class SchemaDiff:
         # a clean pass, but the reporting below never claims the variable
         # is absent -- only that it can't be confirmed.
         self.unresolved = unresolved if unresolved is not None else set()
+        # Unresolved because a requiredIf trigger's value couldn't be seen
+        # (R0-6): {variable: trigger name}. Names only, never a value.
+        self.unresolved_triggers: Dict[str, str] = {}
         # Declared names the source contains (names only, never values) --
         # lets a report tell "present and valid" from "absent, not required".
         self.present: set = set()
@@ -151,13 +154,16 @@ class SchemaDiff:
                 f"Out of scope: {', '.join(sorted(self.out_of_scope))} "
                 f"({OUT_OF_SCOPE_HINT})"
             )
-        if self.unresolved:
+        external = self.unresolved - set(self.unresolved_triggers)
+        if external:
             messages.append(
-                f"Cannot confirm: {', '.join(sorted(self.unresolved))} "
+                f"Cannot confirm: {', '.join(sorted(external))} "
                 "(required, but this manifest references an external ConfigMap/Secret "
                 "not included in it -- it may already be supplied from there; verify "
                 "manually, or include it in the manifest to let EnvShield check it)"
             )
+        for key, trigger in sorted(self.unresolved_triggers.items()):
+            messages.append(f"Cannot confirm: {key} ({trigger_reason(trigger)})")
         return "; ".join(messages)
 
 
@@ -189,10 +195,19 @@ def mark_out_of_scope(diff: SchemaDiff, service_name: str) -> None:
         diff.system_only = system_only_vars(service_name)
 
 
+def trigger_reason(trigger: str) -> str:
+    """Why a requiredIf-dependent variable is unresolved (names only)."""
+    return (
+        f"required only if {trigger} has a certain value, and EnvShield "
+        f"can't see {trigger}'s value in this file"
+    )
+
+
 def diff_against_schema(
     schema: Dict[str, Any],
     local_values: Dict[str, str],
     has_unresolved_source: bool = False,
+    not_inspected: Collection[str] = (),
 ) -> SchemaDiff:
     """
     Compares `local_values` (as read from a .env file, a deployment
@@ -220,6 +235,13 @@ def diff_against_schema(
     variable not found in `local_values` is then reported as `unresolved`
     rather than `missing` -- EnvShield genuinely doesn't know whether it's
     supplied, and must not claim either way.
+
+    `not_inspected`: names whose value EnvShield didn't see beyond the
+    UNRESOLVED_VALUE placeholder, which is recognized here anyway (a Compose
+    fallback -- see BaseParser.fallback_keys). A `requiredIf` whose trigger
+    is one of these can't be decided, so a dependent variable that is absent
+    or blank is `unresolved`, naming the trigger, rather than silently not
+    required (R0-6). An empty trigger value is concrete and compares as usual.
     """
     local_vars = set(local_values.keys())
     schema_vars_all = set(schema.keys())
@@ -230,10 +252,24 @@ def diff_against_schema(
         if schema_types.should_be_present(details, local_values)
     }
 
+    opaque = set(not_inspected) | {
+        key
+        for key, value in local_values.items()
+        if value == BaseParser.UNRESOLVED_VALUE
+    }
+    unresolved_triggers: Dict[str, str] = {}
+    for key, details in schema.items():
+        if schema_types.presence_rule(details) != "conditional":
+            continue
+        condition = details.get("requiredIf")
+        trigger = condition.get("var") if isinstance(condition, dict) else None
+        if trigger in opaque and not local_values.get(key):
+            unresolved_triggers[key] = trigger
+
     missing = set()
     blank = set()
-    unresolved = set()
-    for key in schema_vars_required:
+    unresolved = set(unresolved_triggers)
+    for key in schema_vars_required - unresolved:
         if key not in local_values:
             if has_unresolved_source:
                 unresolved.add(key)
@@ -271,6 +307,7 @@ def diff_against_schema(
         unresolved=unresolved,
     )
     diff.present = local_vars & schema_vars_all
+    diff.unresolved_triggers = unresolved_triggers
     return diff
 
 
@@ -756,10 +793,13 @@ def render_source(source: Any, schema: Dict[str, Any]) -> None:
             table.add_row(status, var, file_path)
 
         for var in sorted(diff.unresolved):
+            trigger = diff.unresolved_triggers.get(var)
             table.add_row(
                 "[yellow]Cannot Confirm[/yellow]",
                 var,
-                f"{file_path} (external ConfigMap/Secret reference)",
+                f"{file_path} ({trigger_reason(trigger)})"
+                if trigger
+                else f"{file_path} (external ConfigMap/Secret reference)",
             )
 
         console.print(table)

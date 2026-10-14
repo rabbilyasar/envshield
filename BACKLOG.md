@@ -1444,7 +1444,7 @@ Source: v5 planning audit, 2026-10-07 — alias **F2**.
 
 ### BL-165 — A `requiredIf` trigger that EnvShield cannot see silently drops the dependent requirement (F3)
 
-Type: `BUG` / `FALSE-CLEAN` · Evidence: `CONFIRMED` (live, 2026-10-14) · Priority: **P1** (silent false-clean, release-philosophy question 3) · Status: **open**
+Type: `BUG` / `FALSE-CLEAN` · Evidence: `CONFIRMED` (live, 2026-10-14) · Priority: **P1** (silent false-clean, release-philosophy question 3) · Status: **fixed in the working tree for R0-6, not yet merged**
 Component: `core/schema_types.py::_condition_holds`, `core/schema_manager.py::diff_against_schema`
 Source: v5 planning audit, 2026-10-07 — alias **F3**.
 
@@ -1453,7 +1453,7 @@ Source: v5 planning audit, 2026-10-07 — alias **F3**.
 - **Expected behavior:** when the trigger's value is unknowable, the dependent requirement is reported as unknown/unresolved, not as not required.
 - **Impact:** a required variable can be dropped from validation with a clean exit, which is exactly the false-clean this project treats as a blocker.
 - **Relationships:** `BL-163` (same placeholder); `BL-030` (union already records a *conflicting* trigger as ambiguous rather than guessing; an *unseen* trigger is the unhandled case).
-- **Decision:** **Fixed in v4.8.0 by [#11](https://github.com/rabbilyasar/envshield/issues/11).**
+- **Decision:** **Fixed in v4.8.0 by [#11](https://github.com/rabbilyasar/envshield/issues/11)** (R0-6). `diff_against_schema` takes the source's not-inspected names (R0-5's set: the placeholder, an in-manifest Secret key, a Compose fallback) and recognizes the placeholder itself; a `requiredIf` whose trigger is one of them makes an absent or blank dependent `unresolved` (`SchemaDiff.unresolved_triggers`), which fails like any `unresolved` (exit 1, incomplete). The human table, `summary()` and the report's `reason` name the trigger, never a value or the `equals` literal. An empty, absent or concrete trigger behaves as before. Tests: `test_cli.py::TestRequiredIfTriggerEnvShieldCannotSee` (Compose `${PAYMENTS}`, external K8s Secret, Compose fallback, `PAYMENTS=`/`true`/`false`/absent, union verdict unchanged) and `test_schema_manager.py::TestRequiredIfTriggerNotSeen`; the six new unresolved cases fail against the previous code. **Union mode:** the union verdict (`combined`, `success`, exit code) is unchanged, as the issue requires; a union service's *per-source* entry for the manifest now also lists the dependent as `unresolved`, the same rule applied per source.
 
 ### BL-166 — An in-manifest Kubernetes Secret whose key exists is reported valid without inspecting its value (F4)
 

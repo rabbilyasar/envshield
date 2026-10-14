@@ -130,9 +130,6 @@ def evaluate_source(
             local_values, environment, schema
         )
 
-    diff = schema_manager.diff_against_schema(
-        schema, local_values, has_unresolved_source=parser.has_unresolved_source
-    )
     placeholders = {
         name
         for name, value in local_values.items()
@@ -140,6 +137,12 @@ def evaluate_source(
     }
     source.not_inspected = tuple(
         sorted((placeholders | set(parser.fallback_keys)) - set(source.overlaid))
+    )
+    diff = schema_manager.diff_against_schema(
+        schema,
+        local_values,
+        has_unresolved_source=parser.has_unresolved_source,
+        not_inspected=source.not_inspected,
     )
     # An undeclared requiredIf trigger taken from the environment decides
     # requiredness only; it isn't this file's extra variable.
@@ -508,6 +511,11 @@ def build_report(evaluation: ServiceEvaluation) -> Dict[str, Any]:
             # A blank value was read and breaks the contract: never valid.
             if blank and not invalid_reasons:
                 invalid_reasons = ["required but blank"]
+            trigger_reasons = [
+                schema_manager.trigger_reason(s.diff.unresolved_triggers[name])
+                for s in checked
+                if name in s.diff.unresolved_triggers
+            ]
             if invalid_reasons:
                 valid = False
             elif present is True and "ok" in statuses:
@@ -524,7 +532,7 @@ def build_report(evaluation: ServiceEvaluation) -> Dict[str, Any]:
                     "requiredness": schema_types.requiredness_label(field_schema),
                     "present": present,
                     "valid": valid,
-                    "reason": invalid_reasons[0] if invalid_reasons else None,
+                    "reason": (invalid_reasons or trigger_reasons or [None])[0],
                 }
             )
         entry["sources"] = per_source
