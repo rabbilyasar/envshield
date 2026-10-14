@@ -1708,3 +1708,35 @@ class TestNewLocalFilesGetRestrictivePermissions:
                 os.stat(os.path.join(td, "ordinary-file.txt")).st_mode
             )
         assert example_mode == ordinary_mode
+
+
+class TestEmptyValues:
+    """R0-4 (F6): an empty value that isn't required is validated as ""."""
+
+    def test_optional_typed_empty_is_invalid(self):
+        schema = {"PORT": {"type": "port", "required": False}}
+        diff = schema_manager.diff_against_schema(schema, {"PORT": ""})
+        assert diff.invalid == {"PORT": "must be a port number from 1-65535"}
+        assert not diff.blank
+
+    def test_required_empty_is_blank_and_not_also_invalid(self):
+        schema = {"PORT": {"type": "port"}}
+        diff = schema_manager.diff_against_schema(schema, {"PORT": ""})
+        assert diff.blank == {"PORT"}
+        assert diff.invalid == {}
+
+    def test_a_default_does_not_excuse_an_empty_value(self):
+        schema = {"PORT": {"type": "port", "defaultValue": "8000"}}
+        diff = schema_manager.diff_against_schema(schema, {"PORT": ""})
+        assert diff.blank == {"PORT"}
+
+    def test_optional_unconstrained_string_empty_is_valid(self):
+        diff = schema_manager.diff_against_schema({"X": {"required": False}}, {"X": ""})
+        assert diff.is_clean
+
+    def test_the_reason_never_contains_the_value(self):
+        schema = {"X": {"required": False, "pattern": "^[a-z]+$", "secret": True}}
+        diff = schema_manager.diff_against_schema(schema, {"X": ""})
+        assert "X" in diff.invalid and "''" not in diff.invalid["X"].replace(
+            "'^[a-z]+$'", ""
+        )

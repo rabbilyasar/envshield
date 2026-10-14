@@ -2470,3 +2470,110 @@ class TestCheckProcessEnv:
             "variables": ["NODE_ENV"],
         } in sources
         assert "production" not in result.stdout
+
+
+class TestEmptyValues:
+    """
+    R0-4 (F5, F6): an empty value is never reported valid, and an optional
+    empty value is validated like any other. The pinned PORT table, for
+    every local source.
+    """
+
+    SCHEMAS = {
+        "required": '[PORT]\ntype = "port"\nrequired = true\n',
+        "legacy": '[PORT]\ntype = "port"\n',
+        "optional": '[PORT]\ntype = "port"\nrequired = false\n',
+        "defaulted": '[PORT]\ntype = "port"\ndefaultValue = "8000"\n',
+    }
+    # (status, valid, exit code) per source value; None -> a key that's not there.
+    EXPECTED = {
+        "required": {
+            None: ("missing", None, 1),
+            "": ("blank", False, 1),
+            "abc": ("invalid", False, 1),
+            "8000": ("ok", True, 0),
+        },
+        "optional": {
+            None: ("not_required", None, 0),
+            "": ("invalid", False, 1),
+            "abc": ("invalid", False, 1),
+            "8000": ("ok", True, 0),
+        },
+    }
+    EXPECTED["legacy"] = EXPECTED["defaulted"] = EXPECTED["required"]
+
+    def _check(self, tmp_path, schema, source, value):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            local_file = "settings.py" if source == "python" else ".env"
+            config_manager.add_service("app", SCHEMA_FILE_NAME, local_file=local_file)
+            with open(SCHEMA_FILE_NAME, "w") as f:
+                f.write(self.SCHEMAS[schema])
+            env = {}
+            lines = ""
+            if value is not None and source == "process":
+                env["PORT"] = value
+            elif value is not None and source == "python":
+                lines = f'PORT = "{value}"\n'
+            elif value is not None:
+                lines = f"PORT={value}\n"
+            with open(local_file, "w") as f:
+                f.write(lines)
+            args = ["check", "--json"] + (
+                ["--process-env"] if source == "process" else []
+            )
+            result = runner.invoke(app, args, env=env)
+        return result, json.loads(result.stdout)["reports"][0]["variables"][0]
+
+    def test_the_port_table_holds_for_every_local_source(self, tmp_path):
+        for source in ("dotenv", "python", "process"):
+            for schema, rows in self.EXPECTED.items():
+                if schema == "legacy" and source != "dotenv":
+                    continue
+                for value, (status, valid, code) in rows.items():
+                    result, var = self._check(tmp_path, schema, source, value)
+                    where = f"{source}/{schema}/{value!r}"
+                    assert result.exit_code == code, where
+                    assert var["sources"][0]["status"] == status, where
+                    assert var["valid"] is valid, where
+                    assert "abc" not in str(var.get("reason")), where
+
+    def test_no_report_calls_a_blank_value_valid(self, tmp_path):
+        result, var = self._check(tmp_path, "required", "dotenv", "")
+        assert var["valid"] is False
+        assert var["reason"] == "required but blank"
+        assert result.exit_code == 1
+
+
+class TestEmptyOptionalValueIsJudgedByItsConstraints:
+    def _check(self, tmp_path, schema):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            _write_root_service()
+            with open(SCHEMA_FILE_NAME, "w") as f:
+                f.write(schema)
+            with open(".env", "w") as f:
+                f.write("X=\n")
+            result = runner.invoke(app, ["check", "--json"])
+        return result.exit_code, json.loads(result.stdout)["results"][0]
+
+    def test_an_unconstrained_string_is_valid(self, tmp_path):
+        code, res = self._check(tmp_path, "[X]\nrequired = false\n")
+        assert code == 0 and res["invalid"] == {}
+
+    def test_a_pattern_that_does_not_match_empty_is_invalid(self, tmp_path):
+        code, res = self._check(
+            tmp_path, '[X]\nrequired = false\npattern = "^[a-z]+$"\n'
+        )
+        assert code == 1 and "X" in res["invalid"]
+
+    def test_a_pattern_that_matches_empty_is_valid(self, tmp_path):
+        code, res = self._check(
+            tmp_path, '[X]\nrequired = false\npattern = "^$|^[a-z]+$"\n'
+        )
+        assert code == 0 and res["invalid"] == {}
+
+    def test_an_unmet_requiredif_does_not_excuse_an_empty_typed_value(self, tmp_path):
+        code, res = self._check(
+            tmp_path,
+            '[X]\ntype = "int"\nrequiredIf = {var = "FLAG", equals = "true"}\n',
+        )
+        assert code == 1 and "X" in res["invalid"]
