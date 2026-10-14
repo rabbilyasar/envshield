@@ -30,6 +30,7 @@ philosophy everywhere else).
 
 import ast
 import re
+import warnings
 from bisect import bisect_right
 from dataclasses import dataclass
 from typing import Dict, FrozenSet, List, Optional
@@ -101,6 +102,20 @@ class DynamicReference:
             "language": self.language,
             "access_type": self.access_type,
         }
+
+
+def parse_python(content: str, filename: str) -> ast.Module:
+    """Parse a user's Python source. The only place EnvShield does so (BL-182).
+
+    Compiling source can emit a SyntaxWarning (e.g. an invalid "\\d" escape)
+    that Python prints with the offending line, which may hold a hardcoded
+    secret. Warnings are ignored so no source line ever reaches the output,
+    and so `PYTHONWARNINGS=error` can't turn one into a SyntaxError that makes
+    a file look like it reads nothing.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return ast.parse(content, filename=filename)
 
 
 def _literal_str(node: Optional[ast.expr]) -> Optional[str]:
@@ -495,7 +510,7 @@ def _visit_python(
     content: str, file_path: str, include_settings: bool = False
 ) -> "tuple[List[DiscoveredVariableUsage], List[DynamicReference]]":
     try:
-        tree = ast.parse(content, filename=file_path)
+        tree = parse_python(content, file_path)
     except (SyntaxError, RecursionError, ValueError):
         return [], []
 
@@ -788,7 +803,7 @@ def discover_python_env_vars(
     discover_python_usages: invalid Python, or pathologically deep input.
     """
     try:
-        tree = ast.parse(content, filename=file_path)
+        tree = parse_python(content, file_path)
     except (SyntaxError, RecursionError, ValueError):
         return []
 

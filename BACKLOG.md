@@ -1050,7 +1050,7 @@ Component: `check <file>` ad-hoc path, `init`, `doctor`
 
 ### BL-182 — Discovery echoes the user's source lines (including secret literals) through Python `SyntaxWarning`s
 
-Type: `SECURITY` / `BUG` · Evidence: `CONFIRMED` (real-repo trial and synthetic reproduction, 2026-10-14) · Priority: **P0** (CLAUDE.md §4: any bug that can expose a secret is P0) · Status: **open — release blocker for v5.0.0**
+Type: `SECURITY` / `BUG` · Evidence: `CONFIRMED` (real-repo trial and synthetic reproduction, 2026-10-14) · Priority: **P0** (CLAUDE.md §4: any bug that can expose a secret is P0) · Status: **fixed on branch `rabbilyasar/v0-4-syntaxwarning-leak` (#47), not yet merged or released**
 Component: Python discovery (`ast.parse` of user files)
 
 - **Current behavior:** `check` on issuebear and issuebear-management prints `tools/mysql.py:103: SyntaxWarning: "\s" is an invalid escape sequence` plus the offending source line, before EnvShield's own output. The warning is raised by parsing the user's file, not by EnvShield code.
@@ -1059,6 +1059,12 @@ Component: Python discovery (`ast.parse` of user files)
 - **Invariant (§4):** a secret value must never enter an output representation unintentionally. This is the same class as `BL-115` (PyYAML's error snippet echoing a malformed line).
 - **Impact:** a hardcoded secret, exactly what `scan` and the pre-commit hook exist to catch, is printed in full to the terminal and to CI logs. Mitigating factor: the value is already in the user's source, but CI logs are often more widely readable than the repository, and the redaction promise is broken. Also noise on every run.
 - **Fix scope:** suppress warnings around every `ast.parse`/`compile` of user files (all discovery and scanner parse sites, not only the reported one). The regression test asserts that no command's stdout or stderr contains a literal from a warning-triggering line.
+- **Correction (2026-10-14, while fixing):** the reproduction counts above came from a pipe that missed stderr for some commands. Captured as a subprocess with stdout and stderr together, the literal leaks from `check`, `check --json`, `scan`, `scan --json`, `undeclared` and `explain`. Only `doctor` didn't parse the file.
+- **Second manifestation (same root cause, found while fixing):** with `PYTHONWARNINGS=error::SyntaxWarning`, the warning becomes a `SyntaxError`, discovery catches it and treats the file as reading nothing. `check --json` then reported `files_scanned: 1` and `undeclared: []` for a file reading an undeclared `NEW_VAR`, a silent false-clean.
+- **Root cause:** three `ast.parse` calls on user files (`core/discovery.py` ×2, `parsers/_python.py`) ran under the process's default warning filters.
+- **Fix:** `core/discovery.py::parse_python` parses inside `warnings.catch_warnings()` with `simplefilter("ignore")`; all three call sites use it. `parsers/_python.py` imports it from `core.discovery` (no cycle: `discovery.py` imports nothing from EnvShield).
+- **Tests:** `test_source_line_leak.py`, run through a real subprocess, because pytest captures warnings and an in-process test would pass with the leak present. It contains: seven parametrized cases (`check`, `check --json`, `scan`, `scan --json`, `undeclared`, `explain`, `doctor`) asserting neither the literal nor "SyntaxWarning" appears in stdout or stderr; one asserting `PYTHONWARNINGS=error::SyntaxWarning` still reports `NEW_VAR`; and one structural guard asserting the helper holds the only `ast.parse`/`ast.compile` call in the package. Before the fix, 8 failed (6 echo cases, the false-clean case and the guard) and `doctor` passed; after, 9/9. Full suite 1913 passed, 1 skipped; `ruff check .` and `ruff format --check .` clean.
+- **Real-repo verification:** on a fresh copy of issuebear, `check`, `scan` and `undeclared` print no `SyntaxWarning` and no `tools/mysql.py` source line (they did in the trial).
 - **Issue:** V0-4 [#47](https://github.com/rabbilyasar/envshield/issues/47).
 
 ### BL-183 — Tables truncate file paths at 80 columns, the CI default
