@@ -2,6 +2,42 @@
 
 All notable changes to this project are documented in this file.
 
+## [4.8.0] - 2026-10-14
+
+One schema shared by several services, `check` on a single evaluator with a versioned JSON report, and a set of fixes so that `check` no longer reports confidence it doesn't have. Includes a security fix (BL-154) for every version up to 4.7.4.
+
+### Added
+- **Shared system schema.** One hand-maintained `env.schema.toml` can serve several registered services. A variable can be granted to specific services (`services = ["api", "worker"]`) with per-service overrides (`[PORT.services.api]`); each service is checked against its own projection. An unscoped secret in a shared schema is an error. Services sharing a schema need an explicit `dir:` (`service add` writes it); `import` and `init --force` refuse to rewrite a shared or scoped schema. See `docs/architecture/shared-system-schema.md`.
+- **Shared physical files.** Services that write the same `.env`/`.env.example` (via `local_file`/`example_file`) are checked against the union of their contracts for that file.
+- **Out-of-scope reporting.** A variable defined in the shared schema but granted only to other services is reported as out of scope, distinct from an undeclared extra. It still fails as an extra; nothing is granted by it.
+- **Runtime hook coverage.** Installed hooks no longer embed service names or paths; the current `envshield.yml` is resolved when the hook runs, a change to any file in a schema's `extends` chain checks every service on that schema, and `hook status` reports live coverage. Pre-commit fails closed if it can't resolve the topology.
+- **`check --json` report.** A versioned, value-free `reports` entry per service (`report_version: 1`): sources, per-variable status and validity, code references, and a summary. Existing `success`/`results`/`combined` keys are unchanged.
+- **`summary.unverified` and the `not_visible` status (F1, F2, F4, F7).** A value EnvShield never saw — a Kubernetes `secretKeyRef`/`configMapKeyRef` to an object outside the manifest, a Secret key in the same manifest, a Compose `${VAR}` or bare `KEY`, or a Compose `${VAR-x}`/`${VAR:-x}` fallback — is reported `valid: null` with source status `not_visible` and listed in `summary.unverified`, instead of `valid: true`. The human output names these variables instead of saying "perfectly in sync". The exit code is unchanged (see Known limitations).
+- **`required = false`** declares an unconditionally optional variable.
+
+### Behavior changes
+- **Schema keys and types are validated (D-2).** Unknown field keys (including typos), unknown `type` values, invalid variable names (`BAD-NAME`) and `required` combined with `requiredIf` were silently accepted; loading such a schema now fails with a `SchemaValidationError` naming the key. `schema diff` at a past revision is not validated, so history stays readable.
+- **`check` fails on an undeclared variable the code reads (D-7).** Without an explicit file, `check` now scans the service's own source files (the same set the pre-commit `scan` checks) and fails on a high-confidence read of a variable the schema doesn't declare. A project with such reads that passed `check` before now fails it. Medium-confidence and dynamic reads are reported, never failures.
+- **An unseen `requiredIf` trigger no longer drops the requirement (F3).** When the trigger's value is one EnvShield can't see (see `not_visible` above), a dependent variable that is absent or blank is now `unresolved` and fails (exit 1), naming the trigger. Before, it was silently not required and `check` passed. An empty, absent or concrete trigger behaves as before.
+- **An empty optional value is validated (F6).** `PORT=` with `type = "port"` and `required = false` used to pass; it is now invalid. An empty unconstrained string is still valid, and a `pattern` that matches `""` still passes. A required empty value is reported `blank` as before.
+- **Generated TypeScript rejects an empty number (F8).** `int`, `float` and `port` fields used `z.coerce.number()`, which turns `""` into `0`. They now reject an empty string before coercion, so code that relied on an empty value parsing as `0` gets a validation error. Defaults and numeric strings are unchanged; works on zod 3 and 4.
+
+### Fixed
+- **The JSON report no longer says `valid: true` for a blank value (F5).**
+- **A failed permission change no longer empties an existing secrets file (BL-162).** A regression introduced by the BL-154 fix and never released: if setting `0600` on an existing file failed, its content had already been truncated. Truncation now happens only after the permission change succeeds, and a failed read or write in `setup`/`schema sync` raises instead of reporting success. Hook installation works where `os.fchmod` is unavailable.
+- **`scan --service` scopes files by ownership.** A nested service's files are no longer checked against the parent's schema, and a root service is scoped.
+- **Schema loading:** `defaultValue` now means the same thing in `explain` and `schema diff` as in `check` (BL-149); accepting the enforcement override no longer passes findings that can't be overridden (BL-151); `service discover` no longer silently repoints an existing service (BL-152); `setup` no longer falls back to an empty schema when the schema fails to load (BL-153).
+- **Discovery:** JS/TS matches inside comments and strings are no longer reported (BL-155); dynamic reads are reported instead of disappearing (BL-156); pydantic `BaseSettings` fields are visible to `check`/`explain` (BL-157).
+- **`service add --schema` no longer discards the `DIRECTORY` argument (BL-135).**
+
+### Security
+- **EnvShield no longer writes through repository-controlled symlinks (BL-154, P0).** A repository could commit `.env` (or any file EnvShield writes) as a symlink to a file outside the project; `setup`, after an "Overwrite?" prompt, then wrote every collected value — secrets included — into that outside file. Every writer (`setup`, `schema sync`, `generate`, `import`, `init`, `service add`/`remove`, hook install) now refuses a symlinked target, a symlinked parent directory, a non-regular file, or a path outside the project, and sets `0600` on the open file rather than by path. **Affects 4.7.4 and earlier.** A project that keeps a written file as a deliberate symlink must replace it with a regular file; an explicit output path outside the project is refused.
+
+### Known limitations
+- **Unverified manifest values pass the v4 gate.** When a deployment manifest only *points* at a value — a Kubernetes `secretKeyRef`/`configMapKeyRef` to an object outside the file, a Secret key in the same file, a Compose `${VAR}` or bare `KEY`, or a `${VAR-x}`/`${VAR:-x}` fallback — EnvShield can't see the deployed value. `check` reports these variables as unverified (`valid: null`, status `not_visible`, listed in `summary.unverified`, and named in the human output), but they still pass: exit code and `success` are unchanged. A fallback that itself violates the contract still fails. Making the gate act on unverified values is planned for v5.
+- **The BL-162 fix has not been run on Windows.** Where `os.fchmod` is missing (Windows before Python 3.13) the code skips it; this path is tested on Linux by simulation only.
+- **CI runs on Ubuntu only** (Python 3.10–3.12).
+
 ## [4.7.4] - 2026-09-17
 
 UX and multi-service correctness fixes found while dogfooding EnvShield on a real multi-service project.
