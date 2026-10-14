@@ -1740,3 +1740,40 @@ class TestEmptyValues:
         assert "X" in diff.invalid and "''" not in diff.invalid["X"].replace(
             "'^[a-z]+$'", ""
         )
+
+
+class TestRequiredIfTriggerNotSeen:
+    """R0-6 (F3): an unseen trigger leaves the dependent `unresolved`."""
+
+    SCHEMA = {
+        "PAYMENTS": {"required": False},
+        "STRIPE_KEY": {
+            "secret": True,
+            "requiredIf": {"var": "PAYMENTS", "equals": "true"},
+        },
+    }
+
+    def test_a_placeholder_trigger(self):
+        from envshield.parsers._base import BaseParser
+
+        diff = schema_manager.diff_against_schema(
+            self.SCHEMA, {"PAYMENTS": BaseParser.UNRESOLVED_VALUE}
+        )
+        assert diff.unresolved == {"STRIPE_KEY"}
+        assert diff.unresolved_triggers == {"STRIPE_KEY": "PAYMENTS"}
+        assert not diff.missing and not diff.is_clean
+        assert "PAYMENTS" in diff.summary()
+
+    def test_a_fallback_trigger_that_would_hold_is_still_unresolved(self):
+        diff = schema_manager.diff_against_schema(
+            self.SCHEMA, {"PAYMENTS": "true"}, not_inspected=["PAYMENTS"]
+        )
+        assert diff.unresolved == {"STRIPE_KEY"} and not diff.missing
+
+    def test_a_present_dependent_is_not_unresolved(self):
+        diff = schema_manager.diff_against_schema(
+            self.SCHEMA,
+            {"PAYMENTS": "true", "STRIPE_KEY": "x"},
+            not_inspected=["PAYMENTS"],
+        )
+        assert diff.is_clean

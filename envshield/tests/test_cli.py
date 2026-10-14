@@ -2578,3 +2578,108 @@ class TestEmptyOptionalValueIsJudgedByItsConstraints:
             '[X]\ntype = "int"\nrequiredIf = {var = "FLAG", equals = "true"}\n',
         )
         assert code == 1 and "X" in res["invalid"]
+
+
+class TestRequiredIfTriggerEnvShieldCannotSee:
+    """
+    R0-6 (F3): a requiredIf whose trigger value EnvShield can't see makes the
+    dependent variable `unresolved` (exit 1, naming the trigger), never
+    silently not required.
+    """
+
+    SCHEMA = (
+        "[PAYMENTS]\nrequired = false\n\n[STRIPE_KEY]\nsecret = true\n"
+        'requiredIf = { var = "PAYMENTS", equals = "true" }\n'
+    )
+    K8S = (
+        "apiVersion: v1\nkind: Pod\nmetadata: {name: p}\nspec:\n  containers:\n"
+        "  - name: c\n    image: x\n    env:\n    - name: PAYMENTS\n"
+        "      valueFrom: {secretKeyRef: {name: ext, key: payments}}\n"
+    )
+
+    @staticmethod
+    def _compose(value):
+        return (
+            "services:\n  app:\n    image: x\n    environment:\n"
+            f"      PAYMENTS: {value}\n"
+        )
+
+    def _check(self, tmp_path, path, content):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            _write_root_service()
+            with open(SCHEMA_FILE_NAME, "w") as f:
+                f.write(self.SCHEMA)
+            with open(path, "w") as f:
+                f.write(content)
+            result = runner.invoke(app, ["check", path, "--json"])
+            human = runner.invoke(app, ["check", path])
+        payload = json.loads(result.stdout)
+        report = payload["reports"][0]
+        var = next(v for v in report["variables"] if v["name"] == "STRIPE_KEY")
+        return result.exit_code, payload["results"][0], var, human.stdout
+
+    def _assert_unresolved(self, code, result, var, human):
+        assert code == 1
+        assert result["unresolved"] == ["STRIPE_KEY"]
+        assert var["sources"][0]["status"] == "unresolved"
+        assert "PAYMENTS" in var["reason"]
+        assert "PAYMENTS" in human and "STRIPE_KEY" in human
+        assert '"true"' not in var["reason"]
+
+    def test_forwarded_compose_trigger(self, tmp_path):
+        self._assert_unresolved(
+            *self._check(tmp_path, "docker-compose.yml", self._compose("${PAYMENTS}"))
+        )
+
+    def test_external_k8s_secret_trigger(self, tmp_path):
+        self._assert_unresolved(*self._check(tmp_path, "k.yaml", self.K8S))
+
+    def test_compose_fallback_trigger(self, tmp_path):
+        self._assert_unresolved(
+            *self._check(
+                tmp_path, "docker-compose.yml", self._compose("${PAYMENTS:-true}")
+            )
+        )
+
+    def test_empty_trigger_compares_normally(self, tmp_path):
+        code, result, var, _ = self._check(tmp_path, ".env", "PAYMENTS=\n")
+        assert code == 0
+        assert var["sources"][0]["status"] == "not_required"
+
+    def test_true_trigger_requires_it(self, tmp_path):
+        code, result, var, _ = self._check(tmp_path, ".env", "PAYMENTS=true\n")
+        assert code == 1
+        assert result["missing"] == ["STRIPE_KEY"]
+
+    def test_false_trigger_does_not(self, tmp_path):
+        code, result, var, _ = self._check(tmp_path, ".env", "PAYMENTS=false\n")
+        assert code == 0
+        assert var["sources"][0]["status"] == "not_required"
+
+    def test_absent_trigger_is_unchanged(self, tmp_path):
+        code, result, var, _ = self._check(tmp_path, ".env", "")
+        assert code == 0
+        assert var["sources"][0]["status"] == "not_required"
+
+    def test_union_verdict_with_a_placeholder_trigger_is_unchanged(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            with open(CONFIG_FILE_NAME, "w") as f:
+                f.write(
+                    "services:\n  app:\n    schema: env.schema.toml\n"
+                    "    completeness: union\n"
+                    "manifests:\n  - file: docker-compose.yml\n"
+                    "    containers:\n      app: app\n"
+                )
+            with open(SCHEMA_FILE_NAME, "w") as f:
+                f.write(self.SCHEMA)
+            with open(".env", "w") as f:
+                f.write("")
+            with open("docker-compose.yml", "w") as f:
+                f.write(self._compose("${PAYMENTS}"))
+            result = runner.invoke(app, ["check", "--json"])
+        payload = json.loads(result.stdout)
+        assert result.exit_code == 0
+        assert payload["success"] is True
+        combined = payload["combined"]["app"]
+        assert combined["unresolved"] == [] and combined["missing"] == []
+        assert combined.get("ambiguous_requiredif", {}) == {}
