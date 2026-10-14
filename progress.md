@@ -3,14 +3,14 @@
 Internal status of in-flight multi-phase work. Public direction lives in
 [ROADMAP.md](ROADMAP.md); individual findings in [BACKLOG.md](BACKLOG.md).
 
-Last updated: 2026-10-01.
+Last updated: 2026-10-14.
 
 ---
 
 ## Evaluator migration
 
 Decisions: [docs/architecture/evaluator-decisions.md](docs/architecture/evaluator-decisions.md).
-Findings: BACKLOG.md Part 5c (`BL-149` to `BL-160`). Working tree, not yet committed.
+Findings: BACKLOG.md Part 5c (`BL-149` to `BL-160`). Committed as `bcf2133`; unreleased.
 
 Goal: every command's configuration semantics converge on one evaluator
 (`core/evaluator.py`), without removing behavior before its replacement
@@ -33,7 +33,7 @@ is proven.
 | 13. Documentation | Done (this file, BACKLOG Part 5c, decision records, ROADMAP "Now", README) |
 | 14. MCP | Not started (separate phase) |
 
-**BL-154** (P0, writes through repository-controlled symlinks): fixed in the working tree with regression coverage (`tests/test_write_safety.py`); must ship in the next release. **Open before the next step:** BL-158 (unowned code), BL-159 (staged undeclared check).
+**BL-154** (P0, writes through repository-controlled symlinks): fixed and committed as `987acdd` with regression coverage (`tests/test_write_safety.py`); its regression `BL-162` is fixed as `e31c8f5`. Both must ship together in the next release (v4.8.0). **Open before the next step:** BL-158 (unowned code), BL-159 (staged undeclared check).
 
 ---
 
@@ -199,7 +199,7 @@ ruff check passes
 formatting passes
 ```
 
-### Phase 6: lifecycle acceptance (implemented, uncommitted)
+### Phase 6: lifecycle acceptance (committed, `26b821b`)
 
 Objective: show, with repeatable tests, that the Phase 1-5 architecture
 holds across the whole lifecycle (register → setup → sync → check/doctor →
