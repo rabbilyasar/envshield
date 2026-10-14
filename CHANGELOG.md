@@ -2,6 +2,19 @@
 
 All notable changes to this project are documented in this file.
 
+## [4.8.1] - 2026-10-14
+
+A security fix for 4.8.0 and earlier.
+
+### Security
+- **Parsing your Python files no longer prints their source lines (BL-182, P0).** A Python file containing an invalid escape such as `"\d"` made Python print a `SyntaxWarning` quoting the line. `check`, `check --json`, `scan`, `scan --json`, `undeclared` and `explain` let it through, so a hardcoded secret on that line was printed in full to the terminal and CI logs, bypassing `scan`'s redaction. Warnings are now suppressed while EnvShield parses user code. **Affects 4.8.0 and earlier.**
+
+### Fixed
+- **`PYTHONWARNINGS=error` no longer hides a file's environment reads.** The same warning, turned into an error, made discovery treat the file as reading nothing, so `check` could pass a file that reads an undeclared variable.
+
+### Known limitations
+- **Correction to 4.8.0's notes:** unverified manifest values are named in the human `check` output only when nothing else in that source fails; `--json` always lists them in `summary.unverified` (BL-178, fixed in v5).
+
 ## [4.8.0] - 2026-10-14
 
 One schema shared by several services, `check` on a single evaluator with a versioned JSON report, and a set of fixes so that `check` no longer reports confidence it doesn't have. Includes a security fix (BL-154) for every version up to 4.7.4.
