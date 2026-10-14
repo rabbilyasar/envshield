@@ -511,12 +511,15 @@ envshield uninstall --yes    # skip the confirmation prompt
 
 ## Known limitations
 
-EnvShield is built around the patterns real projects actually use. A few narrower cases aren't handled yet — none of them let a secret leak or let a genuinely missing required variable pass as clean:
+EnvShield is built around the patterns real projects actually use. A few narrower cases aren't handled yet. None of them let a secret leak; the first one can let a value EnvShield couldn't see pass `check`:
 
+- **Unverified manifest values pass the v4 gate.** When a deployment manifest only *points* at a value — a Kubernetes `secretKeyRef`/`configMapKeyRef` to an object outside the file, a Secret key in the same file, a Compose `${VAR}` or bare `KEY`, or a `${VAR-x}`/`${VAR:-x}` fallback — EnvShield can't see the deployed value. `check` reports these variables as unverified (`valid: null`, status `not_visible`, listed in `summary.unverified`, and named in the human output), but they still pass: exit code and `success` are unchanged. A fallback that itself violates the contract still fails. Making the gate act on unverified values is planned for v5.
 - **Docker Compose:** `${VAR}`, `${VAR:-default}`, and the no-colon `${VAR-default}` form are all supported. The `${VAR:?}`/`${VAR:+}` forms and embedded/multiple interpolation references in one value aren't evaluated yet.
 - **Kubernetes:** `env[].valueFrom.secretKeyRef`/`configMapKeyRef` are matched by the container's environment-variable name (`env[].name`) — name your schema variable after the env var, not the key — and, when the referenced Secret/ConfigMap is defined in the same manifest, the referenced key is validated to actually exist there. `envFrom.prefix` is applied. `initContainers` are selectable via `--container` but never auto-selected by default.
 - **Source discovery:** Python is AST-based; JavaScript/TypeScript is pattern-based. No other language is discovered yet.
 - **.env:** multiline quoted values aren't supported.
+- **Windows:** the write-safety fix for a failed permission change (BL-162) hasn't been run on Windows; where `os.fchmod` is missing (Windows before Python 3.13) it's skipped, which is tested on Linux by simulation only.
+- **CI:** runs on Ubuntu only (Python 3.10–3.12).
 
 These are bounded, tracked engineering work — see the [roadmap](ROADMAP.md) for what's next and what EnvShield deliberately isn't building.
 
