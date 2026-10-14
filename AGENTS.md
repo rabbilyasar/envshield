@@ -898,8 +898,9 @@ deployment lead the story, provider support returns to planning, a new
 build order, CLI consolidation by stage), after a v4.8.0 trial on nine real
 repositories (BACKLOG.md `BL-175`–`BL-188`). That trial found a P0,
 `BL-182`: Python `SyntaxWarning`s echo user source lines, including secret
-literals, past `scan`'s redaction. Next is V0-4 (#47), its fix, then V0-1
-(#14) and V0-3 (#43). The full ordered v5 sequence is in ROADMAP.md's "v5 —
+literals, past `scan`'s redaction. Next is V0-4 (#47, fix in PR #49), released
+alone as v4.8.1; then V0-2a (#50, deprecate duplicate commands, group
+`--help`), V0-1 (#14) and V0-3 (#43), released together as v4.9.0. The full ordered v5 sequence is in ROADMAP.md's "v5 —
 in progress" section; the amendment's text is on #14.
 
 **Previous phase (updated 2026-10-01; commit status corrected 2026-10-14): Evaluator migration.** `check` now

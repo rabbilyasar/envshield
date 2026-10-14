@@ -64,17 +64,24 @@ real repositories (2026-10-14), which showed both what works (real drift
 caught in production code) and what doesn't yet (first-run setup, CI output,
 multi-container deployments, per-environment requirements).
 
-The steps below are built in this order and merged as they finish; v5.0.0
-is released once, at the end. Each step links to its tracking issue.
+The steps below are built in this order and merged as they finish. Two
+early releases ship before v5.0.0, because they don't break anything: a
+security patch (v4.8.1) and the cleaned-up command list with the new docs
+(v4.9.0). Everything else ships in v5.0.0. Each step links to its tracking
+issue.
 
 1. **Secret-safety fix first** — no command ever prints a line of your
    source code because Python warned while parsing it. Today a warning can
-   echo a hardcoded secret past `scan`'s redaction.
+   echo a hardcoded secret past `scan`'s redaction. **Released alone as
+   v4.8.1.**
    ([#47](https://github.com/rabbilyasar/envshield/issues/47))
-2. **Decisions and public story** — the v5 decisions recorded in the
-   repository; README, website and docs rewritten to describe what v4.8.0
-   actually does, led by the story above, with a recorded demo.
-   ([#14](https://github.com/rabbilyasar/envshield/issues/14),
+2. **A shorter command list and the public story** — duplicate commands
+   (`install-hook`, `uninstall`) keep working but are deprecated and hidden,
+   and `--help` groups commands by stage. The v5 decisions are recorded in
+   the repository, and the README, website and docs are rewritten around
+   the story above, with a recorded demo. **Released together as v4.9.0.**
+   ([#50](https://github.com/rabbilyasar/envshield/issues/50),
+   [#14](https://github.com/rabbilyasar/envshield/issues/14),
    [#43](https://github.com/rabbilyasar/envshield/issues/43))
 3. **Honest verdicts** — `check` reports one of five verdicts per variable
    and never calls a value valid unless it actually read and validated it.
@@ -100,9 +107,10 @@ is released once, at the end. Each step links to its tracking issue.
    ([#18](https://github.com/rabbilyasar/envshield/issues/18),
    [#19](https://github.com/rabbilyasar/envshield/issues/19),
    [#44](https://github.com/rabbilyasar/envshield/issues/44))
-7. **A smaller, consistent CLI** — commands grouped by stage, overlapping
-   ones deprecated (they keep working through v5); the same answer in a
-   terminal and in CI; output that stays readable in CI logs; the
+7. **A smaller, consistent CLI** — overlapping commands folded into
+   `check` (`undeclared` becomes `check --since`; `scan` keeps only secret
+   detection), with the old forms kept working through v5; the same answer
+   in a terminal and in CI; output that stays readable in CI logs; the
    pull request that adopts EnvShield doesn't fail its own check.
    ([#42](https://github.com/rabbilyasar/envshield/issues/42),
    [#45](https://github.com/rabbilyasar/envshield/issues/45))
