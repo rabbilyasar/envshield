@@ -1120,6 +1120,16 @@ Component: service selection (`resolve_targets` and its interactive picker)
 - **Relationships:** V0-2 (#42, CLI consolidation).
 - **Issue:** V6-2 [#45](https://github.com/rabbilyasar/envshield/issues/45).
 
+### BL-189 — `pip install envshield` warns that Typer has no `all` extra
+
+Type: `PACKAGING` · Evidence: `CONFIRMED` (clean-venv install of 4.9.0, 2026-10-15) · Priority: **P3** · Status: **open**
+Component: `pyproject.toml` dependencies
+
+- **Current behavior:** the dependency is declared as `typer[all]>=0.9,<1.0`. Current Typer (0.27.3 was resolved) no longer defines an `all` extra, so every install prints `WARNING: typer 0.27.3 does not provide the extra 'all'`. Nothing breaks: Rich and the other former extras are regular Typer dependencies now.
+- **Expected behavior:** no warning on install. Likely `typer>=X,<1.0` without the extra, with `X` set to the oldest version that bundles Rich and supports `rich_help_panel` (used since 4.9.0); confirm the bound against Typer's changelog before changing it.
+- **Impact:** a confusing warning on first install, the moment a new user forms an impression. No functional effect.
+- **Decision:** open; a small packaging issue, proposed, not yet created.
+
 ### BL-187 — kemonchilo, the v5 reference project, permanently fails `check` in v4.8.0
 
 Type: `PRODUCT` · Evidence: `CONFIRMED` (real-repo trial, 2026-10-14) · Priority: decision input for V4-1 · Status: **open, expected to be resolved by V4-1**

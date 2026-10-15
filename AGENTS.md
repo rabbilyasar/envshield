@@ -880,7 +880,22 @@ backlog (revision-aware service-directory resolution for the explicit
 two-revision form, discovered-file size cap, `DEFAULT_EXCLUDED_DIRS`-style
 pruning) — none are blockers, and none require another Phase 2C milestone.
 
-**Current phase (updated 2026-10-14): `v4.8.1` released; v4.9.0 next.**
+**Current phase (updated 2026-10-15): `v4.9.0` released; v5 V1 next.**
+`v4.9.0` is the current released version: release commit `8223619`
+(`v4.9.0^{commit}`; the annotated tag object is `2394909`), published by
+`publish.yml` run `38769779651` with every job green (tests on 3.10-3.12,
+PyPI trusted publishing, GitHub Release created). PyPI lists `4.9.0` with a
+wheel and sdist, the wheel's provenance attestation resolves (HTTP 200), and
+a clean-venv `pip install envshield==4.9.0` shows the stage-grouped `--help`
+and the `install-hook` deprecation warning: all verified, not assumed. It
+ships V0-2a (#50: `install-hook`/`uninstall` deprecated and hidden, `--help`
+by stage, `hook remove` reports) and the README rewrite with a recorded demo
+(#43, envshield repository half). Released with the user's explicit,
+v4.9.0-only overrides for `BL-095` and `BL-166`'s gate half. The website
+half of #43 (envshield_website#1) merges after this release. Next: V1
+(#15, #16, #17). V0-1 (#14) still needs the original v5 plan text.
+
+**Previous release (v4.8.1):**
 `v4.8.1` is the current released version: release commit `ac61961`
 (`v4.8.1^{commit}`; the annotated tag object is `6eee1b3`), published by
 `publish.yml` run `38600613745` with every job green (tests on 3.10-3.12,
