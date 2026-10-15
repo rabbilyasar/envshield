@@ -950,7 +950,7 @@ Component: `core/hooks_manager.py` (`HooksManager.print_hook_status`, new `_hook
 
 ### BL-173 — Public website and hosted docs describe v4.7.4, not the released v4.8.0
 
-Type: `DOCUMENTATION` / `PRODUCT` · Evidence: `CONFIRMED` (2026-10-14, repo and live sites inspected) · Priority: **P2** · Status: **open**
+Type: `DOCUMENTATION` / `PRODUCT` · Evidence: `CONFIRMED` (2026-10-14, repo and live sites inspected) · Priority: **P2** · Status: **fixed (2026-10-15, verified live)**
 Component: website repository (`/home/rabbil/dev/envshield_website`, `public/index.html`, `public/docs/index.html`), www.envshield.dev, docs.envshield.dev; `README.md`
 Source: product-positioning review before v5 (this session). Successor to `BL-101`, whose specific claims are now stale.
 
@@ -964,7 +964,8 @@ Source: product-positioning review before v5 (this session). Successor to `BL-10
 - **Impact:** a v4.8.0 user reading the site learns the pre-v4.8 model and can't find the shared-schema feature at all. Not a correctness or secret-safety issue.
 - **Relationships:** `BL-101` (predecessor, now stale), V7-2 (#28). Root cause: website updates are in a separate repository and the release process (§23) has no website step.
 - **Decision:** open. Tracked as V0-3 (#43), the positioning rewrite, approved 2026-10-14.
-- **Fix (2026-10-15, not yet merged):** the website and hosted docs are rewritten for v4.8.1 and v4.9.0 in [envshield_website#1](https://github.com/rabbilyasar/envshield_website/pull/1), to merge right after v4.9.0 is published: shared schemas, `required`/`services` in the field reference, unverified values, the JSON report, `--help` stage groups, `uninstall` deprecated, and the wrong "there is no separate `required` boolean" line removed. The README is updated in the #43 PR. The root cause (no website step in releases) is addressed by a new item in the AGENTS.md/CLAUDE.md §23 release-review checklist.
+- **Fixed and verified live (2026-10-15).** envshield_website#1 merged after v4.9.0 was published; www.envshield.dev shows the new headline and docs.envshield.dev shows shared schemas, `required = false` and `uninstall` (deprecated), and no longer says "one schema per service". The README shipped in v4.9.0. #43 is closed.
+- **Fix (2026-10-15):** the website and hosted docs are rewritten for v4.8.1 and v4.9.0 in [envshield_website#1](https://github.com/rabbilyasar/envshield_website/pull/1), to merge right after v4.9.0 is published: shared schemas, `required`/`services` in the field reference, unverified values, the JSON report, `--help` stage groups, `uninstall` deprecated, and the wrong "there is no separate `required` boolean" line removed. The README is updated in the #43 PR. The root cause (no website step in releases) is addressed by a new item in the AGENTS.md/CLAUDE.md §23 release-review checklist.
 - **Issue:** V0-3 [#43](https://github.com/rabbilyasar/envshield/issues/43).
 
 The five entries below come from one first-run trial on 2026-10-14 (v4.8.0, a fresh git repo containing `api/app.py` reading `DATABASE_URL`/`PORT`/`STRIPE_SECRET_KEY`, `web/index.ts` reading `API_URL`/`NEXT_PUBLIC_ANALYTICS_KEY`, a `.env.example` with three of those variables, and a `docker-compose.yml` with service `api`).
@@ -1122,13 +1123,16 @@ Component: service selection (`resolve_targets` and its interactive picker)
 
 ### BL-189 — `pip install envshield` warns that Typer has no `all` extra
 
-Type: `PACKAGING` · Evidence: `CONFIRMED` (clean-venv install of 4.9.0, 2026-10-15) · Priority: **P3** · Status: **open**
+Type: `PACKAGING` · Evidence: `CONFIRMED` (clean-venv install of 4.9.0; full suite per Typer version in fresh venvs, 2026-10-15) · Priority: **P2** (raised from P3: the declared range allowed broken installs) · Status: **fixed on branch `rabbilyasar/bl-189-typer-extra` (#58), not yet merged or released**
 Component: `pyproject.toml` dependencies
 
 - **Current behavior:** the dependency is declared as `typer[all]>=0.9,<1.0`. Current Typer (0.27.3 was resolved) no longer defines an `all` extra, so every install prints `WARNING: typer 0.27.3 does not provide the extra 'all'`. Nothing breaks: Rich and the other former extras are regular Typer dependencies now.
 - **Expected behavior:** no warning on install. Likely `typer>=X,<1.0` without the extra, with `X` set to the oldest version that bundles Rich and supports `rich_help_panel` (used since 4.9.0); confirm the bound against Typer's changelog before changing it.
 - **Impact:** a confusing warning on first install, the moment a new user forms an impression. No functional effect.
-- **Decision:** open; a small packaging issue, proposed, not yet created.
+- **Worse than the warning (found while fixing):** the declared minimum didn't work. Full suite, each version in a fresh venv (pip resolves the newest Click it allows): Typer 0.9.4 and 0.12.5 with Click 8.5.0 → **370 failed**; 0.15.4 (which caps Click at 8.1.8) → 2 failed, both test-runner artifacts (the real CLI keeps the deprecation warning on stderr, verified by subprocess); 0.16.0, 0.16.1, 0.19.2, 0.20.0 and 0.27.3 with Click 8.5.0 → all 1921 pass. A project venv that already pinned an old Typer could therefore install a broken EnvShield.
+- **Fix:** `typer>=0.16,<1.0`, no extra. `rich` stays a direct dependency. A wheel built from the branch installs into a clean venv with no warning.
+- **Not done:** CI tests only the latest resolution, so the minimum isn't guarded automatically. A min-versions CI job would catch a regression; proposed, not built.
+- **Issue:** [#58](https://github.com/rabbilyasar/envshield/issues/58).
 
 ### BL-187 — kemonchilo, the v5 reference project, permanently fails `check` in v4.8.0
 
