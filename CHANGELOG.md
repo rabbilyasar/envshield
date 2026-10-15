@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented in this file.
 
+## [4.9.0] - 2026-10-15
+
+A shorter, stage-grouped command list, and documentation that leads with what EnvShield catches.
+
+### Changed
+- **`--help` groups commands by stage:** Onboarding (`init`, `setup`), Development & deployment (`check`, `undeclared`, `hook`) and Supporting (everything else).
+- **`hook remove` reports what it did:** the hook paths it removed, any hook it left alone and why, and the project files it preserved, as `uninstall` did. Its "nothing to remove" message changed accordingly. It still exits 1 outside a Git repository.
+
+### Deprecated
+- **`envshield install-hook`** (use `envshield hook install`) and **`envshield uninstall`** (use `envshield hook remove`). Both still work unchanged, are hidden from `--help`, and print a one-line warning to stderr. They will be removed in v6.
+
+### Documentation
+- The README now leads with what EnvShield catches at each stage, with a recorded demo and a section for AI coding agents, and documents shared schemas. The demo can be re-recorded from `scripts/demo/`.
+
 ## [4.8.1] - 2026-10-14
 
 A security fix for 4.8.0 and earlier.
