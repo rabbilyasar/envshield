@@ -1124,7 +1124,7 @@ Component: service selection (`resolve_targets` and its interactive picker)
 
 ### BL-189 — `pip install envshield` warns that Typer has no `all` extra
 
-Type: `PACKAGING` · Evidence: `CONFIRMED` (clean-venv install of 4.9.0; full suite per Typer version in fresh venvs, 2026-10-15) · Priority: **P2** (raised from P3: the declared range allowed broken installs) · Status: **fixed; merged as `7007653` (PR #59); to be released in `v4.9.1`**
+Type: `PACKAGING` · Evidence: `CONFIRMED` (clean-venv install of 4.9.0; full suite per Typer version in fresh venvs, 2026-10-15) · Priority: **P2** (raised from P3: the declared range allowed broken installs) · Status: **fixed; merged as `7007653` (PR #59); released in `v4.9.1` (2026-10-15)**
 Component: `pyproject.toml` dependencies
 
 - **Current behavior:** the dependency is declared as `typer[all]>=0.9,<1.0`. Current Typer (0.27.3 was resolved) no longer defines an `all` extra, so every install prints `WARNING: typer 0.27.3 does not provide the extra 'all'`. Nothing breaks: Rich and the other former extras are regular Typer dependencies now.
