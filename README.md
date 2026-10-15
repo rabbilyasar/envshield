@@ -1,40 +1,42 @@
 # EnvShield
 
-Environment variables, as a version-controlled configuration contract.
+**Every service and every deploy gets the configuration it needs, and you find out before something breaks.**
 
-`.env` files and environment variables have no contract. Nothing declares what a project actually needs, what's required where, or whether a change to one breaks another service. EnvShield gives that contract a real, committed file — `env.schema.toml` — and everything else follows from it: validating a local file against it, discovering what code actually reads that the schema doesn't know about, and reviewing how the contract itself changes across git revisions. Secret handling is one part of that contract, not the product's center of gravity.
+EnvShield checks your code, your local `.env` files and your Docker Compose and Kubernetes manifests against one committed contract, `env.schema.toml`. When code starts reading a variable nobody declared, when a service or a deployment is missing one, or when the contract itself changes, EnvShield tells you: on your machine, in a Git hook, or in CI.
 
-Free, open source (MIT), and fully local. EnvShield never sends your configuration or secrets anywhere.
+Free, open source (MIT), and fully local. EnvShield never sends your configuration anywhere and never prints a secret value.
 
 [Website](https://www.envshield.dev) · [Documentation](https://docs.envshield.dev) · [GitHub](https://github.com/rabbilyasar/envshield) · [PyPI](https://pypi.org/project/envshield/)
 
+![A coding agent adds a read of STRIPE_WEBHOOK_SECRET; envshield undeclared names the file and line; after it is declared, envshield check shows the api service's .env and its Compose container both lack it while the worker service is unaffected](https://raw.githubusercontent.com/rabbilyasar/envshield/main/docs/assets/envshield-demo.gif)
+
+*A coding agent adds a webhook that reads `STRIPE_WEBHOOK_SECRET`. `envshield undeclared` names the file and line. Once the variable is declared for the `api` service, `envshield check` shows that `api`'s `.env` and its Compose container both lack it, while `worker` is unaffected.*
+
 ---
 
-## Why EnvShield?
+## What it catches
 
-Environment variables tend to go through the same decay, on every real project:
+**While you develop**
 
-```
-.env / os.environ
-    → undocumented      (what does this app actually need?)
-    → inconsistent      (staging has it, local doesn't)
-    → undeclared        (new code reads a var nobody wrote down)
-    → accidentally exposed   (a real key ends up in a commit)
-    → hard to review    ("what did this PR actually change about config?")
-```
+- **A variable the code reads but nobody declared.** `envshield undeclared` compares your working tree (or a pull request) with a Git revision and names each new read by file and line. Python discovery is AST-based; JavaScript/TypeScript is pattern-based.
+- **A local setup that no longer matches.** `envshield check` validates your `.env` against the contract: missing, blank, wrongly typed or extra variables, and code that reads something the contract doesn't declare.
+- **A contract change in review.** `envshield schema diff` classifies each change between two revisions as breaking, security-relevant or informational, so a configuration change is reviewed like any other code change.
+- **What a pull just changed.** After a pull that touches a service's configuration, the post-merge hook runs `doctor` for it, which names any variable your local file is now missing.
 
-EnvShield's answer is to make the configuration contract a real, versioned file, and let every other command work from it:
+**Before you deploy**
 
-```
-env.schema.toml
-    → contract          (types, required/optional, defaults, conditional requirements)
-    → validation        (check, doctor, setup)
-    → usage discovery   (undeclared — what does the code actually read?)
-    → schema diff       (what changed to the contract, across two git revisions?)
-    → secret safety     (scan — a supporting check, not the product)
-```
+- **A deployment that doesn't provide what its service needs.** `envshield check` validates a Docker Compose file or Kubernetes manifest against the same contract. Register the manifest with a `containers:` map and every container is checked against its own service.
+- **Values EnvShield can't see** (a Kubernetes Secret reference, a Compose `${VAR}`) are reported as unverified, never as valid. In v4 they don't fail the check yet; see [Known limitations](#known-limitations).
 
-`env.schema.toml` is the product. Everything above reads from that one file; nothing above it invents its own idea of what your configuration is supposed to be.
+**When someone joins**
+
+- `envshield init` builds the contract from the configuration you already have, and `envshield setup` walks a new developer through their local `.env`, with each variable's description and masked input for secrets. Filling values from your team's secret manager is planned for v5.
+
+**Supporting tools:** `explain` (everything EnvShield knows about one variable), `generate` (typed `pydantic-settings` or `zod` config from the contract), `scan` (hardcoded secrets before they're committed) and `doctor` (a health check of the whole setup).
+
+### For AI coding agents
+
+Coding agents write code that reads configuration they don't know exists. EnvShield gives them a deterministic check to run in their loop: `envshield undeclared --json` and `envshield check --json` return machine-readable, value-free findings that name the variable, file and line, and the Git hooks catch what an agent commits. No secret value appears in EnvShield's output, so it's safe to put in front of an agent.
 
 ---
 
@@ -142,9 +144,9 @@ secret = true
 
 ---
 
-## Core workflow
+## Commands
 
-Four stages, in order: define the contract, validate against it, discover what code actually depends on, review how the contract itself changes.
+`envshield --help` groups commands by stage: **Onboarding** (`init`, `setup`), **Development & deployment** (`check`, `undeclared`, `hook`) and **Supporting** (everything else). This section walks through them in the order you'd use them: define the contract, validate against it, discover what code depends on, and review how the contract changes.
 
 ### Define
 
@@ -298,16 +300,49 @@ CI: schema diff + undeclared  (governance from here on)
 
 ## Monorepos / services
 
-If a repo has more than one service, `envshield.yml` registers each one with its own schema:
+One schema can serve every service in a repository. Grant each variable to the services that use it, and each service is checked against only its own variables:
+
+```toml
+[LOG_LEVEL]                  # no services: every service gets it
+defaultValue = "info"
+
+[DATABASE_URL]
+secret = true
+services = ["api", "worker"]
+
+[PORT]                       # per-service values
+type = "port"
+[PORT.services.api]
+defaultValue = "8000"
+[PORT.services.worker]
+defaultValue = "9000"
+```
 
 ```yaml
+# envshield.yml
 services:
   api:
-    schema: services/api/env.schema.toml
-    local_file: services/api/.env
+    schema: env.schema.toml
+    dir: api
+    local_file: api/.env
   worker:
-    schema: services/worker/env.schema.toml
+    schema: env.schema.toml
+    dir: worker
+    local_file: worker/.env
+manifests:
+  - file: docker-compose.yml
+    containers:       # Compose service -> EnvShield service
+      api: api
+      worker: worker
 ```
+
+A few rules keep this safe:
+
+- **A secret in a shared schema must name its services.** An unscoped secret is an error, so a secret never reaches a service by accident.
+- **Each service sharing a schema has its own `dir:`.** Two services can't claim the same directory (`service add` writes `dir:` for you).
+- **A registered manifest maps containers to services.** `check` then validates every mapped container against its own service's variables.
+
+The full model is in [docs/architecture/shared-system-schema.md](docs/architecture/shared-system-schema.md). One schema per service still works too, with shared variables composed through `extends` (see [Composing schemas](#composing-schemas-extends)).
 
 ```bash
 envshield service discover     # finds service-like directories, registers + seeds each one
@@ -515,7 +550,7 @@ envshield hook remove --yes    # skip the confirmation prompt
 
 EnvShield is built around the patterns real projects actually use. A few narrower cases aren't handled yet. None of them let a secret leak; the first one can let a value EnvShield couldn't see pass `check`:
 
-- **Unverified manifest values pass the v4 gate.** When a deployment manifest only *points* at a value — a Kubernetes `secretKeyRef`/`configMapKeyRef` to an object outside the file, a Secret key in the same file, a Compose `${VAR}` or bare `KEY`, or a `${VAR-x}`/`${VAR:-x}` fallback — EnvShield can't see the deployed value. `check` reports these variables as unverified (`valid: null`, status `not_visible`, listed in `summary.unverified`, and named in the human output), but they still pass: exit code and `success` are unchanged. A fallback that itself violates the contract still fails. Making the gate act on unverified values is planned for v5.
+- **Unverified manifest values pass the v4 gate.** When a deployment manifest only *points* at a value — a Kubernetes `secretKeyRef`/`configMapKeyRef` to an object outside the file, a Secret key in the same file, a Compose `${VAR}` or bare `KEY`, or a `${VAR-x}`/`${VAR:-x}` fallback — EnvShield can't see the deployed value. `check` reports these variables as unverified (`valid: null`, status `not_visible`, listed in `summary.unverified`; the human output names them when nothing else in that source fails), but they still pass: exit code and `success` are unchanged. A fallback that itself violates the contract still fails. Making the gate act on unverified values is planned for v5.
 - **Docker Compose:** `${VAR}`, `${VAR:-default}`, and the no-colon `${VAR-default}` form are all supported. The `${VAR:?}`/`${VAR:+}` forms and embedded/multiple interpolation references in one value aren't evaluated yet.
 - **Kubernetes:** `env[].valueFrom.secretKeyRef`/`configMapKeyRef` are matched by the container's environment-variable name (`env[].name`) — name your schema variable after the env var, not the key — and, when the referenced Secret/ConfigMap is defined in the same manifest, the referenced key is validated to actually exist there. `envFrom.prefix` is applied. `initContainers` are selectable via `--container` but never auto-selected by default.
 - **Source discovery:** Python is AST-based; JavaScript/TypeScript is pattern-based. No other language is discovered yet.

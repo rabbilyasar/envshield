@@ -1382,6 +1382,10 @@ containing:
 - remaining open release blockers, if any (BACKLOG.md's Part 0)
 - tests and lint status (actually run, not assumed)
 - `CHANGELOG.md` status (updated and accurate, or what's missing)
+- website and hosted docs status (www.envshield.dev and docs.envshield.dev,
+  source in the separate `envshield_website` repository): do they describe
+  this release? A user-visible change ships with its website update or a
+  recorded reason why not
 - working-tree status
 - the expected tag and the publishing workflow that will be triggered
 - the reason this is a meaningful release boundary, not merely "a task

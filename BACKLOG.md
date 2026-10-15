@@ -963,6 +963,7 @@ Source: product-positioning review before v5 (this session). Successor to `BL-10
 - **Impact:** a v4.8.0 user reading the site learns the pre-v4.8 model and can't find the shared-schema feature at all. Not a correctness or secret-safety issue.
 - **Relationships:** `BL-101` (predecessor, now stale), V7-2 (#28). Root cause: website updates are in a separate repository and the release process (§23) has no website step.
 - **Decision:** open. Tracked as V0-3 (#43), the positioning rewrite, approved 2026-10-14.
+- **Fix (2026-10-15, not yet merged):** the website and hosted docs are rewritten for v4.8.1 and v4.9.0 in [envshield_website#1](https://github.com/rabbilyasar/envshield_website/pull/1), to merge right after v4.9.0 is published: shared schemas, `required`/`services` in the field reference, unverified values, the JSON report, `--help` stage groups, `uninstall` deprecated, and the wrong "there is no separate `required` boolean" line removed. The README is updated in the #43 PR. The root cause (no website step in releases) is addressed by a new item in the AGENTS.md/CLAUDE.md §23 release-review checklist.
 - **Issue:** V0-3 [#43](https://github.com/rabbilyasar/envshield/issues/43).
 
 The five entries below come from one first-run trial on 2026-10-14 (v4.8.0, a fresh git repo containing `api/app.py` reading `DATABASE_URL`/`PORT`/`STRIPE_SECRET_KEY`, `web/index.ts` reading `API_URL`/`NEXT_PUBLIC_ANALYTICS_KEY`, a `.env.example` with three of those variables, and a `docker-compose.yml` with service `api`).
