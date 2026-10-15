@@ -880,7 +880,20 @@ backlog (revision-aware service-directory resolution for the explicit
 two-revision form, discovered-file size cap, `DEFAULT_EXCLUDED_DIRS`-style
 pruning) — none are blockers, and none require another Phase 2C milestone.
 
-**Current phase (updated 2026-10-14): `v4.8.0` released; v5 next.**
+**Current phase (updated 2026-10-14): `v4.8.1` released; v4.9.0 next.**
+`v4.8.1` is the current released version: release commit `ac61961`
+(`v4.8.1^{commit}`; the annotated tag object is `6eee1b3`), published by
+`publish.yml` run `38600613745` with every job green (tests on 3.10-3.12,
+PyPI trusted publishing, GitHub Release created). PyPI lists `4.8.1` with a
+wheel and sdist, the wheel's provenance attestation resolves (HTTP 200), and
+a clean-venv `pip install envshield` yields `4.8.1`, which no longer echoes a
+warning-triggering source line from `check`, `scan` or `undeclared`: all
+verified, not assumed. It ships only the `BL-182` (P0) fix, released with the
+user's explicit, v4.8.1-only overrides for the same two open P1s as v4.8.0
+(`BL-095`, `BL-166`'s gate half). Next: V0-2a (#50), then V0-1 (#14) and
+V0-3 (#43), released together as v4.9.0.
+
+**Previous release (v4.8.0):**
 `v4.8.0` is the current released version: release commit `3483705`
 (`v4.8.0^{commit}`; the annotated tag object is `0d1c956`), published by
 `publish.yml` run `38571673133` with every job green (tests on 3.10-3.12,
@@ -898,9 +911,8 @@ deployment lead the story, provider support returns to planning, a new
 build order, CLI consolidation by stage), after a v4.8.0 trial on nine real
 repositories (BACKLOG.md `BL-175`–`BL-188`). That trial found a P0,
 `BL-182`: Python `SyntaxWarning`s echo user source lines, including secret
-literals, past `scan`'s redaction. Next is V0-4 (#47, fix in PR #49), released
-alone as v4.8.1; then V0-2a (#50, deprecate duplicate commands, group
-`--help`), V0-1 (#14) and V0-3 (#43), released together as v4.9.0. The full ordered v5 sequence is in ROADMAP.md's "v5 —
+literals, past `scan`'s redaction. Fixed by V0-4 (#47, PR #49) and released
+alone as v4.8.1 (see above). The full ordered v5 sequence is in ROADMAP.md's "v5 —
 in progress" section; the amendment's text is on #14.
 
 **Previous phase (updated 2026-10-01; commit status corrected 2026-10-14): Evaluator migration.** `check` now
