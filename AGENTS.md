@@ -880,7 +880,17 @@ backlog (revision-aware service-directory resolution for the explicit
 two-revision form, discovered-file size cap, `DEFAULT_EXCLUDED_DIRS`-style
 pruning) — none are blockers, and none require another Phase 2C milestone.
 
-**Current phase (updated 2026-10-15): `v4.9.0` released; v5 V1 next.**
+**Current phase (updated 2026-10-15): `v4.9.1` released; v5 V1 next.**
+`v4.9.1` is the current released version: release commit `da53321`
+(`v4.9.1^{commit}`; the annotated tag object is `9814727`), published by
+`publish.yml` run `38779892934` with every job green. PyPI lists `4.9.1`
+(wheel and sdist, provenance HTTP 200) requiring `typer<1.0,>=0.16`, and a
+clean-venv `pip install envshield==4.9.1` succeeds with no extras warning:
+verified, not assumed. It ships only `BL-189` (#58), released with the user's
+explicit, v4.9.1-only overrides for `BL-095` and `BL-166`'s gate half. Next:
+V1 (#15, #16, #17). V0-1 (#14) still needs the original v5 plan text.
+
+**Previous release (v4.9.0):**
 `v4.9.0` is the current released version: release commit `8223619`
 (`v4.9.0^{commit}`; the annotated tag object is `2394909`), published by
 `publish.yml` run `38769779651` with every job green (tests on 3.10-3.12,
