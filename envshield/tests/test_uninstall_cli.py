@@ -25,9 +25,11 @@ def _init_git_repo():
 
 
 def test_uninstall_command_is_registered():
-    result = runner.invoke(app, ["--help"])
+    # Deprecated in favor of 'hook remove' (V0-2a): hidden from --help, but
+    # still a registered, working command until v6.
+    result = runner.invoke(app, ["uninstall", "--help"])
     assert result.exit_code == 0
-    assert "uninstall" in result.stdout
+    assert "hook remove" in result.stdout
 
 
 def test_bare_uninstall_removes_untouched_hooks_at_a_real_tty(mocker, tmp_path):

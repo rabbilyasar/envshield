@@ -106,7 +106,7 @@ def test_hook_remove_leaves_a_hook_envshield_did_not_install(tmp_path):
 
         assert result.exit_code == 0
         assert os.path.exists(".git/hooks/pre-commit")
-        assert "No EnvShield-installed hooks" in result.stdout
+        assert "Nothing to remove" in result.stdout
 
 
 def test_hook_remove_deletes_an_unmodified_envshield_pre_commit_hook(tmp_path):
@@ -195,7 +195,7 @@ def test_hook_remove_leaves_a_foreign_marker_free_post_merge_hook(tmp_path):
 
         assert result.exit_code == 0
         assert os.path.exists(".git/hooks/post-merge")
-        assert "No EnvShield-installed hooks" in result.stdout
+        assert "Nothing to remove" in result.stdout
 
 
 def test_hook_remove_does_not_trust_a_coincidental_marker_in_a_foreign_pre_commit_hook(

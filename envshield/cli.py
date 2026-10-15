@@ -91,22 +91,28 @@ def main(
             os.chdir(root)
 
 
+# --help groups commands by stage (V0-2a). Deployment checks run through
+# 'check', so it shares a panel with development.
+_ONBOARDING = "Onboarding"
+_DEV_AND_DEPLOY = "Development & deployment"
+_SUPPORTING = "Supporting"
+
 schema_app = typer.Typer(
     name="schema", help="Check and sync your environment schema.", no_args_is_help=True
 )
-app.add_typer(schema_app, name="schema")
+app.add_typer(schema_app, name="schema", rich_help_panel=_SUPPORTING)
 service_app = typer.Typer(
     name="service",
     help="Discover, add, list, and remove services for a multi-service project.",
     no_args_is_help=True,
 )
-app.add_typer(service_app, name="service")
+app.add_typer(service_app, name="service", rich_help_panel=_SUPPORTING)
 hook_app = typer.Typer(
     name="hook",
     help="Install, inspect the status of, and remove EnvShield's Git hooks.",
     no_args_is_help=True,
 )
-app.add_typer(hook_app, name="hook")
+app.add_typer(hook_app, name="hook", rich_help_panel=_DEV_AND_DEPLOY)
 
 
 def _seed_schema_from_file(
@@ -187,7 +193,7 @@ def _print_union_completeness_summary(
 
 
 # --- Commands ---
-@app.command()
+@app.command(rich_help_panel=_ONBOARDING)
 def init(
     force: bool = typer.Option(
         False,
@@ -444,7 +450,7 @@ def init(
     console.print("  envshield setup    # Configure your local environment")
 
 
-@app.command()
+@app.command(rich_help_panel=_DEV_AND_DEPLOY)
 def check(
     file: Optional[str] = typer.Argument(
         None,
@@ -601,7 +607,7 @@ def _render_code_references(evaluation: "evaluator.ServiceEvaluation") -> None:
         )
 
 
-@app.command(name="doctor")
+@app.command(name="doctor", rich_help_panel=_SUPPORTING)
 def doctor_command(
     fix: bool = typer.Option(
         False,
@@ -833,7 +839,7 @@ def _render_explain_report(report: "explain.ExplainReport") -> None:
     _render_manifest_references(report.manifest_references, report.variable)
 
 
-@app.command(name="explain")
+@app.command(name="explain", rich_help_panel=_SUPPORTING)
 def explain_command(
     variable: str = typer.Argument(..., metavar="VARIABLE"),
     service: Optional[str] = typer.Option(
@@ -895,7 +901,7 @@ def explain_command(
         _render_explain_report(report)
 
 
-@app.command()
+@app.command(rich_help_panel=_ONBOARDING)
 def setup(
     output_file: Optional[str] = typer.Argument(
         None,
@@ -1195,7 +1201,7 @@ def _print_dependency_error(
         console.print(f"[bold red]Error:[/bold red] {message}")
 
 
-@app.command(name="undeclared")
+@app.command(name="undeclared", rich_help_panel=_DEV_AND_DEPLOY)
 def undeclared(
     rev_a: Optional[str] = typer.Argument(
         None,
@@ -1667,7 +1673,7 @@ def _resolve_generate_lang(explicit_lang: Optional[str]) -> str:
     return resolved
 
 
-@app.command()
+@app.command(rich_help_panel=_SUPPORTING)
 def generate(
     output_file: Optional[str] = typer.Argument(
         None,
@@ -1758,7 +1764,7 @@ def generate(
         raise typer.Exit(code=1)
 
 
-@app.command()
+@app.command(rich_help_panel=_SUPPORTING)
 def scan(
     paths: List[str] = typer.Argument(
         None,
@@ -1863,6 +1869,109 @@ def _install_hooks(yes: bool = False) -> None:
     hooks_manager.install_post_merge_hook(non_interactive=yes)
 
 
+def _warn_deprecated(old: str, new: str) -> None:
+    """One stderr line, so stdout (and any JSON on it) is unchanged."""
+    typer.echo(
+        f"Warning: 'envshield {old}' is deprecated and will be removed in v6. "
+        f"Use 'envshield {new}' instead.",
+        err=True,
+    )
+
+
+def _remove_hooks_and_report(missing_repo_ok: bool) -> None:
+    """Removes EnvShield-owned hooks and reports what was removed and kept.
+
+    Shared by 'hook remove' and the deprecated 'uninstall'.
+    """
+    try:
+        hook_results = hooks_manager.remove_hooks()
+    except EnvShieldException as e:
+        # No Git repository: an error for 'hook remove', which only makes
+        # sense inside one, but not for the project-level 'uninstall',
+        # which still reports the project configuration it preserved.
+        if not missing_repo_ok:
+            console.print(f"[bold red]Error:[/bold red] {e}")
+            raise typer.Exit(code=1)
+        hook_results = []
+
+    # Reused, not re-derived: 'remove_hooks()' already resolves this same
+    # directory (respecting a configured 'core.hooksPath', e.g. Husky) to
+    # decide where to look/delete -- the report must name that same real
+    # location, never a hardcoded '.git/hooks/' that could be wrong.
+    # 'get_hooks_dir()' always returns an absolute path; displaying it
+    # relative to the current directory (when possible) is purely
+    # cosmetic -- it keeps the common case reading exactly as it always
+    # has, and avoids Rich hard-wrapping a long absolute path mid-string.
+    hooks_dir = git_utils.get_hooks_dir()
+    if hooks_dir:
+        try:
+            hooks_dir = os.path.relpath(hooks_dir, os.getcwd())
+        except ValueError:
+            pass
+    else:
+        hooks_dir = os.path.join(".git", "hooks")
+
+    removed_names = [r["name"] for r in hook_results if r["status"] == "removed"]
+    preserved_hooks = [r for r in hook_results if r["status"] == "preserved"]
+
+    if removed_names:
+        console.print("[bold]Removed:[/bold]")
+        for hook_name in removed_names:
+            console.print(
+                f"  [bold green]✓[/bold green] {os.path.join(hooks_dir, hook_name)}"
+            )
+        console.print()
+    else:
+        console.print(
+            "[yellow]Nothing to remove -- no safely-owned EnvShield hooks were found.[/yellow]\n"
+        )
+
+    # Everything below is report-only -- this never deletes or
+    # modifies any of it, regardless of whether EnvShield originally
+    # created it (envshield.yml, a schema, .env.example) or only ever
+    # populated it (a registered local_file, which may hold real secret
+    # values and is never "EnvShield's own" to reclaim).
+    preserved_lines = []
+    for r in preserved_hooks:
+        preserved_lines.append(
+            (
+                os.path.join(hooks_dir, r["name"]),
+                "hook contents do not exactly match what EnvShield would "
+                "generate now -- hand-modified, foreign, or stale relative "
+                "to your current config",
+            )
+        )
+
+    if os.path.exists(config_manager.CONFIG_FILE_NAME):
+        preserved_lines.append(
+            (config_manager.CONFIG_FILE_NAME, "project configuration")
+        )
+
+    for service_name in config_manager.get_services():
+        schema_path = config_manager.get_service_schema_path(service_name)
+        if schema_path and os.path.exists(schema_path):
+            preserved_lines.append((schema_path, "project configuration"))
+
+        paths = config_manager.get_env_paths(service_name)
+        if os.path.exists(paths["example_file"]):
+            preserved_lines.append((paths["example_file"], "preserved"))
+        if os.path.exists(paths["local_file"]):
+            preserved_lines.append((paths["local_file"], "application configuration"))
+
+    if preserved_lines:
+        console.print("[bold]Preserved:[/bold]")
+        for path, reason in preserved_lines:
+            console.print(f"  • {path} -- {reason}")
+        console.print()
+
+    if removed_names:
+        console.print(
+            "[bold green]EnvShield Git hook integration removed safely.[/bold green]"
+        )
+    if preserved_lines:
+        console.print("Project configuration was preserved.")
+
+
 def _confirm_hook_action(prompt: str, yes: bool) -> bool:
     """
     Shared confirmation gate for 'hook install'/'hook remove' (and the
@@ -1883,13 +1992,14 @@ def _confirm_hook_action(prompt: str, yes: bool) -> bool:
     return bool(questionary.confirm(prompt, default=True).ask())
 
 
-@app.command("install-hook")
+@app.command("install-hook", hidden=True)
 def install_hook(
     yes: bool = typer.Option(
         False, "--yes", "-y", help="Skip the confirmation prompt."
     ),
 ):
-    """Installs Git hooks: pre-commit (scan for secrets) and post-merge (check env config after pull). Same as 'hook install'."""
+    """Deprecated: use 'envshield hook install'. Installs the same Git hooks."""
+    _warn_deprecated("install-hook", "hook install")
     if not _confirm_hook_action(
         "Install git hooks? (pre-commit: secret scanning, post-merge: config change detection)",
         yes,
@@ -1959,28 +2069,18 @@ def hook_remove(
     if not _confirm_hook_action("Remove EnvShield-installed git hooks?", yes):
         console.print("[yellow]Cancelled.[/yellow]")
         raise typer.Exit()
-    try:
-        results = hooks_manager.remove_hooks()
-    except EnvShieldException as e:
-        console.print(f"[bold red]Error:[/bold red] {e}")
-        raise typer.Exit(code=1)
-
-    removed = [r["name"] for r in results if r["status"] == "removed"]
-    if not removed:
-        console.print("[yellow]No EnvShield-installed hooks found to remove.[/yellow]")
-        return
-    for hook_name in removed:
-        console.print(f"[bold green]✓[/bold green] Removed {hook_name} hook.")
+    _remove_hooks_and_report(missing_repo_ok=False)
 
 
-@app.command()
+@app.command(hidden=True)
 def uninstall(
     yes: bool = typer.Option(
         False, "--yes", "-y", help="Skip the confirmation prompt."
     ),
 ):
     """
-    Removes EnvShield's Git hook integration from this project.
+    Deprecated: use 'envshield hook remove'. Removes EnvShield's Git hook
+    integration from this project.
 
     Only ever deletes a hook file whose content exactly matches what
     EnvShield would generate right now -- the same ownership standard
@@ -1994,6 +2094,7 @@ def uninstall(
     file are always preserved and reported, never removed. This is not a
     "delete everything EnvShield ever created" command.
     """
+    _warn_deprecated("uninstall", "hook remove")
     if not _confirm_hook_action(
         "EnvShield will remove Git hooks that are verified as EnvShield-owned.\n"
         "Project configuration and schema files will be preserved.\n\n"
@@ -2004,95 +2105,10 @@ def uninstall(
         raise typer.Exit()
 
     console.print("\n[bold]EnvShield uninstall[/bold]\n")
-
-    try:
-        hook_results = hooks_manager.remove_hooks()
-    except EnvShieldException:
-        # No Git repository -- there are no hooks to remove, which isn't
-        # an error condition for a project-level uninstall the way it is
-        # for 'hook remove' (a command that only ever makes sense inside
-        # one). Continue on to reporting project configuration.
-        hook_results = []
-
-    # Reused, not re-derived: 'remove_hooks()' already resolves this same
-    # directory (respecting a configured 'core.hooksPath', e.g. Husky) to
-    # decide where to look/delete -- the report must name that same real
-    # location, never a hardcoded '.git/hooks/' that could be wrong.
-    # 'get_hooks_dir()' always returns an absolute path; displaying it
-    # relative to the current directory (when possible) is purely
-    # cosmetic -- it keeps the common case reading exactly as it always
-    # has, and avoids Rich hard-wrapping a long absolute path mid-string.
-    hooks_dir = git_utils.get_hooks_dir()
-    if hooks_dir:
-        try:
-            hooks_dir = os.path.relpath(hooks_dir, os.getcwd())
-        except ValueError:
-            pass
-    else:
-        hooks_dir = os.path.join(".git", "hooks")
-
-    removed_names = [r["name"] for r in hook_results if r["status"] == "removed"]
-    preserved_hooks = [r for r in hook_results if r["status"] == "preserved"]
-
-    if removed_names:
-        console.print("[bold]Removed:[/bold]")
-        for hook_name in removed_names:
-            console.print(
-                f"  [bold green]✓[/bold green] {os.path.join(hooks_dir, hook_name)}"
-            )
-        console.print()
-    else:
-        console.print(
-            "[yellow]Nothing to remove -- no safely-owned EnvShield hooks were found.[/yellow]\n"
-        )
-
-    # Everything below is report-only -- uninstall never deletes or
-    # modifies any of it, regardless of whether EnvShield originally
-    # created it (envshield.yml, a schema, .env.example) or only ever
-    # populated it (a registered local_file, which may hold real secret
-    # values and is never "EnvShield's own" to reclaim).
-    preserved_lines = []
-    for r in preserved_hooks:
-        preserved_lines.append(
-            (
-                os.path.join(hooks_dir, r["name"]),
-                "hook contents do not exactly match what EnvShield would "
-                "generate now -- hand-modified, foreign, or stale relative "
-                "to your current config",
-            )
-        )
-
-    if os.path.exists(config_manager.CONFIG_FILE_NAME):
-        preserved_lines.append(
-            (config_manager.CONFIG_FILE_NAME, "project configuration")
-        )
-
-    for service_name in config_manager.get_services():
-        schema_path = config_manager.get_service_schema_path(service_name)
-        if schema_path and os.path.exists(schema_path):
-            preserved_lines.append((schema_path, "project configuration"))
-
-        paths = config_manager.get_env_paths(service_name)
-        if os.path.exists(paths["example_file"]):
-            preserved_lines.append((paths["example_file"], "preserved"))
-        if os.path.exists(paths["local_file"]):
-            preserved_lines.append((paths["local_file"], "application configuration"))
-
-    if preserved_lines:
-        console.print("[bold]Preserved:[/bold]")
-        for path, reason in preserved_lines:
-            console.print(f"  • {path} -- {reason}")
-        console.print()
-
-    if removed_names:
-        console.print(
-            "[bold green]EnvShield Git hook integration removed safely.[/bold green]"
-        )
-    if preserved_lines:
-        console.print("Project configuration was preserved.")
+    _remove_hooks_and_report(missing_repo_ok=True)
 
 
-@app.command(name="import")
+@app.command(name="import", rich_help_panel=_SUPPORTING)
 def import_command(
     file: str = typer.Argument(
         ...,
