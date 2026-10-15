@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented in this file.
 
+## [4.9.1] - 2026-10-15
+
+### Fixed
+- **No more warning on install.** EnvShield required `typer[all]`, an extra current Typer no longer has, so `pip install envshield` warned about it. It now requires `typer>=0.16`.
+- **No more broken installs with an old Typer.** The previous minimum (Typer 0.9) doesn't work with current Click, so a project that already pinned an older Typer could end up with a broken EnvShield. 0.16 is the oldest version that passes the full test suite.
+
 ## [4.9.0] - 2026-10-15
 
 A shorter, stage-grouped command list, and documentation that leads with what EnvShield catches.
