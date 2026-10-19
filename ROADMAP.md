@@ -87,7 +87,9 @@ issue.
    and never calls a value valid unless it actually read and validated it.
    Values EnvShield can't see (a Kubernetes Secret, a Compose `${VAR}`)
    fail the gate unless you accept that specific reason explicitly with
-   `--accept-unverified`.
+   `--accept-unverified`. Every finding has one documented shape, the same
+   in every command, and says what to do next and whether an agent or a
+   person must do it (never a secret value).
    ([#15](https://github.com/rabbilyasar/envshield/issues/15),
    [#16](https://github.com/rabbilyasar/envshield/issues/16),
    [#17](https://github.com/rabbilyasar/envshield/issues/17))
@@ -111,9 +113,13 @@ issue.
    `check` (`undeclared` becomes `check --since`; `scan` keeps only secret
    detection), with the old forms kept working through v5; the same answer
    in a terminal and in CI; output that stays readable in CI logs; the
-   pull request that adopts EnvShield doesn't fail its own check.
+   pull request that adopts EnvShield doesn't fail its own check. One
+   command checks a change and returns one finding list, and a documented
+   recipe runs it from Claude Code, Codex and other coding agents after
+   each edit.
    ([#42](https://github.com/rabbilyasar/envshield/issues/42),
-   [#45](https://github.com/rabbilyasar/envshield/issues/45))
+   [#45](https://github.com/rabbilyasar/envshield/issues/45),
+   [#63](https://github.com/rabbilyasar/envshield/issues/63))
 8. **Onboarding that works with your vault** — `setup` reports exactly what
    is ready, what needs access and what you must set yourself, never hangs
    without a terminal, and never overwrites a value without asking. Secret

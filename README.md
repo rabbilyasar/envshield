@@ -193,13 +193,18 @@ $ envshield undeclared
 
 ```bash
 $ envshield schema diff origin/main HEAD
-┌───────────────┬──────────┬───────────────────────────────────────────┐
-│ Variable      │ Category │ Description                                │
-├───────────────┼──────────┼───────────────────────────────────────────┤
-│ PORT          │ BREAKING │ lost its default and is now always         │
-│               │          │ required                                   │
-│ STRIPE_KEY    │ SECURITY │ secret classification WEAKENED             │
-└───────────────┴──────────┴───────────────────────────────────────────┘
+┌───────────────────────┬──────────┬───────────────────────────────────────────┐
+│ Variable              │ Category │ Description                               │
+├───────────────────────┼──────────┼───────────────────────────────────────────┤
+│ STRIPE_WEBHOOK_SECRET │ BREAKING │ 'STRIPE_WEBHOOK_SECRET' was added and     │
+│                       │          │ must always be present (no requiredIf, so │
+│                       │          │ nothing exempts an existing config from   │
+│                       │          │ now needing it).                          │
+│ STRIPE_KEY            │ SECURITY │ 'STRIPE_KEY' secret classification        │
+│                       │          │ WEAKENED (true -> false) -- it will no    │
+│                       │          │ longer be masked in generated code, scan  │
+│                       │          │ output, or validation-error messages.     │
+└───────────────────────┴──────────┴───────────────────────────────────────────┘
 ```
 
 This is the schema functioning as a real contract: a change to it is reviewable on a PR, the same way an API contract change would be — not just a local file that happens to agree with itself.
