@@ -2005,6 +2005,7 @@ Source(s): product-positioning review before v5 (this session).
 - **Tension with v5 as planned:** V3-3 writes vault values into a plaintext `.env` (0600). Competitors now market *not* writing secrets to disk, and in agentic workflows a plaintext `.env` is readable by any coding agent running as the developer.
 - **What none of the sources show:** validation of Docker Compose or Kubernetes manifests against a contract, one contract projected across several services with scoped secrets, contract diff across git revisions, per-environment requiredness checked inside the deploy environment, or AST discovery of undeclared reads failing a PR.
 - **Decision:** none yet. This needs the maintainer's decision during v5 planning. Options include keeping V3-3 as planned, narrowing it to a reference-only or validation role over existing providers (for example, checking a 1Password Environment against the schema instead of copying values), or deprioritizing it. Not a defect.
+- **Decided 2026-10-14** by the maintainer's plan amendment: A1 (development and deployment lead; onboarding works with the vault) and A2 (V3-3, #22, back to planning to validate or reference provider values instead of copying them to disk). Recorded in [docs/architecture/v5-decisions.md](docs/architecture/v5-decisions.md) by V0-1 (#14, 2026-10-19).
 
 ---
 
