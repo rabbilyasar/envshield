@@ -18,13 +18,13 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from ..config import manager as config_manager
-from ..parsers._base import not_inspected_names
+from ..parsers._base import ValueStates, not_inspected_names
 from ..parsers.factory import get_manifest_parser_and_states
 from ..utils import git_utils
-from . import discovery, schema_manager, schema_types, source_files
+from . import discovery, schema_manager, schema_types, source_files, verdicts
 from .exceptions import EnvShieldException
 
-REPORT_VERSION = 1
+REPORT_VERSION = 2
 
 
 @dataclass
@@ -47,6 +47,13 @@ class SourceEvaluation:
     not_inspected: Tuple[str, ...] = ()
     # The file exists but no parser recognizes it (a kind of "error").
     unparseable: bool = False
+    # v5 (plan §10), all value-free: each name's verdict in this source, the
+    # source's requiredness opinion per declared name (verdicts.requirement),
+    # envFrom references outside the file, and why an errored source failed.
+    verdicts: Dict[str, verdicts.Verdict] = field(default_factory=dict)
+    needs: Dict[str, Optional[str]] = field(default_factory=dict)
+    unbound: Tuple[Any, ...] = ()
+    error_reason: Optional[str] = None
 
     @property
     def clean(self) -> bool:
@@ -86,6 +93,7 @@ def evaluate_source(
     schema: Optional[Dict[str, Any]] = None,
     environment: Optional[Mapping[str, str]] = None,
     kind: str = "local_file",
+    union: bool = False,
 ) -> SourceEvaluation:
     """
     Evaluates one source against `service_name`'s contract.
@@ -111,10 +119,21 @@ def evaluate_source(
         return source
     except (ValueError, EnvShieldException) as e:
         source.status, source.error = "error", str(e)
+        source.error_reason = "source_parse_error"
+        return source
+    except OSError as e:
+        # Unreadable (permissions, a directory, ...): the evaluation can't
+        # run. strerror names the problem; the file's content is never read.
+        source.status, source.error = (
+            "error",
+            f"Could not read '{file_path}': {e.strerror}",
+        )
+        source.error_reason = "source_unreadable"
         return source
     if not parser:
         source.status, source.unparseable = "error", True
         source.error = schema_manager._no_parser_found_message(file_path)
+        source.error_reason = "source_parse_error"
         return source
 
     source.is_deployment_manifest = parser.is_deployment_manifest
@@ -141,8 +160,22 @@ def evaluate_source(
         schema_manager.mark_out_of_scope(diff, service_name)
     except EnvShieldException as e:
         source.status, source.error = "error", str(e)
+        source.error_reason = "topology_error"
         return source
 
+    source.verdicts = verdicts.judge_source(
+        schema,
+        local_values,
+        diff.extra,
+        diff.out_of_scope,
+        union=union,
+        manifest=parser.is_deployment_manifest,
+    )
+    source.needs = {
+        name: verdicts.requirement(details, local_values)
+        for name, details in schema.items()
+    }
+    source.unbound = local_values.unbound
     source.diff = diff
     if diff.unresolved:
         source.status = "unresolved"
@@ -296,6 +329,93 @@ class ServiceEvaluation:
             )
         return all(s.clean for s in self.sources)
 
+    # --- v5 verdicts (plan §10) -------------------------------------------
+
+    def _source_verdict(self, name: str, source: SourceEvaluation):
+        """`name`'s verdict in `source`; None when the source says nothing
+        about it (a source that errored or is missing, in union mode, or an
+        undeclared name another source has)."""
+        if source.diff is not None:
+            return source.verdicts.get(name)
+        fields = self.view.fields if self.view is not None else {}
+        if self.is_union or name not in fields:
+            return None
+        if source.status == "missing":
+            need = verdicts.requirement(fields[name], ValueStates())
+            return verdicts.judge_variable(
+                fields[name], None, need, missing_file=source.path
+            )
+        return verdicts.Verdict(
+            verdicts.ERROR, source.error_reason or "internal_error", source.error
+        )
+
+    def judged(self) -> Dict[str, Tuple[Any, List[Any]]]:
+        """name -> (its verdict, its verdict in each of self.sources or None)."""
+        fields = self.view.fields if self.view is not None else {}
+        undeclared = self.undeclared_references
+        names = set(fields) | set(undeclared)
+        for source in self.sources:
+            names |= set(source.verdicts)
+        result = {}
+        for name in names:
+            per_source = [self._source_verdict(name, s) for s in self.sources]
+            seen = [v for v in per_source if v is not None]
+            if name in undeclared:
+                seen.append(verdicts.UNDECLARED)
+                overall = verdicts.worst(seen)
+            elif self.is_union and name in fields:
+                need = verdicts.union_requirement(
+                    fields[name],
+                    [s.needs.get(name) for s in self.sources if s.diff is not None],
+                )
+                unbound = [u for s in self.sources for u in s.unbound]
+                overall = verdicts.union_verdict(fields[name], seen, need, unbound)
+            else:
+                overall = verdicts.worst(seen)
+            result[name] = (overall, per_source)
+        return result
+
+    def service_findings(self) -> List[Tuple[Any, Optional[SourceEvaluation]]]:
+        """Failures that belong to the service or a whole source, not to one variable."""
+        found: List[Tuple[Any, Optional[SourceEvaluation]]] = []
+        if self.schema_error is not None:
+            found.append(
+                (
+                    verdicts.Verdict(
+                        verdicts.ERROR, "contract_error", self.schema_error
+                    ),
+                    None,
+                )
+            )
+        if self.error is not None:
+            found.append(
+                (verdicts.Verdict(verdicts.ERROR, "topology_error", self.error), None)
+            )
+        if self.schema_error is None:
+            for source in self.sources:
+                if source.status == "error":
+                    reason = source.error_reason or "internal_error"
+                    found.append(
+                        (verdicts.Verdict(verdicts.ERROR, reason, source.error), source)
+                    )
+                elif source.status == "missing" and self.is_union:
+                    found.append(
+                        (
+                            verdicts.Verdict(
+                                verdicts.INVALID, "file_not_found", source.error
+                            ),
+                            source,
+                        )
+                    )
+        return found
+
+    def verdict(self) -> Any:
+        """The service's verdict: the highest-precedence one found anywhere."""
+        return verdicts.worst(
+            [v for v, _ in self.judged().values()]
+            + [v for v, _ in self.service_findings()]
+        )
+
     def legacy_results(self) -> List[Dict[str, Any]]:
         """This service's entries in 'check --json' `results`, as always."""
         results = [s.legacy_result() for s in self.sources]
@@ -357,8 +477,11 @@ def evaluate_service(
                     container=kwargs.get("container"),
                     status="error",
                     error=evaluation.schema_error,
+                    error_reason="contract_error",
                 )
-            return evaluate_source(path, service_name, schema=schema, **kwargs)
+            return evaluate_source(
+                path, service_name, schema=schema, union=evaluation.is_union, **kwargs
+            )
 
         evaluation.sources.append(
             _evaluate(resolved_file, container=container, environment=environment)
@@ -460,14 +583,31 @@ def build_report(evaluation: ServiceEvaluation) -> Dict[str, Any]:
     names = set(fields) | set(references)
     for source in checked:
         names |= source.diff.extra
+    judged = evaluation.judged()
+    names |= set(judged)
 
     variables = []
     unverified: List[str] = []
     for name in sorted(names):
         declared = name in fields
-        per_source = [
-            {"path": s.path, "status": _variable_status(name, s)} for s in checked
-        ]
+        overall, per_judged = judged.get(
+            name,
+            (verdicts.Verdict(verdicts.NOT_REQUIRED), [None] * len(evaluation.sources)),
+        )
+        by_source = {id(s): v for s, v in zip(evaluation.sources, per_judged)}
+        per_source = []
+        for s in checked:
+            judged_here = by_source.get(id(s)) or verdicts.Verdict(
+                verdicts.NOT_REQUIRED
+            )
+            per_source.append(
+                {
+                    "path": s.path,
+                    "status": _variable_status(name, s),
+                    "verdict": judged_here.verdict,
+                    "reason_code": judged_here.reason,
+                }
+            )
         statuses = [entry["status"] for entry in per_source]
         entry: Dict[str, Any] = {
             "name": name,
@@ -523,6 +663,9 @@ def build_report(evaluation: ServiceEvaluation) -> Dict[str, Any]:
                     "reason": (invalid_reasons or trigger_reasons or [None])[0],
                 }
             )
+        entry["verdict"] = overall.verdict
+        entry["reason_code"] = overall.reason
+        entry["detail"] = overall.detail
         entry["sources"] = per_source
         if code is not None:
             entry["references"] = [
@@ -542,6 +685,11 @@ def build_report(evaluation: ServiceEvaluation) -> Dict[str, Any]:
         variables.append(entry)
 
     complete = evaluation.complete
+    findings = _findings(evaluation, judged)
+    service_verdict = evaluation.verdict()
+    counts = {v: 0 for v in verdicts.VERDICTS}
+    for entry in variables:
+        counts[entry["verdict"]] += 1
     return {
         "report_version": REPORT_VERSION,
         "service": evaluation.service,
@@ -564,8 +712,115 @@ def build_report(evaluation: ServiceEvaluation) -> Dict[str, Any]:
             "complete": complete,
             # Valid-looking values EnvShield never saw; they pass the gate.
             "unverified": unverified,
+            # v2: the service's verdict and how many variables got each one.
+            "verdict": service_verdict.verdict,
+            "counts": counts,
         },
+        "findings": findings,
+        "errors": [f for f in findings if f["verdict"] == verdicts.ERROR],
+        "invalid": [f for f in findings if f["verdict"] == verdicts.INVALID],
+        "unverified": [f for f in findings if f["verdict"] == verdicts.UNVERIFIED],
+        "coverage": (
+            {
+                "files_scanned": code.files_scanned,
+                "skipped": sorted(code.skipped),
+                "dynamic": [d.to_dict() for d in code.dynamic],
+            }
+            if code is not None
+            else None
+        ),
     }
+
+
+def _finding(
+    evaluation: ServiceEvaluation,
+    verdict: Any,
+    kind: str,
+    variable: Optional[str] = None,
+    source: Optional[SourceEvaluation] = None,
+    line: Optional[int] = None,
+    file: Optional[str] = None,
+) -> Dict[str, Any]:
+    """One finding (BL-191): names, places and reasons only, never a value."""
+    fields = evaluation.view.fields if evaluation.view is not None else {}
+    field_schema = fields.get(variable or "", {})
+    path = file or (source.path if source is not None else None)
+    location = None
+    if path is not None:
+        location = {
+            "file": path,
+            "line": line,
+            "container": getattr(source, "container", None),
+        }
+    return {
+        "kind": kind,
+        "verdict": verdict.verdict,
+        "reason_code": verdict.reason,
+        "detail": verdict.detail,
+        "variable": variable,
+        "service": evaluation.service,
+        "location": location,
+        "secret": bool(field_schema.get("secret", False)),
+        "next_step": verdicts.next_step(
+            verdict.reason,
+            variable=variable,
+            service=evaluation.service,
+            file=path,
+            manifest=bool(source is not None and source.is_deployment_manifest),
+            secret=bool(field_schema.get("secret", False)),
+            has_default="defaultValue" in field_schema,
+            detail=verdict.detail,
+        ),
+    }
+
+
+def _findings(evaluation: ServiceEvaluation, judged) -> List[Dict[str, Any]]:
+    """
+    One finding per variable x source that is INVALID or COULD NOT VERIFY
+    (in union mode, per variable: the union decides), one per undeclared
+    code read, and one per service- or source-level failure. A variable a
+    failed source would supply is listed under that source's error.
+    """
+    findings: List[Dict[str, Any]] = []
+    fields = evaluation.view.fields if evaluation.view is not None else {}
+    for verdict, source in evaluation.service_findings():
+        finding = _finding(
+            evaluation, verdict, "source" if source else "service", source=source
+        )
+        if source is not None:
+            finding["variables"] = sorted(fields)
+        findings.append(finding)
+
+    undeclared = evaluation.undeclared_references
+    reportable = (verdicts.INVALID, verdicts.UNVERIFIED)
+    for name in sorted(judged):
+        overall, per_source = judged[name]
+        if name in undeclared:
+            usage = undeclared[name][0]
+            findings.append(
+                _finding(
+                    evaluation,
+                    verdicts.UNDECLARED,
+                    "code_reference",
+                    name,
+                    line=usage.line,
+                    file=usage.file_path,
+                )
+            )
+        if overall.verdict not in reportable or overall == verdicts.UNDECLARED:
+            continue
+        pairs = list(zip(per_source, evaluation.sources))
+        if evaluation.is_union:
+            # The union decides: one finding, at the source it came from.
+            where = next((src for v, src in pairs if v == overall), None)
+            findings.append(
+                _finding(evaluation, overall, "variable", name, source=where)
+            )
+            continue
+        for v, src in pairs:
+            if v is not None and v.verdict in reportable:
+                findings.append(_finding(evaluation, v, "variable", name, source=src))
+    return findings
 
 
 def legacy_check_payload(evaluations: List[ServiceEvaluation]) -> Dict[str, Any]:

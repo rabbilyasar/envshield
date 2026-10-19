@@ -205,16 +205,40 @@ class TestProcessEnvironmentOverlay:
         assert process["variables"] == ["NODE_ENV"]
 
 
+def _v1_summary(report):
+    """The summary fields report v1 released in 4.8.0 (unchanged in v2)."""
+    return {k: report["summary"][k] for k in ("clean", "complete", "unverified")}
+
+
 class TestReportShape:
     def test_statuses_and_summary(self, tmp_path):
         _, evaluations = _evaluate_scenario("missing_blank_invalid_extra", tmp_path)
         report = evaluator.build_report(evaluations[0])
 
-        assert report["report_version"] == 1
-        assert report["summary"] == {"clean": False, "complete": True, "unverified": []}
+        assert report["report_version"] == 2
+        assert _v1_summary(report) == {
+            "clean": False,
+            "complete": True,
+            "unverified": [],
+        }
         by_name = {v["name"]: v for v in report["variables"]}
         assert by_name["A"]["present"] is False
-        assert by_name["A"]["sources"] == [{"path": ".env", "status": "missing"}]
+        assert by_name["A"]["sources"] == [
+            {
+                "path": ".env",
+                "status": "missing",
+                "verdict": "invalid",
+                "reason_code": "missing",
+            }
+        ]
+        assert (by_name["A"]["verdict"], by_name["A"]["reason_code"]) == (
+            "invalid",
+            "missing",
+        )
+        assert by_name["B"]["reason_code"] == "blank"
+        assert by_name["C"]["reason_code"] == "invalid_value"
+        assert by_name["EXTRA"]["reason_code"] == "extra"
+        assert report["summary"]["verdict"] == "invalid"
         assert by_name["B"]["sources"][0]["status"] == "blank"
         assert by_name["C"]["valid"] is False
         assert by_name["C"]["reason"] == "must be a port number from 1-65535"
@@ -227,7 +251,7 @@ class TestReportShape:
         report = evaluator.build_report(evaluations[0])
 
         assert report["sources"][0]["status"] == "missing"
-        assert report["summary"] == {
+        assert _v1_summary(report) == {
             "clean": False,
             "complete": False,
             "unverified": [],
@@ -249,7 +273,7 @@ class TestReportShape:
 
         assert report["sources"][0]["status"] == "error"
         assert report["variables"] == []
-        assert report["summary"] == {
+        assert _v1_summary(report) == {
             "clean": False,
             "complete": False,
             "unverified": [],
@@ -259,7 +283,11 @@ class TestReportShape:
         _, evaluations = _evaluate_scenario("union_satisfied_across_sources", tmp_path)
         report = evaluator.build_report(evaluations[0])
 
-        assert report["summary"] == {"clean": True, "complete": True, "unverified": []}
+        assert _v1_summary(report) == {
+            "clean": True,
+            "complete": True,
+            "unverified": [],
+        }
         by_name = {v["name"]: v for v in report["variables"]}
         # Missing from .env on its own, but the union has it.
         assert by_name["FROM_COMPOSE"]["present"] is True
@@ -323,7 +351,11 @@ class TestCodeReferences:
 
         assert sorted(evaluation.undeclared_references) == ["API_URL", "NEW_KEY"]
         assert evaluation.passed is False
-        assert report["summary"] == {"clean": False, "complete": True, "unverified": []}
+        assert _v1_summary(report) == {
+            "clean": False,
+            "complete": True,
+            "unverified": [],
+        }
         by_name = {v["name"]: v for v in report["variables"]}
         assert by_name["DECLARED"]["referenced"] is True
         assert by_name["NEW_KEY"]["declared"] is False
@@ -475,7 +507,7 @@ def test_union_success_and_report_summary_agree_with_an_unresolved_manifest(tmp_
         payload = evaluator.legacy_check_payload([evaluation])
 
     assert payload["success"] is True
-    assert report["summary"] == {"clean": True, "complete": True, "unverified": []}
+    assert _v1_summary(report) == {"clean": True, "complete": True, "unverified": []}
     assert report["sources"][1]["status"] == "unresolved"
 
 
@@ -623,7 +655,7 @@ class TestValuesEnvShieldNeverSaw:
 
         var, summary = _port(payload)
         assert (code, var["valid"], summary["unverified"]) == (0, True, [])
-        assert "perfectly in sync" in human
+        assert "VALID: 1 valid." in human
 
     def test_union_never_shows_a_placeholder_as_ok(self, tmp_path):
         files = {

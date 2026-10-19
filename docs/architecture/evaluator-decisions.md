@@ -9,7 +9,8 @@ phase status in [progress.md](../../progress.md).
 Implementation: `envshield/core/evaluator.py`. It is orchestration only:
 presence/validity is still `schema_manager.diff_against_schema` +
 `schema_types.validate_value`, sources are still `parsers.factory`,
-code references are still `discovery.py`.
+code references are still `discovery.py`. Since V1-2, v5's verdicts are
+`envshield/core/verdicts.py`, judged from the parsers' value states (D-9).
 
 ---
 
@@ -280,3 +281,68 @@ the middle of a migration. They sit behind `load_schema(service)` and
 `parsers.factory`, so the evaluator consumes them without depending on
 their internals. Removing any of them is a separate decision (charter §3
 principle 7).
+
+## D-9. Verdicts and report version 2 (V1-2, #16)
+
+`check` gives every variable one of five verdicts, by the rules in
+[v5-decisions.md](v5-decisions.md) (plan §10), computed in
+`envshield/core/verdicts.py` from each source's typed value states (V1-1).
+**VALID only ever comes from a Concrete value that was read and
+validated.** `test_verdicts.py` checks that over every golden, matrix and
+union fixture.
+
+**Not yet the gate.** Until V1-3 (#17), the exit code, `success`,
+`results`, `combined` and `summary.clean` are computed as before (D-6).
+A run can therefore print COULD NOT VERIFY and still exit 0.
+
+**JSON (additive).** Top level: `verdict`, the invocation's verdict (the
+highest-precedence service verdict). Each report keeps every v1 field with
+its meaning and adds:
+
+| Key | Meaning |
+|---|---|
+| `report_version` | `2` |
+| `variables[].verdict`, `.reason_code`, `.detail` | The variable's verdict: `valid`, `invalid`, `unverified` (COULD NOT VERIFY), `not_required` or `error`, and its reason code from the closed sets |
+| `variables[].sources[].verdict`, `.reason_code` | The same, for each source |
+| `summary.verdict`, `summary.counts` | The service's verdict, and how many variables got each verdict |
+| `findings` | One entry per variable × source that is `invalid` or `unverified` (in union mode, one per variable), one per undeclared code read, and one per service- or source-level failure |
+| `errors`, `invalid`, `unverified` | `findings`, split by verdict |
+| `coverage` | `files_scanned`, `skipped`, `dynamic` for code references; outside the verdict except `undeclared_reference` |
+
+**The finding shape**, shared by every command that emits findings (#42):
+
+| Field | Value |
+|---|---|
+| `kind` | `variable`, `code_reference`, `source` (a whole source failed; `variables` lists the names it would supply) or `service` |
+| `verdict`, `reason_code`, `detail` | As above; `detail` names objects and constraints, never a value |
+| `variable`, `service` | Names; `variable` is null for a `source`/`service` finding |
+| `location` | `{file, line, container}`, or null when the finding has no single place (a union variable missing everywhere) |
+| `secret` | Whether the variable is declared `secret` |
+| `next_step` | `{by: "agent" \| "human", text}`. `agent`: fixable from the repository alone; `human`: needs a value, access or a decision. Never a value, never an interactive command |
+
+**Decisions made while implementing** (the plan doesn't settle them):
+
+- A `requiredIf` whose trigger isn't Concrete makes the dependent COULD
+  NOT VERIFY (`ambiguous_requirement`) only when its verdict depends on
+  the requirement: absent, or empty and otherwise valid. A present value
+  is judged on its own, since it must be valid either way. This matches
+  how it replaces v4.8.0's `unresolved`, which also applied only to an
+  absent or blank dependent.
+- A trigger absent from a manifest that has an unbound envFrom is
+  ambiguous too, since the envFrom could supply it.
+- In union mode a source doesn't judge a name it lacks; the union does.
+  The union's requiredness is ambiguous when sources disagree or any of
+  them is ambiguous. A source that fails or is missing contributes no
+  values, and is reported as its own finding, so a passing union can't
+  hide it (BL-030).
+- A Compose `env_file` marked `required: false` that doesn't exist is
+  skipped, as Compose skips it; a required one gives `file_not_found`.
+- A Kubernetes `fieldRef`/`resourceFieldRef` is `external_reference`.
+- An unreadable source is ERROR (`source_unreadable`), no longer a crash
+  (BL-196).
+
+**Human output** prints, per source (in union mode, once for the union):
+Errors, Invalid, Could not verify, then valid and not-required lines, and
+ends each service with a line like `INVALID: 1 invalid, 2 could not be
+verified, 1 valid.` It replaces the v1 table and its suggestions; next
+steps are in the JSON findings.

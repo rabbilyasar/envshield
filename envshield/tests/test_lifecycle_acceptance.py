@@ -65,6 +65,7 @@ def cli_json(*args, code=0):
     # covered by the evaluator's own tests; these compare the legacy keys.
     if args and args[0] == "check":
         assert len(payload.pop("reports")) >= 1
+        assert payload.pop("verdict") in ("valid", "invalid", "unverified", "error")
     return payload
 
 

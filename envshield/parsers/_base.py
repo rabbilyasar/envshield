@@ -25,9 +25,9 @@ class Forwarded:
     """
     The value comes from the deploy host's environment (Compose
     interpolation, or a bare Compose KEY). `operator` is None, "-", ":-",
-    ":?" or "+"; `fallback` is the manifest's own text after the operator,
-    if any (a default for "-"/":-", an error message for ":?", the
-    alternative for "+").
+    or one of LITERAL_OPERATORS; `fallback` is the manifest's own text
+    after the operator, if any (a default for "-"/":-", an error message
+    for "?"/":?", the alternative for "+"/":+").
     """
 
     var: str
@@ -56,22 +56,30 @@ class KeyPresent:
 
 ValueState = Union[Concrete, Forwarded, External, KeyPresent]
 
+# Compose operators v4.8.0 kept as literal text: required-or-error and
+# alternative-value. Their legacy_text is the expression itself.
+LITERAL_OPERATORS = ("?", ":?", "+", ":+")
+
 
 class ValueStates(Dict[str, ValueState]):
     """
     One source's states, by key. `unbound` lists references outside the
     file that may bind keys this source can't enumerate (a Kubernetes
     envFrom to a ConfigMap/Secret not in the manifest): a key not in the
-    mapping is then not knowably absent.
+    mapping is then not knowably absent. `missing_files` names files the
+    source reads that don't exist (a Compose env_file), so a key absent
+    from it is reported as such.
     """
 
     def __init__(
         self,
         states: Mapping[str, ValueState] = (),
         unbound: Iterable[External] = (),
+        missing_files: Iterable[str] = (),
     ):
         super().__init__(states)
         self.unbound: Tuple[External, ...] = tuple(unbound)
+        self.missing_files: Tuple[str, ...] = tuple(missing_files)
 
 
 def as_states(values: Mapping[str, Union[str, ValueState]]) -> ValueStates:
@@ -85,9 +93,10 @@ def as_states(values: Mapping[str, Union[str, ValueState]]) -> ValueStates:
 
 def legacy_text(state: ValueState) -> Optional[str]:
     """
-    The string v4.8.0 used for `state`, so consumers can reproduce its
-    behavior exactly until V1-2 judges states directly: a Concrete value;
-    a Compose "-"/":-" fallback; a ":?"/"+" expression's own text (v4.8.0
+    The string v4.8.0 used for `state`, so the v1 report fields, `results`
+    and the exit code reproduce its behavior until V1-3 gates on verdicts
+    (core/verdicts.py judges states directly): a Concrete value; a Compose
+    "-"/":-" fallback; a LITERAL_OPERATORS expression's own text (v4.8.0
     treated it as a literal). None where v4.8.0 used a placeholder: the
     value isn't visible.
     """
@@ -96,19 +105,19 @@ def legacy_text(state: ValueState) -> Optional[str]:
     if isinstance(state, Forwarded):
         if state.operator in ("-", ":-"):
             return state.fallback
-        if state.operator in (":?", "+"):
+        if state.operator in LITERAL_OPERATORS:
             return f"${{{state.var}{state.operator}{state.fallback}}}"
     return None
 
 
 def not_inspected_names(states: Mapping[str, ValueState]) -> Set[str]:
     """Keys whose deployed value EnvShield can't see (R0-5): every state but
-    a Concrete value and a ":?"/"+" expression (a v4.8.0 literal)."""
+    a Concrete value and a LITERAL_OPERATORS expression (a v4.8.0 literal)."""
     return {
         key
         for key, state in states.items()
         if not isinstance(state, Concrete)
-        and not (isinstance(state, Forwarded) and state.operator in (":?", "+"))
+        and not (isinstance(state, Forwarded) and state.operator in LITERAL_OPERATORS)
     }
 
 

@@ -177,7 +177,7 @@ def test_check_command_happy_path(tmp_path):
             f.write("API_KEY=12345")
         result = runner.invoke(app, ["check"])
         assert result.exit_code == 0
-        assert "perfectly in sync" in result.stdout
+        assert "VALID:" in result.stdout and "INVALID" not in result.stdout
 
 
 def test_check_command_with_missing_variable(tmp_path):
@@ -190,7 +190,7 @@ def test_check_command_with_missing_variable(tmp_path):
             f.write("API_KEY=12345")
         result = runner.invoke(app, ["check"])
         assert result.exit_code == 1
-        assert "Missing in Local" in result.stdout
+        assert "missing (required)" in result.stdout
         assert "SECRET" in result.stdout
 
 
@@ -239,8 +239,15 @@ def test_check_suggestion_for_a_deployment_manifest_does_not_recommend_setup(tmp
         result = runner.invoke(app, ["check"])
 
         assert result.exit_code == 1
-        assert "Run 'envshield setup'" not in result.stdout
-        assert "only writes your local config file" in result.stdout
+        assert "envshield setup" not in result.stdout
+        assert "missing (required)" in result.stdout
+        # The JSON finding's next step points at the manifest, never at setup.
+        payload = json.loads(runner.invoke(app, ["check", "--json"]).stdout)
+        steps = [
+            f["next_step"]["text"] for r in payload["reports"] for f in r["findings"]
+        ]
+        assert any("deployment manifest" in step for step in steps)
+        assert not any("setup" in step for step in steps)
 
 
 def _write_base_and_override_compose(base_vars: str, override_vars: str):
@@ -312,7 +319,7 @@ class TestBaseOverrideComposeManifest:
             result = runner.invoke(app, ["check"])
 
             assert result.exit_code == 0
-            assert "Missing in Local" not in result.stdout
+            assert "missing (required)" not in result.stdout
 
     def test_check_json_reports_merged_manifest_under_one_result(self, tmp_path):
         with runner.isolated_filesystem(temp_dir=tmp_path):
@@ -1188,7 +1195,7 @@ def test_check_without_service_runs_for_all_services(mocker, tmp_path):
         assert result.exit_code == 0
         assert "── alpha ──" in result.stdout
         assert "── beta ──" in result.stdout
-        assert "perfectly in sync" in result.stdout
+        assert "VALID:" in result.stdout and "INVALID" not in result.stdout
 
 
 def test_generate_scan_and_import_report_available_services_for_an_unknown_one(
@@ -1706,11 +1713,15 @@ def test_check_json_reports_clean_state(tmp_path):
         payload = json.loads(result.stdout)
         # 'reports' is additive (evaluator-decisions.md D-5); every
         # pre-existing key keeps its exact shape.
-        assert payload.pop("reports")[0]["summary"] == {
+        summary = payload.pop("reports")[0]["summary"]
+        assert {k: summary[k] for k in ("clean", "complete", "unverified")} == {
             "clean": True,
             "complete": True,
             "unverified": [],
         }
+        assert summary["verdict"] == "valid"
+        # v2's invocation verdict is additive too.
+        assert payload.pop("verdict") == "valid"
         assert payload == {
             "success": True,
             "results": [
@@ -1889,7 +1900,7 @@ def test_check_json_combined_reports_false_clean_when_a_source_fails_to_load(tmp
 
 def test_check_rich_output_never_echoes_an_invalid_value(tmp_path):
     """
-    Regression coverage for P0-3: 'Invalid Value' rows must describe the
+    Regression coverage for P0-3: 'invalid value' lines must describe the
     constraint, never the value that failed it -- for both a secret-flagged
     and an unflagged field, since the fix in schema_types.validate_value is
     unconditional, not secret-specific.
@@ -1905,7 +1916,7 @@ def test_check_rich_output_never_echoes_an_invalid_value(tmp_path):
         result = runner.invoke(app, ["check"])
 
         assert result.exit_code == 1
-        assert "Invalid Value" in result.stdout
+        assert "invalid value" in result.stdout
         assert "must be a port number from 1-65535" in result.stdout
         assert sentinel not in result.stdout
 

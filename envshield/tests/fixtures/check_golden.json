@@ -16,7 +16,7 @@
       "success": true
     },
     "json_exit": 0,
-    "text": "\nValidating .env against schema...\n\u2713 Your configuration is perfectly in sync with the schema!\n",
+    "text": "\nValidating .env against schema...\n  \u2713 A   valid\n\nVALID: 1 valid.\n",
     "text_exit": 0
   },
   "compose_layers_and_container_option": {
@@ -46,7 +46,7 @@
       "success": true
     },
     "json_exit": 0,
-    "text": "\nValidating .env against schema...\n\u2713 Your configuration is perfectly in sync with the schema!\n\nValidating docker-compose.yml + docker-compose.override.yml against schema...\n\u2713 Your configuration is perfectly in sync with the schema!\n",
+    "text": "\nValidating .env against schema...\n  \u2713 A   valid\n  \u2713 B   valid\n\nValidating docker-compose.yml + docker-compose.override.yml against schema...\n  \u2713 A   valid\n  \u2713 B   valid\n\nVALID: 2 valid.\n",
     "text_exit": 0
   },
   "compose_manifest": {
@@ -78,7 +78,7 @@
       "success": false
     },
     "json_exit": 1,
-    "text": "\nValidating .env against schema...\n\u2713 Your configuration is perfectly in sync with the schema!\n\nValidating docker-compose.yml against schema...\n\u250f\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2513\n\u2503 Status        \u2503 Variable Name \u2503 Source             \u2503\n\u2521\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2529\n\u2502 Invalid Value \u2502 B             \u2502 must be an integer \u2502\n\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\n\nSuggestion: Fix the missing/blank/invalid values directly in this deployment manifest -- 'envshield setup' only writes your local config file, it never edits a deployment manifest.\n",
+    "text": "\nValidating .env against schema...\n  \u2713 A   valid\n  \u2713 B   valid\n\nValidating docker-compose.yml against schema...\nInvalid\n  \u2717 B   invalid value (must be an integer)\n  \u2713 A   valid\n\nINVALID: 1 invalid, 1 valid.\n",
     "text_exit": 1
   },
   "defaulted_variable_absent": {
@@ -100,7 +100,7 @@
       "success": false
     },
     "json_exit": 1,
-    "text": "\nValidating .env against schema...\n\u250f\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2513\n\u2503 Status           \u2503 Variable Name \u2503 Source                            \u2503\n\u2521\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2529\n\u2502 Missing in Local \u2502 PORT          \u2502 env.schema.toml (default: '8000') \u2502\n\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\n\nSuggestion: Run 'envshield setup' to fill in missing/blank values or fix invalid ones.\n",
+    "text": "\nValidating .env against schema...\nInvalid\n  \u2717 PORT   missing (required; has a default, run 'envshield setup')\n\nINVALID: 1 invalid.\n",
     "text_exit": 1
   },
   "explicit_file_argument": {
@@ -124,7 +124,7 @@
       "success": false
     },
     "json_exit": 1,
-    "text": "\nValidating .env.staging against schema...\n\u250f\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2513\n\u2503 Status           \u2503 Variable Name \u2503 Source                     \u2503\n\u2521\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2529\n\u2502 Missing in Local \u2502 A             \u2502 env.schema.toml (Required) \u2502\n\u2502 Extra in Local   \u2502 B             \u2502 .env.staging               \u2502\n\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\n\nSuggestion: Run 'envshield setup' to fill in missing/blank values or fix invalid ones. Remove extra variables if unused, or add them to the schema if they're meant to be there.\n",
+    "text": "\nValidating .env.staging against schema...\nInvalid\n  \u2717 A   missing (required)\n  \u2717 B   extra (not declared in the schema)\n\nINVALID: 2 invalid.\n",
     "text_exit": 1
   },
   "kubernetes_unresolved_envfrom": {
@@ -156,7 +156,7 @@
       "success": false
     },
     "json_exit": 1,
-    "text": "\nValidating .env against schema...\n\u2713 Your configuration is perfectly in sync with the schema!\n\nValidating k8s.yml against schema...\n\u250f\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2513\n\u2503 Status         \u2503 Variable Name \u2503 Source                                        \u2503\n\u2521\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2529\n\u2502 Cannot Confirm \u2502 B             \u2502 k8s.yml (external ConfigMap/Secret reference) \u2502\n\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\n\nSuggestion: Verify the 'Cannot Confirm' variables manually, or include the referenced ConfigMap/Secret in the manifest so EnvShield can check it.\n",
+    "text": "\nValidating .env against schema...\n  \u2713 A   valid\n  \u2713 B   valid\n\nValidating k8s.yml against schema...\nCould not verify\n  ? B   Secret 'external-secret' is defined outside this manifest and may supply it (external_reference)\n  \u2713 A   valid\n\nCOULD NOT VERIFY: 1 could not be verified, 1 valid.\n",
     "text_exit": 1
   },
   "local_file_missing": {
@@ -172,7 +172,7 @@
       "success": false
     },
     "json_exit": 1,
-    "text": "\nValidating .env against schema...\nError: File not found: .env\n",
+    "text": "\nValidating .env against schema...\nInvalid\n  \u2717 A   file not found ('.env' doesn't exist)\n\nINVALID: 1 invalid.\n",
     "text_exit": 1
   },
   "malformed_schema": {
@@ -188,7 +188,7 @@
       "success": false
     },
     "json_exit": 1,
-    "text": "\nValidating .env against schema...\nError: Schema parse error in env.schema.toml: Key group not on a line by itself.\n",
+    "text": "\nValidating .env against schema...\nErrors\n  \u2717 Schema parse error in env.schema.toml: Key group not on a line by itself.\n\nERROR: 1 error.\n",
     "text_exit": 1
   },
   "missing_blank_invalid_extra": {
@@ -217,7 +217,7 @@
       "success": false
     },
     "json_exit": 1,
-    "text": "\nValidating .env against schema...\n\u250f\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2513\n\u2503 Status           \u2503 Variable Name \u2503 Source                             \u2503\n\u2521\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2529\n\u2502 Missing in Local \u2502 A             \u2502 env.schema.toml (Required)         \u2502\n\u2502 Blank in Local   \u2502 B             \u2502 env.schema.toml (Required)         \u2502\n\u2502 Invalid Value    \u2502 C             \u2502 must be a port number from 1-65535 \u2502\n\u2502 Invalid Value    \u2502 S             \u2502 must be a valid URL                \u2502\n\u2502 Extra in Local   \u2502 EXTRA         \u2502 .env                               \u2502\n\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\n\nSuggestion: Run 'envshield setup' to fill in missing/blank values or fix invalid ones. Remove extra variables if unused, or add them to the schema if they're meant to be there.\n",
+    "text": "\nValidating .env against schema...\nInvalid\n  \u2717 A       missing (required)\n  \u2717 B       blank (required but empty)\n  \u2717 C       invalid value (must be a port number from 1-65535)\n  \u2717 EXTRA   extra (not declared in the schema)\n  \u2717 S       invalid value (must be a valid URL)\n\nINVALID: 5 invalid.\n",
     "text_exit": 1
   },
   "multi_service_explicit_file_is_ignored": {
@@ -249,7 +249,7 @@
       "success": false
     },
     "json_exit": 1,
-    "text": "Ignoring the explicit file argument -- each service's own local file is checked when validating multiple services.\n\n\u2500\u2500 api \u2500\u2500\n\nValidating api/.env against schema...\n\u2713 Your configuration is perfectly in sync with the schema!\n\n\u2500\u2500 web \u2500\u2500\n\nValidating web/.env against schema...\n\u250f\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2513\n\u2503 Status           \u2503 Variable Name \u2503 Source                     \u2503\n\u2521\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2529\n\u2502 Missing in Local \u2502 W             \u2502 env.schema.toml (Required) \u2502\n\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\n\nSuggestion: Run 'envshield setup' to fill in missing/blank values or fix invalid ones.\n",
+    "text": "Ignoring the explicit file argument -- each service's own local file is checked when validating multiple services.\n\n\u2500\u2500 api \u2500\u2500\n\nValidating api/.env against schema...\n  \u2713 A   valid\n\nVALID: 1 valid.\n\n\u2500\u2500 web \u2500\u2500\n\nValidating web/.env against schema...\nInvalid\n  \u2717 W   missing (required)\n\nINVALID: 1 invalid.\n",
     "text_exit": 1
   },
   "multi_service_one_broken": {
@@ -275,7 +275,7 @@
       "success": false
     },
     "json_exit": 1,
-    "text": "\n\u2500\u2500 api \u2500\u2500\n\nValidating api/.env against schema...\n\u2713 Your configuration is perfectly in sync with the schema!\n\n\u2500\u2500 web \u2500\u2500\n\nValidating web/.env against schema...\nError: Schema parse error in web/env.schema.toml: Key group not on a line by itself.\n",
+    "text": "\n\u2500\u2500 api \u2500\u2500\n\nValidating api/.env against schema...\n  \u2713 A   valid\n\nVALID: 1 valid.\n\n\u2500\u2500 web \u2500\u2500\n\nValidating web/.env against schema...\nErrors\n  \u2717 Schema parse error in web/env.schema.toml: Key group not on a line by itself.\n\nERROR: 1 error.\n",
     "text_exit": 1
   },
   "python_local_file": {
@@ -297,7 +297,7 @@
       "success": false
     },
     "json_exit": 1,
-    "text": "\nValidating config/settings.py against schema...\n\u250f\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2513\n\u2503 Status        \u2503 Variable Name \u2503 Source             \u2503\n\u2521\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2529\n\u2502 Invalid Value \u2502 B             \u2502 must be an integer \u2502\n\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\n\nSuggestion: Run 'envshield setup' to fill in missing/blank values or fix invalid ones.\n",
+    "text": "\nValidating config/settings.py against schema...\nInvalid\n  \u2717 B   invalid value (must be an integer)\n  \u2713 A   valid\n\nINVALID: 1 invalid, 1 valid.\n",
     "text_exit": 1
   },
   "required_false_absent": {
@@ -319,7 +319,7 @@
       "success": false
     },
     "json_exit": 1,
-    "text": "\nValidating .env against schema...\n\u250f\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2513\n\u2503 Status        \u2503 Variable Name \u2503 Source             \u2503\n\u2521\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2529\n\u2502 Invalid Value \u2502 BAD           \u2502 must be an integer \u2502\n\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\n\nSuggestion: Run 'envshield setup' to fill in missing/blank values or fix invalid ones.\n",
+    "text": "\nValidating .env against schema...\nInvalid\n  \u2717 BAD   invalid value (must be an integer)\n  \u00b7 OPT   not required\n\nINVALID: 1 invalid.\n",
     "text_exit": 1
   },
   "requiredif_met_unmet_and_default_wins": {
@@ -342,7 +342,7 @@
       "success": false
     },
     "json_exit": 1,
-    "text": "\nValidating .env against schema...\n\u250f\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2513\n\u2503 Status           \u2503 Variable Name \u2503 Source                            \u2503\n\u2521\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2529\n\u2502 Missing in Local \u2502 LEVEL         \u2502 env.schema.toml (default: 'info') \u2502\n\u2502 Missing in Local \u2502 NEEDED        \u2502 env.schema.toml (Required)        \u2502\n\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\n\nSuggestion: Run 'envshield setup' to fill in missing/blank values or fix invalid ones.\n",
+    "text": "\nValidating .env against schema...\nInvalid\n  \u2717 LEVEL    missing (required; has a default, run 'envshield setup')\n  \u2717 NEEDED   missing (required)\n  \u2713 FLAG     valid\n  \u00b7 UNMET    not required\n\nINVALID: 2 invalid, 1 valid.\n",
     "text_exit": 1
   },
   "secret_with_default": {
@@ -358,7 +358,7 @@
       "success": false
     },
     "json_exit": 1,
-    "text": "\nValidating .env against schema...\nError: Schema error in env.schema.toml: field(s) TOKEN declare 'secret = true' together with a 'defaultValue'. A secret field's default would be written verbatim into .env.example and generated code \n-- remove 'defaultValue' from these fields, or unset 'secret' if the value genuinely isn't sensitive.\n",
+    "text": "\nValidating .env against schema...\nErrors\n  \u2717 Schema error in env.schema.toml: field(s) TOKEN declare 'secret = true' together with a 'defaultValue'. A secret field's default would be written verbatim into .env.example and generated code -- \nremove 'defaultValue' from these fields, or unset 'secret' if the value genuinely isn't sensitive.\n\nERROR: 1 error.\n",
     "text_exit": 1
   },
   "shared_physical_file": {
@@ -388,7 +388,7 @@
       "success": true
     },
     "json_exit": 0,
-    "text": "\n\u2500\u2500 api \u2500\u2500\n\nValidating .env against schema...\n\u2713 Your configuration is perfectly in sync with the schema!\n\n\u2500\u2500 worker \u2500\u2500\n\nValidating .env against schema...\n\u2713 Your configuration is perfectly in sync with the schema!\n",
+    "text": "\n\u2500\u2500 api \u2500\u2500\n\nValidating .env against schema...\n  \u2713 API_ONLY   valid\n  \u2713 SHARED     valid\n\nVALID: 2 valid.\n\n\u2500\u2500 worker \u2500\u2500\n\nValidating .env against schema...\n  \u2713 SHARED        valid\n  \u2713 WORKER_ONLY   valid\n\nVALID: 2 valid.\n",
     "text_exit": 0
   },
   "shared_schema_out_of_scope_extra": {
@@ -425,7 +425,7 @@
       "success": false
     },
     "json_exit": 1,
-    "text": "\n\u2500\u2500 api \u2500\u2500\n\nValidating api/.env against schema...\n\u250f\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2513\n\u2503 Status       \u2503 Variable Name \u2503 Source   \u2503\n\u2521\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2529\n\u2502 Out of Scope \u2502 WORKER_ONLY   \u2502 api/.env \u2502\n\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\n\nSuggestion: Out-of-scope variables are defined in the system schema but not granted to this service -- remove them, or add this service to their 'services' list.\n\n\u2500\u2500 worker \u2500\u2500\n\nValidating worker/.env against schema...\n\u250f\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2513\n\u2503 Status           \u2503 Variable Name \u2503 Source                     \u2503\n\u2521\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2529\n\u2502 Missing in Local \u2502 WORKER_ONLY   \u2502 env.schema.toml (Required) \u2502\n\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\n\nSuggestion: Run 'envshield setup' to fill in missing/blank values or fix invalid ones.\n",
+    "text": "\n\u2500\u2500 api \u2500\u2500\n\nValidating api/.env against schema...\nInvalid\n  \u2717 WORKER_ONLY   out of scope (declared, but not granted to this service)\n  \u2713 API_ONLY      valid\n  \u2713 SHARED        valid\n\nINVALID: 1 invalid, 2 valid.\n\n\u2500\u2500 worker \u2500\u2500\n\nValidating worker/.env against schema...\nInvalid\n  \u2717 WORKER_ONLY   missing (required)\n  \u2713 SHARED        valid\n\nINVALID: 1 invalid, 1 valid.\n",
     "text_exit": 1
   },
   "union_missing_everywhere": {
@@ -472,7 +472,7 @@
       "success": false
     },
     "json_exit": 1,
-    "text": "\nValidating .env against schema...\n\u250f\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2513\n\u2503 Status           \u2503 Variable Name \u2503 Source                     \u2503\n\u2521\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2529\n\u2502 Missing in Local \u2502 NOWHERE       \u2502 env.schema.toml (Required) \u2502\n\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\n\nSuggestion: Run 'envshield setup' to fill in missing/blank values or fix invalid ones.\n\nValidating docker-compose.yml against schema...\n\u250f\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2513\n\u2503 Status           \u2503 Variable Name \u2503 Source                     \u2503\n\u2521\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2529\n\u2502 Missing in Local \u2502 NOWHERE       \u2502 env.schema.toml (Required) \u2502\n\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\n\nSuggestion: Fix the missing/blank/invalid values directly in this deployment manifest -- 'envshield setup' only writes your local config file, it never edits a deployment manifest.\n\nRegistered-source completeness (app, completeness: union)\n  Missing from every registered source: NOWHERE\n",
+    "text": "\nValidating app across its registered sources (completeness: union)...\nInvalid\n  \u2717 NOWHERE   missing (required, and in no registered source)\n  \u2713 LOCAL     valid\n\nINVALID: 1 invalid, 1 valid.\n",
     "text_exit": 1
   },
   "union_satisfied_across_sources": {
@@ -517,7 +517,7 @@
       "success": true
     },
     "json_exit": 0,
-    "text": "\nValidating .env against schema...\n\u250f\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2513\n\u2503 Status           \u2503 Variable Name \u2503 Source                     \u2503\n\u2521\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2529\n\u2502 Missing in Local \u2502 FROM_COMPOSE  \u2502 env.schema.toml (Required) \u2502\n\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\n\nSuggestion: Run 'envshield setup' to fill in missing/blank values or fix invalid ones.\n\nValidating docker-compose.yml against schema...\n\u250f\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2513\n\u2503 Status           \u2503 Variable Name \u2503 Source                     \u2503\n\u2521\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2529\n\u2502 Missing in Local \u2502 LOCAL         \u2502 env.schema.toml (Required) \u2502\n\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\n\nSuggestion: Fix the missing/blank/invalid values directly in this deployment manifest -- 'envshield setup' only writes your local config file, it never edits a deployment manifest.\n\nRegistered-source completeness (app, completeness: union)\n  \u2713 Satisfied by the union of registered sources.\n",
+    "text": "\nValidating app across its registered sources (completeness: union)...\n  \u2713 FROM_COMPOSE   valid\n  \u2713 LOCAL          valid\n\nVALID: 2 valid.\n",
     "text_exit": 0
   },
   "union_with_a_failing_source": {
@@ -556,7 +556,7 @@
       "success": false
     },
     "json_exit": 1,
-    "text": "\nValidating .env against schema...\n\u2713 Your configuration is perfectly in sync with the schema!\n\nValidating docker-compose.yml against schema...\nError: No parser found for file type 'docker-compose.yml'.\n\nRegistered-source completeness (app, completeness: union)\n  \u2717 Source error: docker-compose.yml: No parser found for file type 'docker-compose.yml'.\n",
+    "text": "\nValidating app across its registered sources (completeness: union)...\nErrors\n  \u2717 docker-compose.yml: No parser found for file type 'docker-compose.yml'.\n  \u2713 LOCAL   valid\n\nERROR: 1 error, 1 valid.\n",
     "text_exit": 1
   },
   "unknown_schema_key": {
@@ -572,7 +572,7 @@
       "success": false
     },
     "json_exit": 1,
-    "text": "\nValidating .env against schema...\nError: Schema parse error in env.schema.toml: 'PORT' has unknown key 'default' (did you mean 'defaultValue'?)\n",
+    "text": "\nValidating .env against schema...\nErrors\n  \u2717 Schema parse error in env.schema.toml: 'PORT' has unknown key 'default' (did you mean 'defaultValue'?)\n\nERROR: 1 error.\n",
     "text_exit": 1
   },
   "unknown_service": {
