@@ -5,24 +5,25 @@ import re
 import yaml
 
 from ..core.exceptions import EnvShieldException
-from ._base import BaseParser
+from ._base import (
+    BaseParser,
+    Concrete,
+    Forwarded,
+    ValueState,
+    ValueStates,
+    legacy_text,
+)
 from ._deployment import ensure_within_project, safe_yaml_error_message
 from ._dotenv import DotenvParser
 
 # Matches a value that is ENTIRELY one Compose variable-substitution
-# reference -- '${VAR}', '${VAR:-default}', or '${VAR-default}'. Compose
-# treats the colon as purely optional here: it only changes whether an
-# empty *runtime* value also falls back to the default, a distinction this
-# static parser can't observe anyway (BL-011 #1) -- so both forms resolve
-# identically. A reference embedded inside a larger string
-# ('prefix-${VAR}-suffix') is intentionally left as literal text: resolving
-# a partial substitution would require modeling Compose's full shell-style
-# expansion grammar, which is out of scope here. The common real-world
-# case -- the whole value is one reference, e.g. 'DB_PORT=${DB_PORT-3307}'
-# -- is what this closes. Other Compose operators ('${VAR:?err}',
-# '${VAR?err}', '${VAR:+alt}', '${VAR+alt}') deliberately don't match and
-# stay literal -- out of scope.
-_INTERPOLATION_RE = re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)(:?-(.*))?\}$")
+# reference: '${VAR}', or '${VAR' + one of '-', ':-', ':?', '+' + text + '}'.
+# Each becomes a Forwarded state (v5 plan §4). A reference embedded inside
+# a larger string ('prefix-${VAR}-suffix') is intentionally left as literal
+# text: resolving a partial substitution would require modeling Compose's
+# full shell-style expansion grammar, which is out of scope here. The other
+# operators ('${VAR?err}', '${VAR:+alt}') don't match and stay literal.
+_INTERPOLATION_RE = re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)(?:(:?-|:\?|\+)(.*))?\}$")
 
 
 class DockerComposeParser(BaseParser):
@@ -33,11 +34,11 @@ class DockerComposeParser(BaseParser):
     'environment:' wins over 'env_file:' on a key conflict, matching
     docker-compose's own precedence).
 
-    A value that can't be known statically -- a bare 'KEY' entry with no
-    '=' (passed through from the host shell), or any 'env_file' reference
-    -- is reported as present with a placeholder value rather than as
-    missing or blank, since the real value legitimately lives outside this
-    file.
+    get_states reports each key's ValueState: a literal value, or an
+    'env_file' that exists, is Concrete; a bare 'KEY' entry (passed through
+    from the host shell) or a whole-value interpolation is Forwarded, since
+    the real value comes from the deploy host. get_vars' values are each
+    state's legacy_text, "" where the value isn't visible.
 
     A whole-value '${VAR}'/'${VAR:-default}'/'${VAR-default}' reference is reported under
     VAR (the host-facing name the schema declares), not under the
@@ -62,25 +63,28 @@ class DockerComposeParser(BaseParser):
     def get_vars(
         self, file_path: str, get_values: bool = False
     ) -> set[str] | dict[str, str]:
+        return _as_vars(self.get_states(file_path), get_values)
+
+    def get_states(self, file_path: str) -> ValueStates:
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"File not found: {file_path}")
 
         doc = self._load_yaml_document(file_path)
         services = doc.get("services") if isinstance(doc, dict) else None
         if not isinstance(services, dict) or not services:
-            return {} if get_values else set()
+            return ValueStates()
 
         container = self._resolve_container(services, file_path)
         service_def = services.get(container) or {}
         base_dir = os.path.dirname(os.path.abspath(file_path))
-        variables, fallbacks = self._extract_service_environment(service_def, base_dir)
-        self.fallback_keys = frozenset(fallbacks)
-
-        return variables if get_values else set(variables.keys())
+        return ValueStates(self._extract_service_environment(service_def, base_dir))
 
     def get_vars_for_layers(
         self, file_paths: list[str], get_values: bool = False
     ) -> set[str] | dict[str, str]:
+        return _as_vars(self.get_states_for_layers(file_paths), get_values)
+
+    def get_states_for_layers(self, file_paths: list[str]) -> ValueStates:
         """
         BL-025: merges an ordered list of Compose files (a base file plus
         zero or more override layers -- exactly what Compose itself applies
@@ -123,8 +127,7 @@ class DockerComposeParser(BaseParser):
                 "Compose layer file(s) not found: " + ", ".join(missing)
             )
 
-        merged: dict[str, str] = {}
-        fallbacks: set[str] = set()
+        merged: dict[str, ValueState] = {}
         resolved_container: str | None = self.container
 
         for file_path in file_paths:
@@ -140,15 +143,9 @@ class DockerComposeParser(BaseParser):
 
             service_def = services.get(resolved_container) or {}
             base_dir = os.path.dirname(os.path.abspath(file_path))
-            layer, layer_fallbacks = self._extract_service_environment(
-                service_def, base_dir
-            )
-            merged.update(layer)
-            # A later layer's entry replaces the earlier one, fallback or not.
-            fallbacks = (fallbacks - set(layer)) | layer_fallbacks
+            merged.update(self._extract_service_environment(service_def, base_dir))
 
-        self.fallback_keys = frozenset(fallbacks)
-        return merged if get_values else set(merged.keys())
+        return ValueStates(merged)
 
     def _load_yaml_document(self, file_path: str) -> dict:
         with open(file_path, "r") as f:
@@ -180,18 +177,9 @@ class DockerComposeParser(BaseParser):
 
     def _extract_service_environment(
         self, service_def: dict, base_dir: str
-    ) -> tuple[dict[str, str], set[str]]:
-        """The service's {var: value} map, and the names whose value is a
-        '${VAR-x}'/'${VAR:-x}' fallback (see BaseParser.fallback_keys)."""
-        variables: dict[str, str] = {}
-        fallbacks: set[str] = set()
-
-        def assign(name: str, value: str, is_fallback: bool) -> None:
-            variables[name] = value
-            if is_fallback:
-                fallbacks.add(name)
-            else:
-                fallbacks.discard(name)
+    ) -> dict[str, ValueState]:
+        """The service's {var: ValueState} map."""
+        variables: dict[str, ValueState] = {}
 
         env_files = service_def.get("env_file")
         if env_files:
@@ -207,53 +195,56 @@ class DockerComposeParser(BaseParser):
                 )
                 if os.path.exists(env_file_path):
                     try:
-                        variables.update(
-                            DotenvParser().get_vars(env_file_path, get_values=True)
-                        )
+                        variables.update(DotenvParser().get_states(env_file_path))
                     except OSError:
                         pass
 
         environment = service_def.get("environment")
         if isinstance(environment, dict):
             for key, value in environment.items():
-                raw = str(value) if value is not None else self.UNRESOLVED_VALUE
-                host_var, resolved, is_fallback = self._resolve_interpolation(raw)
-                assign(host_var or key, resolved, is_fallback)
+                if value is None:
+                    variables[key] = Forwarded(key)
+                else:
+                    name, state = self._resolve_interpolation(key, str(value))
+                    variables[name] = state
         elif isinstance(environment, list):
             for entry in environment:
                 entry = str(entry)
                 if "=" in entry:
                     key, value = entry.split("=", 1)
-                    host_var, resolved, is_fallback = self._resolve_interpolation(value)
-                    assign(host_var or key.strip(), resolved, is_fallback)
+                    name, state = self._resolve_interpolation(key.strip(), value)
+                    variables[name] = state
                 else:
-                    assign(entry.strip(), self.UNRESOLVED_VALUE, False)
+                    variables[entry.strip()] = Forwarded(entry.strip())
 
-        return variables, fallbacks
+        return variables
 
-    def _resolve_interpolation(self, value: str) -> tuple[str | None, str, bool]:
+    def _resolve_interpolation(self, key: str, value: str) -> tuple[str, ValueState]:
         """
-        Resolves a value that is entirely one '${VAR}'/'${VAR:-default}'/
-        '${VAR-default}' Compose variable-substitution reference. With a fallback, the
-        fallback is the value this container actually receives absent a
-        real shell environment -- the same reasoning schema.defaultValue
-        already uses elsewhere. Without one, the real value legitimately
-        lives outside this file, so it's reported the same way as any other
-        statically-unknowable value (see UNRESOLVED_VALUE) rather than as
-        the literal, un-interpolated template text.
+        `key: value`'s (name, state). A value that is entirely one
+        interpolation reference is Forwarded from the host variable it
+        names; anything else is the Concrete literal, under `key`.
 
-        Also returns the referenced host-facing variable name (or None if
-        `value` isn't a whole-value interpolation reference) -- e.g.
-        'AUTHENTIK_POSTGRESQL__PASSWORD: ${PG_PASS}' is a schema-relevant
-        statement about PG_PASS, not about AUTHENTIK_POSTGRESQL__PASSWORD,
-        which is purely a container-internal rename. The caller compares
-        against the schema using this name instead of the container key
-        whenever one is returned. The third value says whether the resolved
-        value is a fallback (BaseParser.fallback_keys).
+        A '${VAR}'/'${VAR-x}'/'${VAR:-x}' reference is keyed under VAR --
+        e.g. 'AUTHENTIK_POSTGRESQL__PASSWORD: ${PG_PASS}' is a schema-
+        relevant statement about PG_PASS, not about
+        AUTHENTIK_POSTGRESQL__PASSWORD, which is purely a container-internal
+        rename. A ':?'/'+' reference stays under `key`, where v4.8.0 kept it
+        as literal text (legacy_text reproduces that text, so it must match
+        `value` exactly, surrounding whitespace included).
         """
         match = _INTERPOLATION_RE.match(value.strip())
         if not match:
-            return None, value, False
-        var_name, has_default, default = match.groups()
-        resolved = default if has_default else self.UNRESOLVED_VALUE
-        return var_name, resolved, bool(has_default)
+            return key, Concrete(value)
+        var_name, operator, text = match.groups()
+        if operator in (":?", "+"):
+            if value != value.strip():
+                return key, Concrete(value)
+            return key, Forwarded(var_name, operator, text)
+        return var_name, Forwarded(var_name, operator, text)
+
+
+def _as_vars(states: ValueStates, get_values: bool) -> set[str] | dict[str, str]:
+    if not get_values:
+        return set(states)
+    return {key: legacy_text(state) or "" for key, state in states.items()}

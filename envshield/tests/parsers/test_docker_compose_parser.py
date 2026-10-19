@@ -2,6 +2,7 @@
 import pytest
 
 from envshield.core.exceptions import EnvShieldException, UnsafePathError
+from envshield.parsers._base import Concrete, Forwarded
 from envshield.parsers._deployment import (
     detect_deployment_format,
     looks_like_unrendered_helm_template,
@@ -148,9 +149,9 @@ def test_parser_treats_bare_environment_entry_as_present_not_blank(tmp_path):
     f = tmp_path / "docker-compose.yml"
     f.write_text("services:\n  api:\n    environment:\n      - HOST_SECRET\n")
 
-    variables = DockerComposeParser().get_vars(str(f), get_values=True)
+    states = DockerComposeParser().get_states(str(f))
 
-    assert variables["HOST_SECRET"] == DockerComposeParser.UNRESOLVED_VALUE
+    assert states["HOST_SECRET"] == Forwarded("HOST_SECRET")
 
 
 def test_parser_supports_mapping_style_environment(tmp_path):
@@ -350,10 +351,9 @@ class TestVariableInterpolation:
             "      API_BASE_URL: ${API_BASE_URL}\n"
         )
 
-        variables = DockerComposeParser().get_vars(str(f), get_values=True)
+        states = DockerComposeParser().get_states(str(f))
 
-        assert variables["API_BASE_URL"] == DockerComposeParser.UNRESOLVED_VALUE
-        assert variables["API_BASE_URL"] != "${API_BASE_URL}"
+        assert states["API_BASE_URL"] == Forwarded("API_BASE_URL")
 
     def test_list_style_environment_also_resolves_interpolation(self, tmp_path):
         f = tmp_path / "docker-compose.yml"
@@ -365,10 +365,10 @@ class TestVariableInterpolation:
             "      - QUEUE_URL=${QUEUE_URL}\n"
         )
 
-        variables = DockerComposeParser().get_vars(str(f), get_values=True)
+        states = DockerComposeParser().get_states(str(f))
 
-        assert variables["FLASK_APP"] == "app"
-        assert variables["QUEUE_URL"] == DockerComposeParser.UNRESOLVED_VALUE
+        assert states["FLASK_APP"] == Forwarded("FLASK_APP", ":-", "app")
+        assert states["QUEUE_URL"] == Forwarded("QUEUE_URL")
 
     def test_embedded_reference_inside_a_larger_string_is_left_literal(self, tmp_path):
         """
@@ -519,10 +519,9 @@ class TestInterpolationComparesAgainstHostVariableName:
             "      AUTHENTIK_POSTGRESQL__PASSWORD: ${PG_PASS}\n"
         )
 
-        variables = DockerComposeParser().get_vars(str(f), get_values=True)
+        states = DockerComposeParser().get_states(str(f))
 
-        assert variables == {"PG_PASS": DockerComposeParser.UNRESOLVED_VALUE}
-        assert "AUTHENTIK_POSTGRESQL__PASSWORD" not in variables
+        assert states == {"PG_PASS": Forwarded("PG_PASS")}
 
     def test_renamed_variable_with_default_is_keyed_by_host_name(self, tmp_path):
         f = tmp_path / "docker-compose.yml"
@@ -595,9 +594,10 @@ class TestInterpolationComparesAgainstHostVariableName:
 
         variables = DockerComposeParser().get_vars(str(f), get_values=True)
 
-        assert variables == {
-            "PG_PASS": DockerComposeParser.UNRESOLVED_VALUE,
-            "PG_HOST": "localhost",
+        assert variables == {"PG_PASS": "", "PG_HOST": "localhost"}
+        assert DockerComposeParser().get_states(str(f)) == {
+            "PG_PASS": Forwarded("PG_PASS"),
+            "PG_HOST": Forwarded("PG_HOST", ":-", "localhost"),
         }
 
     def test_multiple_container_keys_referencing_the_same_host_variable_collapse(
@@ -618,9 +618,9 @@ class TestInterpolationComparesAgainstHostVariableName:
             "      SECOND_CONSUMER: ${SHARED_SECRET}\n"
         )
 
-        variables = DockerComposeParser().get_vars(str(f), get_values=True)
+        states = DockerComposeParser().get_states(str(f))
 
-        assert variables == {"SHARED_SECRET": DockerComposeParser.UNRESOLVED_VALUE}
+        assert states == {"SHARED_SECRET": Forwarded("SHARED_SECRET")}
 
     def test_list_style_renamed_variable_is_keyed_by_host_name(self, tmp_path):
         f = tmp_path / "docker-compose.yml"
@@ -631,9 +631,9 @@ class TestInterpolationComparesAgainstHostVariableName:
             "      - AUTHENTIK_POSTGRESQL__PASSWORD=${PG_PASS}\n"
         )
 
-        variables = DockerComposeParser().get_vars(str(f), get_values=True)
+        states = DockerComposeParser().get_states(str(f))
 
-        assert variables == {"PG_PASS": DockerComposeParser.UNRESOLVED_VALUE}
+        assert states == {"PG_PASS": Forwarded("PG_PASS")}
 
     def test_embedded_reference_is_still_keyed_by_container_name(self, tmp_path):
         """Non-regression: an embedded (not whole-value) reference never triggers the rename -- no host name to extract."""
@@ -879,18 +879,84 @@ class TestMultiFileLayering:
         assert variables == {"FOO": "base", "FROM_OVERRIDE_ENV_FILE": "value"}
 
 
-class TestFallbackKeys:
-    """R0-5 (F7): which values are a '${VAR-x}'/'${VAR:-x}' fallback."""
+class TestValueStates:
+    """V1-1: each Compose source shape maps to exactly one ValueState."""
 
-    def test_fallbacks_are_named_and_concrete_values_are_not(self, tmp_path):
+    def _states(self, tmp_path, environment):
+        path = tmp_path / "docker-compose.yml"
+        path.write_text(
+            "services:\n  app:\n    image: x\n    environment:\n" + environment
+        )
+        return DockerComposeParser().get_states(str(path))
+
+    def test_a_literal_value_is_concrete(self, tmp_path):
+        assert self._states(tmp_path, "      A: '3'\n") == {"A": Concrete("3")}
+
+    def test_an_empty_literal_is_concrete(self, tmp_path):
+        assert self._states(tmp_path, "      A: ''\n") == {"A": Concrete("")}
+
+    def test_an_existing_env_file_is_concrete(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "app.env").write_text("FROM_FILE=v\n")
+        path = tmp_path / "docker-compose.yml"
+        path.write_text("services:\n  app:\n    image: x\n    env_file: app.env\n")
+        assert DockerComposeParser().get_states(str(path)) == {
+            "FROM_FILE": Concrete("v")
+        }
+
+    def test_a_bare_mapping_key_is_forwarded(self, tmp_path):
+        assert self._states(tmp_path, "      A:\n") == {"A": Forwarded("A")}
+
+    def test_a_bare_list_key_is_forwarded(self, tmp_path):
+        path = tmp_path / "docker-compose.yml"
+        path.write_text("services:\n  app:\n    environment:\n      - A\n")
+        assert DockerComposeParser().get_states(str(path)) == {"A": Forwarded("A")}
+
+    def test_a_plain_reference_is_forwarded(self, tmp_path):
+        assert self._states(tmp_path, "      A: ${A}\n") == {"A": Forwarded("A")}
+
+    @pytest.mark.parametrize(
+        "expression, operator, text",
+        [
+            ("${A-x}", "-", "x"),
+            ("${A:-x}", ":-", "x"),
+            ("${A:?must set}", ":?", "must set"),
+            ("${A+alt}", "+", "alt"),
+            ("${A:-}", ":-", ""),
+        ],
+    )
+    def test_an_operator_reference_is_forwarded_with_its_text(
+        self, tmp_path, expression, operator, text
+    ):
+        states = self._states(tmp_path, f"      A: '{expression}'\n")
+        assert states == {"A": Forwarded("A", operator, text)}
+
+    def test_a_required_or_alternative_reference_stays_under_its_own_key(
+        self, tmp_path
+    ):
+        """v4.8.0 kept ':?'/'+' as literal text under the container key."""
+        states = self._states(tmp_path, "      X: ${A:?e}\n      Y: ${B+alt}\n")
+        assert states == {
+            "X": Forwarded("A", ":?", "e"),
+            "Y": Forwarded("B", "+", "alt"),
+        }
+
+    def test_unsupported_operators_stay_concrete_literals(self, tmp_path):
+        states = self._states(tmp_path, "      A: ${A?e}\n      B: ${B:+alt}\n")
+        assert states == {"A": Concrete("${A?e}"), "B": Concrete("${B:+alt}")}
+
+    def test_get_vars_reports_legacy_text_and_hides_unseen_values(self, tmp_path):
         path = tmp_path / "docker-compose.yml"
         path.write_text(
             "services:\n  app:\n    image: x\n    environment:\n"
-            "      A: ${A-1}\n      B: ${B:-2}\n      C: '3'\n      D: ${D}\n"
+            "      A: ${A-1}\n      B: ${B:?e}\n      C: '3'\n      D: ${D}\n"
         )
-        parser = DockerComposeParser()
-        assert parser.get_vars(str(path), get_values=True)["A"] == "1"
-        assert parser.fallback_keys == {"A", "B"}
+        assert DockerComposeParser().get_vars(str(path), get_values=True) == {
+            "A": "1",
+            "B": "${B:?e}",
+            "C": "3",
+            "D": "",
+        }
 
     def test_a_later_layer_replaces_a_fallback(self, tmp_path):
         base = tmp_path / "docker-compose.yml"
@@ -900,6 +966,9 @@ class TestFallbackKeys:
             "      A: ${A-1}\n      B: ${B-2}\n"
         )
         override.write_text("services:\n  app:\n    environment:\n      A: '9'\n")
-        parser = DockerComposeParser()
-        parser.get_vars_for_layers([str(base), str(override)], get_values=True)
-        assert parser.fallback_keys == {"B"}
+        states = DockerComposeParser().get_states_for_layers([str(base), str(override)])
+        assert states == {"A": Concrete("9"), "B": Forwarded("B", "-", "2")}
+
+    def test_no_state_repr_shows_a_value(self, tmp_path):
+        states = self._states(tmp_path, "      A: hunter2\n      B: ${B:-hunter2}\n")
+        assert "hunter2" not in repr(states)

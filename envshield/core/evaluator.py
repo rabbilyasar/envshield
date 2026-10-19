@@ -18,8 +18,8 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from ..config import manager as config_manager
-from ..parsers._base import BaseParser
-from ..parsers.factory import get_manifest_parser_and_vars
+from ..parsers._base import not_inspected_names
+from ..parsers.factory import get_manifest_parser_and_states
 from ..utils import git_utils
 from . import discovery, schema_manager, schema_types, source_files
 from .exceptions import EnvShieldException
@@ -101,11 +101,10 @@ def evaluate_source(
     try:
         if schema is None:
             schema = config_manager.load_schema(service_name=service_name)
-        parser, local_values = get_manifest_parser_and_vars(
+        parser, local_values = get_manifest_parser_and_states(
             paths if paths is not None else [file_path],
             container=container,
             prefer=service_name,
-            get_values=True,
         )
     except FileNotFoundError as e:
         source.status, source.error = "missing", str(e)
@@ -130,20 +129,9 @@ def evaluate_source(
             local_values, environment, schema
         )
 
-    placeholders = {
-        name
-        for name, value in local_values.items()
-        if value == BaseParser.UNRESOLVED_VALUE
-    }
-    source.not_inspected = tuple(
-        sorted((placeholders | set(parser.fallback_keys)) - set(source.overlaid))
-    )
-    diff = schema_manager.diff_against_schema(
-        schema,
-        local_values,
-        has_unresolved_source=parser.has_unresolved_source,
-        not_inspected=source.not_inspected,
-    )
+    # Overlaid names are Concrete now, so never among these.
+    source.not_inspected = tuple(sorted(not_inspected_names(local_values)))
+    diff = schema_manager.diff_against_schema(schema, local_values)
     # An undeclared requiredIf trigger taken from the environment decides
     # requiredness only; it isn't this file's extra variable.
     diff.extra -= set(source.overlaid) - file_names

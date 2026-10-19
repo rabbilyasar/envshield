@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from ..config import manager as config_manager
-from ..parsers.factory import get_manifest_parser_and_vars
+from ..parsers.factory import get_manifest_parser_and_states
 from . import discovery, schema_types
 from .exceptions import EnvShieldException, VariableNotFoundError
 from .source_files import discoverable_files, open_nofollow
@@ -110,8 +110,8 @@ def _manifest_references(
     for manifest in manifests:
         path, container = manifest["path"], manifest.get("container")
         try:
-            parser, declared_vars = get_manifest_parser_and_vars(
-                manifest["paths"], container=container, get_values=False
+            parser, declared_vars = get_manifest_parser_and_states(
+                manifest["paths"], container=container
             )
         except (FileNotFoundError, OSError, ValueError, EnvShieldException) as e:
             references.append(
@@ -132,7 +132,7 @@ def _manifest_references(
             continue
         if variable in declared_vars:
             status = "declared"
-        elif parser.has_unresolved_source:
+        elif declared_vars.unbound:
             # Not found directly, but this manifest also references an
             # external ConfigMap/Secret EnvShield can't inspect -- "not
             # declared" would be a confident claim of absence this parser

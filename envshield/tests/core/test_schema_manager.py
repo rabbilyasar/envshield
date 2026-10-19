@@ -10,6 +10,13 @@ from envshield.config import manager as config_manager
 from envshield.config.manager import SCHEMA_FILE_NAME
 from envshield.core import schema_manager
 from envshield.core.exceptions import EnvShieldException
+from envshield.parsers._base import (
+    Concrete,
+    External,
+    Forwarded,
+    KeyPresent,
+    ValueStates,
+)
 
 runner = CliRunner()
 
@@ -543,23 +550,40 @@ def test_diff_against_schema_reports_clean_result():
     assert diff.summary() == ""
 
 
+def test_diff_against_schema_validates_required_and_alternative_text_as_v4_8_0():
+    """
+    V1-1 reproduces v4.8.0: a Compose ':?'/'+' expression is judged as its
+    own literal text (V1-2 changes how it's judged), not as unseen.
+    """
+    schema = {"D": {"type": "port"}, "E": {"type": "url"}}
+
+    diff = schema_manager.diff_against_schema(
+        schema, {"D": Forwarded("D", ":?", "need"), "E": Forwarded("E", "+", "a")}
+    )
+
+    assert set(diff.invalid) == {"D", "E"}
+
+
 def test_diff_against_schema_does_not_flag_an_unresolved_value_as_invalid():
     """
     Regression, part of the DI-2 fix: a value a parser can't statically
-    know (BaseParser.UNRESOLVED_VALUE -- an env_file reference, a bare
-    shell pass-through, a Kubernetes secretRef, or an unresolvable Compose
+    know (an External, KeyPresent or bare Forwarded state -- a bare shell
+    pass-through, a Kubernetes secretRef, or an unresolvable Compose
     interpolation) must never be validated against a declared type/enum/
     pattern -- the placeholder string itself would fail any real
     constraint, misreporting a legitimately-unknown value as invalid
     every time a manifest used one of these forms for a typed variable.
     """
-    from envshield.parsers._base import BaseParser
-
     schema = {"API_BASE_URL": {"description": "x", "type": "url"}}
 
-    diff = schema_manager.diff_against_schema(
-        schema, {"API_BASE_URL": BaseParser.UNRESOLVED_VALUE}
-    )
+    for state in (
+        Forwarded("API_BASE_URL"),
+        External("api", "secretKeyRef"),
+        KeyPresent("api"),
+    ):
+        diff = schema_manager.diff_against_schema(schema, {"API_BASE_URL": state})
+        assert diff.is_clean is True
+        assert diff.invalid == {}
 
     assert diff.is_clean is True
     assert diff.invalid == {}
@@ -702,7 +726,9 @@ class TestEvaluateUnionCompleteness:
     def test_unresolved_source_reference_reports_unresolved_not_missing(self):
         schema = {"SECRET_X": {"description": "x", "secret": True}}
         sources = [
-            schema_manager.UnionSource("source-a", {}, has_unresolved_source=True)
+            schema_manager.UnionSource(
+                "source-a", ValueStates(unbound=[External("ext", "configMapRef")])
+            )
         ]
 
         result = schema_manager.evaluate_union_completeness(schema, sources)
@@ -712,12 +738,8 @@ class TestEvaluateUnionCompleteness:
         assert result.is_clean is False
 
     def test_unresolved_value_placeholder_counts_as_satisfied(self):
-        from envshield.parsers._base import BaseParser
-
         schema = {"A": {"description": "x"}}
-        sources = [
-            schema_manager.UnionSource("source-a", {"A": BaseParser.UNRESOLVED_VALUE})
-        ]
+        sources = [schema_manager.UnionSource("source-a", {"A": KeyPresent("s")})]
 
         result = schema_manager.evaluate_union_completeness(schema, sources)
 
@@ -936,7 +958,7 @@ class TestUnresolvedSource:
         schema = {"DATABASE_URL": {"description": "x"}}
 
         diff = schema_manager.diff_against_schema(
-            schema, {}, has_unresolved_source=True
+            schema, ValueStates(unbound=[External("ext", "configMapRef")])
         )
 
         assert diff.is_clean is False  # not confidently satisfied
@@ -949,7 +971,7 @@ class TestUnresolvedSource:
     def test_the_same_scenario_without_an_unresolved_source_is_still_plain_missing(
         self,
     ):
-        """Default (has_unresolved_source=False) behavior is completely unaffected -- every other parser."""
+        """With nothing unbound, behavior is completely unaffected -- every other parser."""
         schema = {"DATABASE_URL": {"description": "x"}}
 
         diff = schema_manager.diff_against_schema(schema, {})
@@ -964,7 +986,11 @@ class TestUnresolvedSource:
         schema = {"DATABASE_URL": {"description": "x"}}
 
         diff = schema_manager.diff_against_schema(
-            schema, {"DATABASE_URL": "postgres://x"}, has_unresolved_source=True
+            schema,
+            ValueStates(
+                {"DATABASE_URL": Concrete("postgres://x")},
+                [External("ext", "configMapRef")],
+            ),
         )
 
         assert diff.unresolved == set()
@@ -975,7 +1001,10 @@ class TestUnresolvedSource:
         schema = {"DATABASE_URL": {"description": "x"}}
 
         diff = schema_manager.diff_against_schema(
-            schema, {"DATABASE_URL": ""}, has_unresolved_source=True
+            schema,
+            ValueStates(
+                {"DATABASE_URL": Concrete("")}, [External("ext", "configMapRef")]
+            ),
         )
 
         assert diff.blank == {"DATABASE_URL"}
@@ -1754,10 +1783,8 @@ class TestRequiredIfTriggerNotSeen:
     }
 
     def test_a_placeholder_trigger(self):
-        from envshield.parsers._base import BaseParser
-
         diff = schema_manager.diff_against_schema(
-            self.SCHEMA, {"PAYMENTS": BaseParser.UNRESOLVED_VALUE}
+            self.SCHEMA, {"PAYMENTS": External("flags", "configMapKeyRef")}
         )
         assert diff.unresolved == {"STRIPE_KEY"}
         assert diff.unresolved_triggers == {"STRIPE_KEY": "PAYMENTS"}
@@ -1766,14 +1793,13 @@ class TestRequiredIfTriggerNotSeen:
 
     def test_a_fallback_trigger_that_would_hold_is_still_unresolved(self):
         diff = schema_manager.diff_against_schema(
-            self.SCHEMA, {"PAYMENTS": "true"}, not_inspected=["PAYMENTS"]
+            self.SCHEMA, {"PAYMENTS": Forwarded("PAYMENTS", ":-", "true")}
         )
         assert diff.unresolved == {"STRIPE_KEY"} and not diff.missing
 
     def test_a_present_dependent_is_not_unresolved(self):
         diff = schema_manager.diff_against_schema(
             self.SCHEMA,
-            {"PAYMENTS": "true", "STRIPE_KEY": "x"},
-            not_inspected=["PAYMENTS"],
+            {"PAYMENTS": Forwarded("PAYMENTS", ":-", "true"), "STRIPE_KEY": "x"},
         )
         assert diff.is_clean

@@ -1658,6 +1658,7 @@ Source: v5 planning audit, 2026-10-07 — alias **F1**.
 - **Impact:** a CI consumer of `--json` reads `valid: true` as "EnvShield checked this." It did not. For a `type`/`enum`/`pattern` field a wrong value deployed through the external reference is never caught.
 - **Relationships:** `BL-166` (F4, in-manifest Secret whose value is visible but not inspected), `BL-164` (F2, same placeholder in `completeness: union`), `BL-169` (F7). `BL-011` sub-items 2–3 deliberately left an external reference present/unresolved (no keys are knowable) and are fixed; this finding is about the *claim*, not the parsing. `has_unresolved_source` (envFrom to an external source) already reports `unresolved`; per-variable references do not.
 - **Decision:** **Report: fixed in v4.8.0 by [#10](https://github.com/rabbilyasar/envshield/issues/10).** **Report fixed by R0-5 ([#10](https://github.com/rabbilyasar/envshield/issues/10), `6e9dbec`):** the variable is `valid: null` (never `true`), its per-source status is `not_visible`, its name is in `summary.unverified`, and the human `check` line names it instead of saying "perfectly in sync". Exit code, `success` and `results` are unchanged. Tests: `test_evaluator.py::TestValuesEnvShieldNeverSaw` (fail against the previous code). **Gate: a deliberate, documented limitation in v4.8.0 — `check` keeps passing these values — fixed in v5 ([#16](https://github.com/rabbilyasar/envshield/issues/16), [#17](https://github.com/rabbilyasar/envshield/issues/17)).** The static/runtime boundary in charter §7 means an external value cannot be validated here; v5 is where "unverified" becomes a visible verdict the gate can act on.
+- **V1-1 ([#15](https://github.com/rabbilyasar/envshield/issues/15), 2026-10-19):** root cause removed. `UNRESOLVED_VALUE`, `has_unresolved_source` and `fallback_keys` are gone; parsers report typed states (`Concrete`, `Forwarded`, `External`, `KeyPresent`; a missing key is absent; `ValueStates.unbound` for an envFrom outside the file), in `parsers/_base.py`. Consumers still judge them as v4.8.0 did, so verdicts and the gate are unchanged until V1-2 ([#16](https://github.com/rabbilyasar/envshield/issues/16)).
 
 ### BL-164 — `completeness: union` treats a placeholder as satisfying a key (F2)
 
@@ -1740,6 +1741,7 @@ Source: v5 planning audit, 2026-10-07 — alias **F7**.
 - **Impact:** a failing or passing result describes a value that may never be deployed.
 - **Relationships:** `BL-011` sub-item 1 (made `${VAR-default}` resolve at all, fixed 2026-09-03; this entry is the validation semantics on top of it); `BL-163`.
 - **Decision:** **Report: fixed in v4.8.0 by [#10](https://github.com/rabbilyasar/envshield/issues/10).** **Report fixed by R0-5 ([#10](https://github.com/rabbilyasar/envshield/issues/10), `6e9dbec`):** the variable is `valid: null` (never `true`), its per-source status is `not_visible`, its name is in `summary.unverified`, and the human `check` line names it instead of saying "perfectly in sync". Exit code, `success` and `results` are unchanged. Tests: `test_evaluator.py::TestValuesEnvShieldNeverSaw` (fail against the previous code). The Compose parser now records which values are fallbacks (`BaseParser.fallback_keys`); a valid fallback is `not_visible`, an invalid one still fails as before. `-` and `:-` are still treated alike (v5). **Gate: deliberate limitation in v4.8.0; fixed in v5.** No override needed (P2).
+- **V1-1 ([#15](https://github.com/rabbilyasar/envshield/issues/15), 2026-10-19):** the parser now records `-` and `:-` apart (`Forwarded(var, operator, fallback)`), and also `:?` and `+`. Judgment is unchanged until V1-2 ([#16](https://github.com/rabbilyasar/envshield/issues/16)). Two operators are still read as literal text: see `BL-195`.
 
 ### BL-170 — The generated zod loader turns an empty `int`/`float`/`port` into `0` (F8)
 
@@ -1778,6 +1780,37 @@ Source: found while verifying the SHAs R0-3 was asked to correct (`BL-023`, `BL-
 - **Decision:** left uncorrected here because R0-3's scope names `BL-023`/`BL-115` only. Tracked as issue [#33](https://github.com/rabbilyasar/envshield/issues/33) (proposed, `BACKLOG.md` only).
 
 ---
+
+### BL-193 — `import` from a manifest wrote the placeholder text as a `defaultValue`
+
+Type: `BUG` · Evidence: `CONFIRMED` (live, v4.9.1, 2026-10-19) · Priority: **P2** (an `import` result is a draft the user is told to review; no value leaks, but release-philosophy question 4, "corrupt generated schemas", applies) · Status: **placeholder half fixed by [#15](https://github.com/rabbilyasar/envshield/issues/15) (branch, unmerged); expression half open**
+Component: `core/importer.py::generate_schema_from_file` (via `get_vars(get_values=True)` on a manifest parser)
+Source: found while tracing `UNRESOLVED_VALUE` consumers for V1-1.
+
+- **Current behavior (v4.9.1):** `envshield import docker-compose.yml` with `DB_URL: ${DB_URL}` and a bare `BARE:` writes `defaultValue = "<value not visible in this file>"` for both. A Kubernetes `configMapKeyRef`, `fieldRef`, or `secretKeyRef` to a non-secret-named key does the same. `REQ: ${REQ:?must set}` writes `defaultValue = "${REQ:?must set}"`. `setup` would then copy that text into `.env`.
+- **Expected behavior:** a value EnvShield can't see gives no default. An interpolation expression is not a value.
+- **Fix so far:** with the sentinel removed, a manifest parser's `get_vars(get_values=True)` returns `""` for an unseen value, so `import` writes no default (`test_importer.py::test_import_from_a_manifest_never_defaults_a_value_it_cannot_see`). A `${VAR:?err}`/`${VAR+alt}`/`${VAR?err}`/`${VAR:+alt}` expression still becomes a default, and a `${VAR:-x}` fallback still becomes default `x` (arguably right). Fixing those changes `import` output further, outside V1-1's scope.
+- **Relationships:** `BL-163`, `BL-195`. V2-3 ([#44](https://github.com/rabbilyasar/envshield/issues/44), `init` seeds the contract from manifests) needs the same rule; it should read `get_states` and default only from `Concrete`.
+
+### BL-194 — A Kubernetes env entry with no `value` was treated as an unseen value; Kubernetes delivers `""`
+
+Type: `BUG` / `FALSE-CLEAN` · Evidence: `CONFIRMED` (live, differential run against `main`, 2026-10-19) · Priority: **P2** (manifest-only shape; a required variable passed while the container receives `""`) · Status: **fixed by [#15](https://github.com/rabbilyasar/envshield/issues/15) (branch, unmerged)**
+Component: `parsers/_kubernetes.py` (`env` loop)
+Source: found while mapping every Kubernetes shape to a V1-1 state; not in the plan's mapping table.
+
+- **Current behavior (v4.9.1):** `- name: FOO` (neither `value` nor `valueFrom`) took the `valueFrom` path and became the placeholder: `present: true`, `valid: null`, status `not_visible`; a required `FOO` passes.
+- **Expected behavior:** Kubernetes' `EnvVar.value` defaults to `""`, so this is `Concrete("")`: a required `FOO` is `blank`.
+- **Decision:** the maintainer chose `Concrete("")` for V1-1 (2026-10-19), as its one deliberate behavior change; every other output is byte-identical to `main` on a 30-scenario differential (all golden scenarios plus Compose, Kubernetes, union and layering cases). Test: `test_kubernetes_parser.py::test_an_entry_with_no_value_is_an_empty_concrete_value`.
+
+### BL-195 — Compose `${VAR?err}` and `${VAR:+alt}` are still read as literal values
+
+Type: `DEPLOYMENT` / `REPORT HONESTY` · Evidence: `CONFIRMED` (code and test, 2026-10-19) · Priority: **P2** (same class as `BL-169`) · Status: **open, for V1-2 ([#16](https://github.com/rabbilyasar/envshield/issues/16))**
+Component: `parsers/_docker_compose.py` (`_INTERPOLATION_RE`)
+Source: V1-1 implementation.
+
+- **Current behavior:** the v5 plan's `Forwarded` operator set is none, `-`, `:-`, `:?`, `+`, and V1-1 implements exactly that. Compose also accepts `?` (error if unset) and `:+` (alternative if set and non-empty). Those two still produce `Concrete("${VAR?err}")` under the container key, so `check` validates the expression text as if it were the deployed value.
+- **Expected behavior:** both are `Forwarded` like their siblings. Under V1-2 an unrecognized expression must never reach VALID.
+- **Relationships:** `BL-169`, `BL-193`, V1-2 (#16). Also for V1-2: a `:?`/`+` state is keyed under the container key (where v4.8.0 kept its literal), while `${VAR}`/`-`/`:-` are keyed under the host variable. V1-2 should key all five by the host variable when it judges them. `fieldRef`/`resourceFieldRef` (not in the plan's table) map to `External`, which V1-2 will report as COULD NOT VERIFY.
 
 ## Part 6 — AI-Agent-Friendly EnvShield (strategic direction)
 
