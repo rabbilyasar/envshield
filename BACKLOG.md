@@ -1008,7 +1008,7 @@ Component: `init` output, generated `envshield.yml`, `env.schema.toml`, `.env.ex
 
 ### BL-178 — Human `check` output drops unverified names when another variable fails
 
-Type: `BUG` / `UX` · Evidence: `CONFIRMED` (first-run trial, 2026-10-14) · Priority: **P2** · Status: **fixed by V1-2 ([#16](https://github.com/rabbilyasar/envshield/issues/16), branch, unmerged)**
+Type: `BUG` / `UX` · Evidence: `CONFIRMED` (first-run trial, 2026-10-14) · Priority: **P2** · Status: **fixed by V1-2 ([#16](https://github.com/rabbilyasar/envshield/issues/16), merged `c3f3bcf`, unreleased)**
 Component: `check` human output (manifest source)
 
 - **Current behavior:** with `DATABASE_URL: ${DATABASE_URL}` (forwarded) and `API_URL` absent, the human output shows only `API_URL`. The JSON report has `DATABASE_URL` as `not_visible` and in `summary.unverified`. With `API_URL` added, the human output does name it ("couldn't check them: DATABASE_URL"). README's v4.8.0 limitation text says unverified variables are "named in the human output", which holds only when nothing else fails.
@@ -1147,7 +1147,7 @@ Component: `README.md` ("Review / govern" example)
 
 ### BL-191 — Machine-readable output differs in shape across commands, and findings carry no next step
 
-Type: `UX` / `AI_AGENT` · Evidence: `CONFIRMED` (2026-10-19, agent-style evaluation, see `BL-040`) · Priority: **P2** · Status: **`check` half done by V1-2 (#16, branch, unmerged); other commands open (#42)**
+Type: `UX` / `AI_AGENT` · Evidence: `CONFIRMED` (2026-10-19, agent-style evaluation, see `BL-040`) · Priority: **P2** · Status: **`check` half done by V1-2 (#16, merged `c3f3bcf`); other commands open (#42)**
 Component: `--json` output of `check`, `doctor`, `scan`, `undeclared`, `schema diff`, `explain`
 
 - **Field names differ for the same thing:** a code location is `file`/`line` in `check`'s report, `file_path`/`line_num` in `scan`, and `file_path`/`line` in `undeclared` and `explain`; a variable is `name`, `variable_name` or `variable`. Only `check`'s report is versioned (`report_version: 1`); the other five shapes are unversioned and undocumented.
@@ -1650,7 +1650,7 @@ Source: the EnvShield v5 planning audit, 2026-10-07, which found eight places wh
 
 ### BL-163 — A reference to a value outside the file is reported `ok, present, valid: true` (F1)
 
-Type: `ROBUSTNESS` / `REPORT HONESTY` · Evidence: `CONFIRMED` (live, 2026-10-14) · Priority: **P1** until [#10](https://github.com/rabbilyasar/envshield/issues/10) lands (the report claims `valid: true` for a value never seen); **P2** afterwards (the gate half, deliberate, v5) · Status: **report fixed (`6e9dbec`, released in `v4.8.0`); gate open (v5, P2)**
+Type: `ROBUSTNESS` / `REPORT HONESTY` · Evidence: `CONFIRMED` (live, 2026-10-14) · Priority: **P1** until [#10](https://github.com/rabbilyasar/envshield/issues/10) lands (the report claims `valid: true` for a value never seen); **P2** afterwards (the gate half, deliberate, v5) · Status: **report fixed (`6e9dbec`, released in `v4.8.0`); gate fixed by V1-3 ([#17](https://github.com/rabbilyasar/envshield/issues/17), branch, unmerged)**
 Component: `parsers/_base.py` (`UNRESOLVED_VALUE`), `parsers/_kubernetes.py`, `parsers/_docker_compose.py`, `core/schema_manager.py::diff_against_schema`, `core/evaluator.py` (variable entry, `valid`)
 Source: v5 planning audit, 2026-10-07 — alias **F1**.
 
@@ -1661,11 +1661,12 @@ Source: v5 planning audit, 2026-10-07 — alias **F1**.
 - **Relationships:** `BL-166` (F4, in-manifest Secret whose value is visible but not inspected), `BL-164` (F2, same placeholder in `completeness: union`), `BL-169` (F7). `BL-011` sub-items 2–3 deliberately left an external reference present/unresolved (no keys are knowable) and are fixed; this finding is about the *claim*, not the parsing. `has_unresolved_source` (envFrom to an external source) already reports `unresolved`; per-variable references do not.
 - **Decision:** **Report: fixed in v4.8.0 by [#10](https://github.com/rabbilyasar/envshield/issues/10).** **Report fixed by R0-5 ([#10](https://github.com/rabbilyasar/envshield/issues/10), `6e9dbec`):** the variable is `valid: null` (never `true`), its per-source status is `not_visible`, its name is in `summary.unverified`, and the human `check` line names it instead of saying "perfectly in sync". Exit code, `success` and `results` are unchanged. Tests: `test_evaluator.py::TestValuesEnvShieldNeverSaw` (fail against the previous code). **Gate: a deliberate, documented limitation in v4.8.0 — `check` keeps passing these values — fixed in v5 ([#16](https://github.com/rabbilyasar/envshield/issues/16), [#17](https://github.com/rabbilyasar/envshield/issues/17)).** The static/runtime boundary in charter §7 means an external value cannot be validated here; v5 is where "unverified" becomes a visible verdict the gate can act on.
 - **V1-1 ([#15](https://github.com/rabbilyasar/envshield/issues/15), 2026-10-19):** root cause removed. `UNRESOLVED_VALUE`, `has_unresolved_source` and `fallback_keys` are gone; parsers report typed states (`Concrete`, `Forwarded`, `External`, `KeyPresent`; a missing key is absent; `ValueStates.unbound` for an envFrom outside the file), in `parsers/_base.py`. Consumers still judge them as v4.8.0 did, so verdicts and the gate are unchanged until V1-2 ([#16](https://github.com/rabbilyasar/envshield/issues/16)).
-- **V1-2 (#16, 2026-10-19, branch, unmerged):** report v2 gives these values COULD NOT VERIFY (`external_reference`, `host_forward`) per variable and source, and `summary.verdict` is never `valid` while one remains; an invariant test checks that VALID only comes from a validated Concrete value. The gate (exit code, `success`) is still V1-3 ([#17](https://github.com/rabbilyasar/envshield/issues/17)). The same applies to `BL-164` (union: a non-concrete value is never "ok" in the verdict), `BL-166` (in-file Secret: `value_not_inspected`) and `BL-169` (`invalid_fallback` / `host_forward`, with `-` and `:-` described differently).
+- **V1-2 (#16, 2026-10-19, merged `c3f3bcf`):** report v2 gives these values COULD NOT VERIFY (`external_reference`, `host_forward`) per variable and source, and `summary.verdict` is never `valid` while one remains; an invariant test checks that VALID only comes from a validated Concrete value. The gate (exit code, `success`) is still V1-3 ([#17](https://github.com/rabbilyasar/envshield/issues/17)). The same applies to `BL-164` (union: a non-concrete value is never "ok" in the verdict), `BL-166` (in-file Secret: `value_not_inspected`) and `BL-169` (`invalid_fallback` / `host_forward`, with `-` and `:-` described differently).
+- **V1-3 ([#17](https://github.com/rabbilyasar/envshield/issues/17), 2026-10-19, branch, unmerged):** **gate fixed.** `check`'s exit code is now the gate on the v5 verdict: a value EnvShield couldn't verify exits 1 and `success` is `false`, unless every unverified reason is accepted with `--accept-unverified=REASON` (`host_forward`, `external_reference`, `value_not_inspected`). An accepted run exits 0, keeps the `unverified` verdict and `success: false`, and ends with "PASSED WITH UNVERIFIED VALUES". The v1 `results` and `summary.clean` keep their v4.8.0 meaning. Tests: `test_evaluator.py::TestValuesEnvShieldNeverSaw` (gate fails, and passes only for the accepted reason), `test_cli.py::TestGate`.
 
 ### BL-164 — `completeness: union` treats a placeholder as satisfying a key (F2)
 
-Type: `ROBUSTNESS` / `REPORT HONESTY` · Evidence: `CONFIRMED` (live, 2026-10-14) · Priority: **P1** until [#10](https://github.com/rabbilyasar/envshield/issues/10) lands; **P2** afterwards (gate half, v5) · Status: **report fixed (`6e9dbec`, released in `v4.8.0`); gate open (v5, P2)**
+Type: `ROBUSTNESS` / `REPORT HONESTY` · Evidence: `CONFIRMED` (live, 2026-10-14) · Priority: **P1** until [#10](https://github.com/rabbilyasar/envshield/issues/10) lands; **P2** afterwards (gate half, v5) · Status: **report fixed (`6e9dbec`, released in `v4.8.0`); gate fixed by V1-3 ([#17](https://github.com/rabbilyasar/envshield/issues/17), branch, unmerged)**
 Component: `core/schema_manager.py::_union_key_status`, `core/evaluator.py` (union branch)
 Source: v5 planning audit, 2026-10-07 — alias **F2**.
 
@@ -1675,6 +1676,7 @@ Source: v5 planning audit, 2026-10-07 — alias **F2**.
 - **Impact:** same as `BL-163`, in the one mode that is supposed to prove "present *and valid* somewhere."
 - **Relationships:** `BL-163` (F1), `BL-030` (union design; its "union means presence, not values" rule is unchanged). Not a regression of `BL-030`: the carve-out mirrors the single-source one.
 - **Decision:** **Report: fixed in v4.8.0 by [#10](https://github.com/rabbilyasar/envshield/issues/10).** **Report fixed by R0-5 ([#10](https://github.com/rabbilyasar/envshield/issues/10), `6e9dbec`):** the variable is `valid: null` (never `true`), its per-source status is `not_visible`, its name is in `summary.unverified`, and the human `check` line names it instead of saying "perfectly in sync". Exit code, `success` and `results` are unchanged. Tests: `test_evaluator.py::TestValuesEnvShieldNeverSaw` (fail against the previous code). The union pass/fail decision (`_union_key_status`) is unchanged. **Gate: deliberate limitation in v4.8.0; fixed in v5.**
+- **V1-3 ([#17](https://github.com/rabbilyasar/envshield/issues/17), 2026-10-19, branch, unmerged):** **gate fixed.** `check`'s exit code is now the gate on the v5 verdict: a value EnvShield couldn't verify exits 1 and `success` is `false`, unless every unverified reason is accepted with `--accept-unverified=REASON` (`host_forward`, `external_reference`, `value_not_inspected`). An accepted run exits 0, keeps the `unverified` verdict and `success: false`, and ends with "PASSED WITH UNVERIFIED VALUES". The v1 `results` and `summary.clean` keep their v4.8.0 meaning. Tests: `test_evaluator.py::TestValuesEnvShieldNeverSaw` (gate fails, and passes only for the accepted reason), `test_cli.py::TestGate`.
 
 ### BL-165 — A `requiredIf` trigger that EnvShield cannot see silently drops the dependent requirement (F3)
 
@@ -1691,7 +1693,7 @@ Source: v5 planning audit, 2026-10-07 — alias **F3**.
 
 ### BL-166 — An in-manifest Kubernetes Secret whose key exists is reported valid without inspecting its value (F4)
 
-Type: `BUG` / `FALSE-CLEAN` · Evidence: `CONFIRMED` (live, 2026-10-14) · Priority: **P1**, both halves (the value is in the file EnvShield was given) · Status: **report fixed (`6e9dbec`, released in `v4.8.0`); gate open (v5) — overridden for v4.8.0**
+Type: `BUG` / `FALSE-CLEAN` · Evidence: `CONFIRMED` (live, 2026-10-14) · Priority: **P1**, both halves (the value is in the file EnvShield was given) · Status: **report fixed (`6e9dbec`, released in `v4.8.0`); gate fixed by V1-3 ([#17](https://github.com/rabbilyasar/envshield/issues/17), branch, unmerged); the v4.8.0–v4.9.1 overrides end with it**
 Component: `parsers/_kubernetes.py` (`env` loop, `secretKeyRef` branch), `core/schema_manager.py::diff_against_schema`
 Source: v5 planning audit, 2026-10-07 — alias **F4**.
 
@@ -1705,6 +1707,7 @@ Source: v5 planning audit, 2026-10-07 — alias **F4**.
 - **Release override (2026-10-14, v4.8.1):** the user explicitly overrode this open P1 gate half again, for the v4.8.1 release only, after its release-readiness review. v4.8.1 ships only the BL-182 fix and leaves this behavior exactly as in v4.8.0; the limitation stays documented in CHANGELOG `[4.8.0]`, corrected in `[4.8.1]` (BL-178). Does not carry to any later release.
 - **Release override (2026-10-15, v4.9.0):** the user explicitly overrode this open P1 gate half again, for the v4.9.0 release only, after its release-readiness review. v4.9.0 doesn't touch the gate; it is fixed in V1 (#16, #17). Does not carry to any later release.
 - **Release override (2026-10-15, v4.9.1):** the user explicitly overrode this open P1 gate half again, for the v4.9.1 release only (a dependency-only fix, BL-189). Does not carry to any later release.
+- **V1-3 ([#17](https://github.com/rabbilyasar/envshield/issues/17), 2026-10-19, branch, unmerged):** **gate fixed.** `check`'s exit code is now the gate on the v5 verdict: a value EnvShield couldn't verify exits 1 and `success` is `false`, unless every unverified reason is accepted with `--accept-unverified=REASON` (`host_forward`, `external_reference`, `value_not_inspected`). An accepted run exits 0, keeps the `unverified` verdict and `success: false`, and ends with "PASSED WITH UNVERIFIED VALUES". The v1 `results` and `summary.clean` keep their v4.8.0 meaning. Tests: `test_evaluator.py::TestValuesEnvShieldNeverSaw` (gate fails, and passes only for the accepted reason), `test_cli.py::TestGate`.
 
 ### BL-167 — The JSON report says `valid: true` for a blank value (F5)
 
@@ -1734,7 +1737,7 @@ Source: v5 planning audit, 2026-10-07 — alias **F6**.
 
 ### BL-169 — A Compose `${VAR-x}` / `${VAR:-x}` fallback is validated as the deployed value, and `-` and `:-` are treated alike (F7)
 
-Type: `DEPLOYMENT` / `REPORT HONESTY` · Evidence: `CONFIRMED` (live, 2026-10-14) · Priority: **P2** (same class as `BL-011`) · Status: **report fixed (`6e9dbec`, released in `v4.8.0`); gate open (v5, P2)**
+Type: `DEPLOYMENT` / `REPORT HONESTY` · Evidence: `CONFIRMED` (live, 2026-10-14) · Priority: **P2** (same class as `BL-011`) · Status: **report fixed (`6e9dbec`, released in `v4.8.0`); gate fixed by V1-3 ([#17](https://github.com/rabbilyasar/envshield/issues/17), branch, unmerged)**
 Component: `parsers/_docker_compose.py` (`_INTERPOLATION_RE`, `_resolve_interpolation`)
 Source: v5 planning audit, 2026-10-07 — alias **F7**.
 
@@ -1745,6 +1748,7 @@ Source: v5 planning audit, 2026-10-07 — alias **F7**.
 - **Relationships:** `BL-011` sub-item 1 (made `${VAR-default}` resolve at all, fixed 2026-09-03; this entry is the validation semantics on top of it); `BL-163`.
 - **Decision:** **Report: fixed in v4.8.0 by [#10](https://github.com/rabbilyasar/envshield/issues/10).** **Report fixed by R0-5 ([#10](https://github.com/rabbilyasar/envshield/issues/10), `6e9dbec`):** the variable is `valid: null` (never `true`), its per-source status is `not_visible`, its name is in `summary.unverified`, and the human `check` line names it instead of saying "perfectly in sync". Exit code, `success` and `results` are unchanged. Tests: `test_evaluator.py::TestValuesEnvShieldNeverSaw` (fail against the previous code). The Compose parser now records which values are fallbacks (`BaseParser.fallback_keys`); a valid fallback is `not_visible`, an invalid one still fails as before. `-` and `:-` are still treated alike (v5). **Gate: deliberate limitation in v4.8.0; fixed in v5.** No override needed (P2).
 - **V1-1 ([#15](https://github.com/rabbilyasar/envshield/issues/15), 2026-10-19):** the parser now records `-` and `:-` apart (`Forwarded(var, operator, fallback)`), and also `:?` and `+`. Judgment is unchanged until V1-2 ([#16](https://github.com/rabbilyasar/envshield/issues/16)). Two operators are still read as literal text: see `BL-195`.
+- **V1-3 ([#17](https://github.com/rabbilyasar/envshield/issues/17), 2026-10-19, branch, unmerged):** **gate fixed.** `check`'s exit code is now the gate on the v5 verdict: a value EnvShield couldn't verify exits 1 and `success` is `false`, unless every unverified reason is accepted with `--accept-unverified=REASON` (`host_forward`, `external_reference`, `value_not_inspected`). An accepted run exits 0, keeps the `unverified` verdict and `success: false`, and ends with "PASSED WITH UNVERIFIED VALUES". The v1 `results` and `summary.clean` keep their v4.8.0 meaning. Tests: `test_evaluator.py::TestValuesEnvShieldNeverSaw` (gate fails, and passes only for the accepted reason), `test_cli.py::TestGate`.
 
 ### BL-170 — The generated zod loader turns an empty `int`/`float`/`port` into `0` (F8)
 
@@ -1786,7 +1790,7 @@ Source: found while verifying the SHAs R0-3 was asked to correct (`BL-023`, `BL-
 
 ### BL-193 — `import` from a manifest wrote the placeholder text as a `defaultValue`
 
-Type: `BUG` · Evidence: `CONFIRMED` (live, v4.9.1, 2026-10-19) · Priority: **P2** (an `import` result is a draft the user is told to review; no value leaks, but release-philosophy question 4, "corrupt generated schemas", applies) · Status: **placeholder half fixed by [#15](https://github.com/rabbilyasar/envshield/issues/15) (branch, unmerged); expression half open**
+Type: `BUG` · Evidence: `CONFIRMED` (live, v4.9.1, 2026-10-19) · Priority: **P2** (an `import` result is a draft the user is told to review; no value leaks, but release-philosophy question 4, "corrupt generated schemas", applies) · Status: **placeholder half fixed by [#15](https://github.com/rabbilyasar/envshield/issues/15) (merged `b30e793`); expression half open**
 Component: `core/importer.py::generate_schema_from_file` (via `get_vars(get_values=True)` on a manifest parser)
 Source: found while tracing `UNRESOLVED_VALUE` consumers for V1-1.
 
@@ -1797,7 +1801,7 @@ Source: found while tracing `UNRESOLVED_VALUE` consumers for V1-1.
 
 ### BL-194 — A Kubernetes env entry with no `value` was treated as an unseen value; Kubernetes delivers `""`
 
-Type: `BUG` / `FALSE-CLEAN` · Evidence: `CONFIRMED` (live, differential run against `main`, 2026-10-19) · Priority: **P2** (manifest-only shape; a required variable passed while the container receives `""`) · Status: **fixed by [#15](https://github.com/rabbilyasar/envshield/issues/15) (branch, unmerged)**
+Type: `BUG` / `FALSE-CLEAN` · Evidence: `CONFIRMED` (live, differential run against `main`, 2026-10-19) · Priority: **P2** (manifest-only shape; a required variable passed while the container receives `""`) · Status: **fixed by [#15](https://github.com/rabbilyasar/envshield/issues/15) (merged `b30e793`, unreleased)**
 Component: `parsers/_kubernetes.py` (`env` loop)
 Source: found while mapping every Kubernetes shape to a V1-1 state; not in the plan's mapping table.
 
@@ -1807,7 +1811,7 @@ Source: found while mapping every Kubernetes shape to a V1-1 state; not in the p
 
 ### BL-195 — Compose `${VAR?err}` and `${VAR:+alt}` are still read as literal values
 
-Type: `DEPLOYMENT` / `REPORT HONESTY` · Evidence: `CONFIRMED` (code and test, 2026-10-19) · Priority: **P2** (same class as `BL-169`) · Status: **operators fixed by V1-2 (#16, branch, unmerged); keying open (V1-3)**
+Type: `DEPLOYMENT` / `REPORT HONESTY` · Evidence: `CONFIRMED` (code and test, 2026-10-19) · Priority: **P2** (same class as `BL-169`) · Status: **operators fixed by V1-2 (#16, merged `c3f3bcf`); keying open (V1-3)**
 Component: `parsers/_docker_compose.py` (`_INTERPOLATION_RE`)
 Source: V1-1 implementation.
 
@@ -1818,7 +1822,7 @@ Source: V1-1 implementation.
 
 ### BL-196 — An unreadable source file crashed `check` with a traceback
 
-Type: `BUG` / `ROBUSTNESS` · Evidence: `CONFIRMED` (live, v4.9.1, 2026-10-19) · Priority: **P2** (exit is non-zero, so not a false-clean; but `--json` emits a traceback instead of JSON, the `BL-002` class) · Status: **fixed by V1-2 ([#16](https://github.com/rabbilyasar/envshield/issues/16), branch, unmerged)**
+Type: `BUG` / `ROBUSTNESS` · Evidence: `CONFIRMED` (live, v4.9.1, 2026-10-19) · Priority: **P2** (exit is non-zero, so not a false-clean; but `--json` emits a traceback instead of JSON, the `BL-002` class) · Status: **fixed by V1-2 ([#16](https://github.com/rabbilyasar/envshield/issues/16), merged `c3f3bcf`, unreleased)**
 Component: `core/evaluator.py::evaluate_source`
 Source: checking V1-2's "an unreadable file is ERROR" acceptance criterion.
 
@@ -1833,6 +1837,16 @@ Source: checking V1-2's "an unreadable file is ERROR" acceptance criterion.
 interface yet — this section exists to hold the architectural questions until
 they're answered, per explicit instruction.
 
+
+### BL-197 — The invocation verdict could be `not_required`, outside report v2's closed set
+
+Type: `BUG` / `REPORT CONTRACT` · Evidence: `CONFIRMED` (test, 2026-10-19) · Priority: **P3** (the human output already said VALID; the exit code was 0 either way) · Status: **fixed by V1-3 ([#17](https://github.com/rabbilyasar/envshield/issues/17), branch, unmerged)**
+Component: `core/evaluator.py::ServiceEvaluation.verdict`
+Source: V1-3 implementation, while making `success` strict.
+
+- **Current behavior (V1-2):** a service whose every variable is optional and absent got `summary.verdict: "not_required"`, and so did `check --json`'s top-level `verdict`. Plan §10 lists `summary.verdict` as `valid|invalid|unverified|error` and its aggregation table says "No required variables → VALID ("0 required variables")". `test_verdicts.py::test_no_required_variables_is_valid` asserted the wrong value.
+- **Expected behavior:** VALID. With V1-3 this matters: `success` is `true` only when the verdict is VALID.
+- **Decision:** fixed in V1-3: `ServiceEvaluation.verdict()` maps NOT REQUIRED to VALID. Per-variable `not_required` is unchanged. Test: `test_verdicts.py::test_no_required_variables_is_valid`.
 ### BL-040 — AI-Agent-Friendly EnvShield
 Type: `AI_AGENT` · Evidence: `STRATEGIC` · Priority: `EXPLORING`
 Source(s): AI/Varlock/MCP strategic discussion (this engagement).
@@ -1867,6 +1881,16 @@ Source(s): AI/Varlock/MCP discussion; already named in ROADMAP.md's "Next" list 
 - **Depends on:** Configuration Discovery (Phase 2B, already shipped) being the actual data source — not the regex-era scanner.
 - **Decision:** Not implemented. Kept distinct from BL-033 (provenance) and BL-034 (consistency) — related, not automatically the same feature, per explicit instruction not to collapse these prematurely.
 
+
+### BL-198 — The committed `uv.lock` is stale
+
+Type: `BUILD` · Evidence: `CONFIRMED` (2026-10-19: any `uv run` rewrites it) · Priority: **P3** (CI installs from `pyproject.toml`; nothing ships from the lock) · Status: **open**
+Component: `uv.lock`
+Source: V1-3 implementation; `uv run pytest` modified the file.
+
+- **Current behavior:** `uv.lock` records `envshield` version `4.0.1` and an unpinned dev `ruff`, while `pyproject.toml` is `4.9.1` with `ruff>=0.16,<0.17`. Every `uv run` re-locks it, leaving an unrelated diff in the working tree.
+- **Expected behavior:** a lock that matches `pyproject.toml`, kept current by the release flow (or the file is removed if the project doesn't use it).
+- **Decision:** open. Reverted on V1-3's branch rather than committed there, since it's outside #17's scope.
 ---
 
 ## Part 7 — Performance / Scalability (research, not yet benchmarked)

@@ -940,9 +940,12 @@ V1-1 ([#15](https://github.com/rabbilyasar/envshield/issues/15)) is merged
 unchanged except two recorded fixes (`BL-193`, `BL-194`). V0-1
 ([#14](https://github.com/rabbilyasar/envshield/issues/14)) records the v5
 decisions in
-[docs/architecture/v5-decisions.md](docs/architecture/v5-decisions.md).
-Next: V1-2 ([#16](https://github.com/rabbilyasar/envshield/issues/16)), then
-V1-3 ([#17](https://github.com/rabbilyasar/envshield/issues/17)). The full
+[docs/architecture/v5-decisions.md](docs/architecture/v5-decisions.md)
+(merged `24a53b8`, PR #66). V1-2
+([#16](https://github.com/rabbilyasar/envshield/issues/16)) is merged
+(`c3f3bcf`, PR #67): five verdicts, reason codes and report v2. V1-3
+([#17](https://github.com/rabbilyasar/envshield/issues/17)) makes the exit
+code the gate on those verdicts, with `--accept-unverified`. The full
 order is ROADMAP.md's "v5 — in progress". Nothing since `v4.9.1` is released.
 
 **Previous phase (updated 2026-10-15): `v4.9.1` released; v5 V1 next.**

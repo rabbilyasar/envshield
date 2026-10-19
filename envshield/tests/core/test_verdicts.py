@@ -416,8 +416,9 @@ def test_no_required_variables_is_valid(tmp_path):
         ".env": "",
     }
     code, payload, human = _run(tmp_path, files)
-    assert payload["reports"][0]["summary"]["verdict"] == "not_required"
-    assert payload["verdict"] == "not_required"
+    assert payload["reports"][0]["summary"]["verdict"] == "valid"
+    assert payload["verdict"] == "valid"  # plan §10: "0 required variables" is VALID
+    assert payload["success"] is True
     assert "VALID: 0 required variables." in human
     assert code == 0
 
@@ -549,3 +550,42 @@ def test_a_secret_fallback_never_reaches_output(tmp_path):
     _, payload, human = _run(tmp_path, files, "docker-compose.yml")
     assert _verdict(payload, "PASS") == ("invalid", "invalid_fallback")
     assert "hunter2" not in json.dumps(payload) + human
+
+
+def test_gate_and_accepted_reasons():
+    f = lambda var, reason: {"variable": var, "reason_code": reason}  # noqa: E731
+    unverified = [f("A", "host_forward"), f("B", "external_reference")]
+    both = ["host_forward", "external_reference"]
+    assert verdicts.gate("valid", [], []) == {"result": "pass", "accepted": {}}
+    assert verdicts.gate("unverified", unverified, both)["result"] == "pass"
+    assert verdicts.gate("unverified", unverified, ["host_forward"]) == {
+        "result": "fail",
+        "accepted": {"host_forward": ["A"]},
+    }
+    assert verdicts.gate("invalid", unverified, both)["result"] == "fail"
+    assert verdicts.gate("error", [], both)["result"] == "fail"
+    # COULD NOT VERIFY with nothing to accept fails closed.
+    assert verdicts.gate("unverified", [], both)["result"] == "fail"
+    ambiguous = [f("C", "ambiguous_requirement")]
+    assert (
+        verdicts.gate("unverified", ambiguous, list(verdicts.ACCEPTABLE))["result"]
+        == "fail"
+    )
+
+    assert verdicts.parse_accepted(
+        ["host_forward,", "value_not_inspected", "host_forward"]
+    ) == [
+        "host_forward",
+        "value_not_inspected",
+    ]
+    for bad in (
+        ["all"],
+        ["ambiguous_requirement"],
+        ["source_unreadable"],
+        ["blank"],
+        ["x"],
+        [""],
+        [","],
+    ):
+        with pytest.raises(ValueError):
+            verdicts.parse_accepted(bad)

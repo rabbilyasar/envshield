@@ -59,6 +59,11 @@ REASONS = {
     ),
 }
 
+# The COULD NOT VERIFY reasons `check --accept-unverified` may accept (plan
+# §10). Never `ambiguous_requirement` (the requirement itself is unknown),
+# never an ERROR or INVALID reason, and no `all`.
+ACCEPTABLE = ("host_forward", "external_reference", "value_not_inspected")
+
 REQUIRED, OPTIONAL, AMBIGUOUS = "required", "optional", "ambiguous"
 
 # A required local variable that is absent but has a schema default.
@@ -102,6 +107,62 @@ def worst(verdicts: Iterable[Verdict]) -> Verdict:
         if _RANK[v.verdict] > _RANK[best.verdict]:
             best = v
     return best
+
+
+def parse_accepted(values: Iterable[str]) -> List[str]:
+    """
+    `--accept-unverified` values (each REASON[,REASON]) as a sorted list of
+    distinct reasons. Raises ValueError, naming the reason, for anything
+    outside ACCEPTABLE: a usage error.
+    """
+    accepted = set()
+    for value in values:
+        for reason in (r.strip() for r in value.split(",")):
+            if not reason:
+                continue
+            if reason in ACCEPTABLE:
+                accepted.add(reason)
+            elif reason == "all":
+                raise ValueError("there is no 'all': name each reason to accept")
+            elif reason == "ambiguous_requirement":
+                raise ValueError(
+                    "'ambiguous_requirement' can't be accepted: whether the "
+                    "variable is required is itself unknown"
+                )
+            elif reason in REASONS[ERROR] or reason in REASONS[INVALID]:
+                raise ValueError(f"'{reason}' isn't a COULD NOT VERIFY reason")
+            else:
+                raise ValueError(f"unknown reason '{reason}'")
+    if not accepted:
+        raise ValueError("name at least one reason")
+    return sorted(accepted)
+
+
+def gate(
+    verdict: str, unverified: Iterable[Mapping[str, Any]], accepted: Iterable[str]
+) -> Dict[str, Any]:
+    """
+    Whether the pipeline may proceed (plan §10), given the invocation's
+    verdict and its COULD NOT VERIFY findings. Passes on VALID, or on
+    COULD NOT VERIFY when every finding's reason is accepted. The verdict
+    itself never changes. `accepted` maps each accepted reason to the
+    variables it covered.
+    """
+    accepted = set(accepted)
+    covered: Dict[str, set] = {reason: set() for reason in sorted(accepted)}
+    reasons = set()
+    for finding in unverified:
+        reasons.add(finding["reason_code"])
+        if finding["reason_code"] in accepted and finding.get("variable"):
+            covered[finding["reason_code"]].add(finding["variable"])
+    # Fails closed: COULD NOT VERIFY with no finding to accept is a bug.
+    passes = verdict in (VALID, NOT_REQUIRED) or (
+        verdict == UNVERIFIED and bool(reasons) and reasons <= accepted
+    )
+    return {
+        "result": "pass" if passes else "fail",
+        "accepted": {reason: sorted(names) for reason, names in covered.items()},
+    }
 
 
 def _trigger_reason(trigger: str) -> str:

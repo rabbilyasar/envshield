@@ -440,8 +440,25 @@ def check(
             "file's (deployment manifests are unaffected). Values are never shown."
         ),
     ),
+    accept_unverified: Optional[List[str]] = typer.Option(
+        None,
+        "--accept-unverified",
+        metavar="REASON[,REASON]",
+        help=(
+            "Let the check pass when the only problems are values it could not "
+            "verify for these reasons: host_forward, external_reference, "
+            "value_not_inspected. Repeatable. The verdict and every unverified "
+            "line are still reported."
+        ),
+    ),
 ):
     """Validates a local environment file against the schema. Also accepts a docker-compose or Kubernetes manifest."""
+    accepted: List[str] = []
+    if accept_unverified is not None:
+        try:
+            accepted = verdicts.parse_accepted(accept_unverified)
+        except ValueError as e:
+            raise typer.BadParameter(str(e), param_hint="--accept-unverified")
     try:
         # resolve_targets already never blocks on the interactive "Which
         # service?" picker without a TTY to answer it (CI/scripting,
@@ -477,15 +494,62 @@ def check(
         if not json_output:
             _render_evaluation(evaluation)
 
+    reports = [evaluator.build_report(e) for e in evaluations]
+    # The invocation's verdict is the highest-precedence service verdict;
+    # the gate decides the exit code (plan §10).
+    verdict = verdicts.worst(e.verdict() for e in evaluations).verdict
+    gate = verdicts.gate(
+        verdict, [f for r in reports for f in r["unverified"]], accepted
+    )
     if json_output:
         payload = evaluator.legacy_check_payload(evaluations)
-        # v2: the invocation's verdict, the highest-precedence service verdict.
-        payload["verdict"] = verdicts.worst(e.verdict() for e in evaluations).verdict
-        payload["reports"] = [evaluator.build_report(e) for e in evaluations]
+        # Strict: false under accepted unverified values, though the exit is 0.
+        payload["success"] = verdict == verdicts.VALID
+        payload["verdict"] = verdict
+        payload["gate"] = gate
+        payload["reports"] = reports
         print(json.dumps(payload, indent=2))
+    else:
+        _render_gate(verdict, gate, reports)
 
-    if not all(e.passed for e in evaluations):
+    if gate["result"] != "pass":
         raise typer.Exit(code=1)
+
+
+def _render_gate(
+    verdict: str, gate: Dict[str, Any], reports: List[Dict[str, Any]]
+) -> None:
+    """The closing line when values couldn't be verified: accepted or not."""
+    if verdict != verdicts.UNVERIFIED:
+        return
+    if gate["result"] == "pass":
+        console.print(
+            "\n[bold yellow]PASSED WITH UNVERIFIED VALUES[/bold yellow] "
+            f"(accepted: {', '.join(gate['accepted'])})."
+        )
+        return
+    pending = sorted(
+        {
+            f["reason_code"]
+            for r in reports
+            for f in r["unverified"]
+            if f["reason_code"] not in gate["accepted"]
+        }
+    )
+    console.print(
+        "\n[bold red]FAILED:[/bold red] some values could not be verified "
+        f"({', '.join(pending)})."
+    )
+    if "ambiguous_requirement" in pending:
+        console.print(
+            "[dim]ambiguous_requirement can't be accepted: whether the variable "
+            "is required is itself unknown.[/dim]"
+        )
+    else:
+        console.print(
+            "[dim]If that's expected, rerun with "
+            f"--accept-unverified={','.join(pending)}.[/dim]"
+        )
 
 
 _VERDICT_WORD = {

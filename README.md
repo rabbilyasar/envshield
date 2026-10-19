@@ -158,13 +158,16 @@ secret = true
 
 ```bash
 $ envshield check
-┌───────────────────┬────────────────┬────────────────────────────────────┐
-│ Status             │ Variable Name  │ Source                              │
-├───────────────────┼────────────────┼────────────────────────────────────┤
-│ Missing in Local   │ DATABASE_URL   │ env.schema.toml (Required)          │
-│ Invalid Value      │ PORT           │ must be a port number from 1-65535  │
-└───────────────────┴────────────────┴────────────────────────────────────┘
+Validating .env against schema...
+Invalid
+  ✗ DATABASE_URL   missing (required)
+  ✗ PORT           invalid value (must be a port number from 1-65535)
+  ✓ LOG_LEVEL      valid
+
+INVALID: 2 invalid, 1 valid.
 ```
+
+Every variable gets one verdict: valid, invalid, could not verify, not required, or error. `check` never calls a value valid unless it read it. A manifest often only *points* at a value (a Kubernetes Secret, a Compose `${VAR}` from the deploy host), so those variables are "could not verify", and `check` exits 1. When that's expected, accept the specific reason: `envshield check k8s/prod.yaml --accept-unverified=external_reference` exits 0, still lists every unverified variable, and ends with `PASSED WITH UNVERIFIED VALUES`. The reasons you can accept are `host_forward`, `external_reference` and `value_not_inspected`. In `--json`, `success` stays `false` for an accepted run.
 
 **`envshield setup`** — interactive onboarding: fills in whatever's missing, blank, or now-invalid in your local file, prompting with each variable's description.
 
@@ -553,9 +556,8 @@ envshield hook remove --yes    # skip the confirmation prompt
 
 ## Known limitations
 
-EnvShield is built around the patterns real projects actually use. A few narrower cases aren't handled yet. None of them let a secret leak; the first one can let a value EnvShield couldn't see pass `check`:
+EnvShield is built around the patterns real projects actually use. A few narrower cases aren't handled yet. None of them let a secret leak:
 
-- **Unverified manifest values pass the v4 gate.** When a deployment manifest only *points* at a value — a Kubernetes `secretKeyRef`/`configMapKeyRef` to an object outside the file, a Secret key in the same file, a Compose `${VAR}` or bare `KEY`, or a `${VAR-x}`/`${VAR:-x}` fallback — EnvShield can't see the deployed value. `check` reports these variables as unverified (`valid: null`, status `not_visible`, listed in `summary.unverified`; the human output names them when nothing else in that source fails), but they still pass: exit code and `success` are unchanged. A fallback that itself violates the contract still fails. Making the gate act on unverified values is planned for v5.
 - **Docker Compose:** `${VAR}`, `${VAR:-default}`, and the no-colon `${VAR-default}` form are all supported. The `${VAR:?}`/`${VAR:+}` forms and embedded/multiple interpolation references in one value aren't evaluated yet.
 - **Kubernetes:** `env[].valueFrom.secretKeyRef`/`configMapKeyRef` are matched by the container's environment-variable name (`env[].name`) — name your schema variable after the env var, not the key — and, when the referenced Secret/ConfigMap is defined in the same manifest, the referenced key is validated to actually exist there. `envFrom.prefix` is applied. `initContainers` are selectable via `--container` but never auto-selected by default.
 - **Source discovery:** Python is AST-based; JavaScript/TypeScript is pattern-based. No other language is discovered yet.
