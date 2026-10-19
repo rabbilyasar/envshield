@@ -1135,6 +1135,36 @@ Component: `pyproject.toml` dependencies
 - **Not done:** CI tests only the latest resolution, so the minimum isn't guarded automatically. A min-versions CI job would catch a regression; proposed, not built.
 - **Issue:** [#58](https://github.com/rabbilyasar/envshield/issues/58).
 
+### BL-190 — README's `schema diff` example shows "PORT lost its default" as BREAKING; EnvShield classifies it non-breaking
+
+Type: `DOCUMENTATION` · Evidence: `CONFIRMED` (2026-10-19) · Priority: **P3** · Status: **open**
+Component: `README.md` ("Review / govern" example)
+
+- **Current behavior:** README line 199 shows `PORT │ BREAKING │ lost its default and is now always required`. Against v4.9.1, removing `PORT`'s `defaultValue` makes `schema diff --json` report `"category": "non_breaking"`, `"'PORT' lost its default -- it must still always be present, so every config valid before is still valid."`, and exit 0. The tool is right (a default never waived presence, D-2); the example predates that rule.
+- **Expected behavior:** the example shows a change that really is breaking (for example, a new required variable), so readers and agents learn the real classification.
+- **Decision:** fixed by [#62](https://github.com/rabbilyasar/envshield/issues/62): the README and hosted docs (envshield_website#2) now show real v4.9.1 output (a new required secret is BREAKING; `secret` true → false is SECURITY).
+
+### BL-191 — Machine-readable output differs in shape across commands, and findings carry no next step
+
+Type: `UX` / `AI_AGENT` · Evidence: `CONFIRMED` (2026-10-19, agent-style evaluation, see `BL-040`) · Priority: **P2** · Status: **open, proposed for v5**
+Component: `--json` output of `check`, `doctor`, `scan`, `undeclared`, `schema diff`, `explain`
+
+- **Field names differ for the same thing:** a code location is `file`/`line` in `check`'s report, `file_path`/`line_num` in `scan`, and `file_path`/`line` in `undeclared` and `explain`; a variable is `name`, `variable_name` or `variable`. Only `check`'s report is versioned (`report_version: 1`); the other five shapes are unversioned and undocumented.
+- **No next step in the JSON:** findings say what is wrong but not what to do. The only remediation text is in human output and `doctor --json` messages, and it points at `envshield setup`, which aborts without a terminal ("Input is not a terminal … Aborted", exit 1; `B5`, V3-2 #21). For a manifest gap it says "run 'envshield setup' to fill them in", which never edits a manifest (`B3`, V5-1 #25). An agent following the advice can't succeed.
+- **Variable rollups hide per-source state:** in `check --json`, a variable's `present`/`valid` are aggregates across its sources (`evaluator.py` around line 495), and `summary.unverified` lists a name only when *no* source saw a value. Evidence: worker's `DATABASE_URL` is `ok` in `worker/.env` and `not_visible` in its Compose container (`${DATABASE_URL}`), yet reports `valid: true` and `unverified: []`; api's `STRIPE_KEY` is in `api/.env` (invalid) but missing from Compose, and reports `present: false`. The per-source `sources[].status` is correct; an agent that reads only the rollup draws the wrong conclusion. Expected: findings are per source (one finding per variable × source that fails or can't be verified), so the rollup can't be misread.
+- **Expected behavior:** one documented, versioned finding shape across commands (kind, variable, service, source or file and line, status, reason, secret flag) with a `next_step` that is actionable without a terminal (for example "declare NEW_FEATURE_FLAG in env.schema.toml with services = [\"api\"]", or "a person must set STRIPE_KEY: secret"), never a secret value.
+- **Relationships:** `BL-040`, `BL-192`, V0-2b (#42, `check` folding `undeclared`), V6-2 (#45, output), V1-2 (#16, report v2: the natural place for a shared shape). Scheduled: the finding shape in #16, one finding list in #42 (ROADMAP v5 steps 3 and 7).
+
+### BL-192 — No documented way to run EnvShield from a coding agent after each change
+
+Type: `AI_AGENT` / `DOCUMENTATION` · Evidence: `CONFIRMED` (2026-10-19, agent-style evaluation, see `BL-040`) · Priority: **P2** · Status: **open, proposed for v5**
+Component: `README.md` ("For AI coding agents"), docs, website
+
+- **Current behavior:** the README says agents can run `check --json`, but nothing shows how to wire it in: no Claude Code hook (`PostToolUse` on edits, or `Stop`), no Codex equivalent, no `AGENTS.md`/`CLAUDE.md` snippet telling an agent when to run it and how to act on the result. Covering one edit takes three commands (`check` for values and manifests, `undeclared` for new reads, `schema diff` for contract changes), each with its own JSON shape (`BL-191`). The only automatic guard today is the git pre-commit hook, which fires at commit time, not after the edit.
+- **Expected behavior:** one command an agent runs after a change, with one exit code and one finding list, and a documented, tested recipe (agent hook config plus an instructions snippet) that a user copies in.
+- **Relationships:** `BL-040`, `BL-191`, V0-2b (#42, one command), V6-2 (#45, output).
+- **Issue:** [#63](https://github.com/rabbilyasar/envshield/issues/63) (V6-3), after #42.
+
 ### BL-187 — kemonchilo, the v5 reference project, permanently fails `check` in v4.8.0
 
 Type: `PRODUCT` · Evidence: `CONFIRMED` (real-repo trial, 2026-10-14) · Priority: decision input for V4-1 · Status: **open, expected to be resolved by V4-1**
@@ -1771,6 +1801,7 @@ Source(s): AI/Varlock/MCP strategic discussion (this engagement).
 - **Design principles already agreed, before any implementation:** deterministic structured responses; secret-safe output by construction; provenance/evidence attached to every answer; read-only inspection; explicit trust boundaries; no secret retrieval; no runtime secret resolution.
 - **Cross-reference:** ROADMAP.md's existing "Next: AI-Agent Configuration Safety" and "Exploring: a more direct interface for AI agents (e.g. MCP)" are the same direction — this backlog item is the detailed record behind those two lines, not a competing plan.
 - **Decision:** Not implemented. Architectural questions above must be answered before any code is written.
+- **Evidence (2026-10-19, agent-style evaluation of v4.9.1):** a two-service project with canary secret values (in `.env`, as an invalid secret value, as a Compose literal, hardcoded in source) plus an undeclared read, a missing variable and a schema change. Run with no TTY, as an agent runs them: `check`, `doctor`, `scan`, `undeclared` (`--json` and `--sarif`), `schema diff` and `explain` all printed valid JSON alone on stdout, nothing on stderr, exit 1 on findings (0 for a non-blocking diff), and **no canary value in any output**, human output included. Findings name variable, service, per-source status (`.env` vs. each Compose container) and code file/line. The pre-commit hook command (`scan --staged --enforce`) blocked the agent's staged commit without a terminal, naming the undeclared read and the hardcoded secret. Gaps: inconsistent JSON shapes and no next step (`BL-191`); remediation that requires a terminal (`B5`/#21, `B3`/#25); no documented agent recipe (`BL-192`); three commands to cover one edit (`check`, `undeclared`, `schema diff`; V0-2b #42). Answers question 1 in part: the safe-to-return set already in practice is everything in today's JSON (names, files, lines, statuses, reasons, schema metadata), never values.
 
 ### BL-041 — MCP configuration scanning
 Type: `MCP` · Evidence: `STRATEGIC` · Priority: `EXPLORING`
