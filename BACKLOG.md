@@ -1008,12 +1008,13 @@ Component: `init` output, generated `envshield.yml`, `env.schema.toml`, `.env.ex
 
 ### BL-178 — Human `check` output drops unverified names when another variable fails
 
-Type: `BUG` / `UX` · Evidence: `CONFIRMED` (first-run trial, 2026-10-14) · Priority: **P2** · Status: **open, covered by V1-2**
+Type: `BUG` / `UX` · Evidence: `CONFIRMED` (first-run trial, 2026-10-14) · Priority: **P2** · Status: **fixed by V1-2 ([#16](https://github.com/rabbilyasar/envshield/issues/16), branch, unmerged)**
 Component: `check` human output (manifest source)
 
 - **Current behavior:** with `DATABASE_URL: ${DATABASE_URL}` (forwarded) and `API_URL` absent, the human output shows only `API_URL`. The JSON report has `DATABASE_URL` as `not_visible` and in `summary.unverified`. With `API_URL` added, the human output does name it ("couldn't check them: DATABASE_URL"). README's v4.8.0 limitation text says unverified variables are "named in the human output", which holds only when nothing else fails.
 - **Expected behavior:** unverified variables are always named, as V1-2 requires ("ERROR, INVALID and COULD NOT VERIFY are always reported in full").
 - **Decision:** no separate fix; V1-2 ([#16](https://github.com/rabbilyasar/envshield/issues/16)) must cover the mixed case with a test.
+- **Fixed (V1-2, 2026-10-19):** human `check` output now lists every Invalid and Could-not-verify line per source, then valid and not-required lines. Test: `test_verdicts.py::test_mixed_service_lists_every_section` (the exact `${DATABASE_URL}` + absent `API_URL` case).
 - **Issue:** V1-2 [#16](https://github.com/rabbilyasar/envshield/issues/16) (comment).
 
 ### BL-179 — No ready-made CI or pre-commit integration
@@ -1146,7 +1147,7 @@ Component: `README.md` ("Review / govern" example)
 
 ### BL-191 — Machine-readable output differs in shape across commands, and findings carry no next step
 
-Type: `UX` / `AI_AGENT` · Evidence: `CONFIRMED` (2026-10-19, agent-style evaluation, see `BL-040`) · Priority: **P2** · Status: **open, proposed for v5**
+Type: `UX` / `AI_AGENT` · Evidence: `CONFIRMED` (2026-10-19, agent-style evaluation, see `BL-040`) · Priority: **P2** · Status: **`check` half done by V1-2 (#16, branch, unmerged); other commands open (#42)**
 Component: `--json` output of `check`, `doctor`, `scan`, `undeclared`, `schema diff`, `explain`
 
 - **Field names differ for the same thing:** a code location is `file`/`line` in `check`'s report, `file_path`/`line_num` in `scan`, and `file_path`/`line` in `undeclared` and `explain`; a variable is `name`, `variable_name` or `variable`. Only `check`'s report is versioned (`report_version: 1`); the other five shapes are unversioned and undocumented.
@@ -1154,6 +1155,7 @@ Component: `--json` output of `check`, `doctor`, `scan`, `undeclared`, `schema d
 - **Variable rollups hide per-source state:** in `check --json`, a variable's `present`/`valid` are aggregates across its sources (`evaluator.py` around line 495), and `summary.unverified` lists a name only when *no* source saw a value. Evidence: worker's `DATABASE_URL` is `ok` in `worker/.env` and `not_visible` in its Compose container (`${DATABASE_URL}`), yet reports `valid: true` and `unverified: []`; api's `STRIPE_KEY` is in `api/.env` (invalid) but missing from Compose, and reports `present: false`. The per-source `sources[].status` is correct; an agent that reads only the rollup draws the wrong conclusion. Expected: findings are per source (one finding per variable × source that fails or can't be verified), so the rollup can't be misread.
 - **Expected behavior:** one documented, versioned finding shape across commands (kind, variable, service, source or file and line, status, reason, secret flag) with a `next_step` that is actionable without a terminal (for example "declare NEW_FEATURE_FLAG in env.schema.toml with services = [\"api\"]", or "a person must set STRIPE_KEY: secret"), never a secret value.
 - **Relationships:** `BL-040`, `BL-192`, V0-2b (#42, `check` folding `undeclared`), V6-2 (#45, output), V1-2 (#16, report v2: the natural place for a shared shape). Scheduled: the finding shape in #16, one finding list in #42 (ROADMAP v5 steps 3 and 7).
+- **V1-2 (2026-10-19):** `check --json` report v2 has `findings`, one per variable × source that is invalid or unverified, plus code reads and source/service failures, each with `location`, `secret`, `reason_code` and `next_step {by, text}` (never a value, never an interactive command). The shape is documented in `docs/architecture/evaluator-decisions.md` D-9. `doctor`, `scan`, `undeclared`, `schema diff` and `explain` are unchanged (N2) and still differ; #42 brings them onto the same shape.
 
 ### BL-192 — No documented way to run EnvShield from a coding agent after each change
 
@@ -1659,6 +1661,7 @@ Source: v5 planning audit, 2026-10-07 — alias **F1**.
 - **Relationships:** `BL-166` (F4, in-manifest Secret whose value is visible but not inspected), `BL-164` (F2, same placeholder in `completeness: union`), `BL-169` (F7). `BL-011` sub-items 2–3 deliberately left an external reference present/unresolved (no keys are knowable) and are fixed; this finding is about the *claim*, not the parsing. `has_unresolved_source` (envFrom to an external source) already reports `unresolved`; per-variable references do not.
 - **Decision:** **Report: fixed in v4.8.0 by [#10](https://github.com/rabbilyasar/envshield/issues/10).** **Report fixed by R0-5 ([#10](https://github.com/rabbilyasar/envshield/issues/10), `6e9dbec`):** the variable is `valid: null` (never `true`), its per-source status is `not_visible`, its name is in `summary.unverified`, and the human `check` line names it instead of saying "perfectly in sync". Exit code, `success` and `results` are unchanged. Tests: `test_evaluator.py::TestValuesEnvShieldNeverSaw` (fail against the previous code). **Gate: a deliberate, documented limitation in v4.8.0 — `check` keeps passing these values — fixed in v5 ([#16](https://github.com/rabbilyasar/envshield/issues/16), [#17](https://github.com/rabbilyasar/envshield/issues/17)).** The static/runtime boundary in charter §7 means an external value cannot be validated here; v5 is where "unverified" becomes a visible verdict the gate can act on.
 - **V1-1 ([#15](https://github.com/rabbilyasar/envshield/issues/15), 2026-10-19):** root cause removed. `UNRESOLVED_VALUE`, `has_unresolved_source` and `fallback_keys` are gone; parsers report typed states (`Concrete`, `Forwarded`, `External`, `KeyPresent`; a missing key is absent; `ValueStates.unbound` for an envFrom outside the file), in `parsers/_base.py`. Consumers still judge them as v4.8.0 did, so verdicts and the gate are unchanged until V1-2 ([#16](https://github.com/rabbilyasar/envshield/issues/16)).
+- **V1-2 (#16, 2026-10-19, branch, unmerged):** report v2 gives these values COULD NOT VERIFY (`external_reference`, `host_forward`) per variable and source, and `summary.verdict` is never `valid` while one remains; an invariant test checks that VALID only comes from a validated Concrete value. The gate (exit code, `success`) is still V1-3 ([#17](https://github.com/rabbilyasar/envshield/issues/17)). The same applies to `BL-164` (union: a non-concrete value is never "ok" in the verdict), `BL-166` (in-file Secret: `value_not_inspected`) and `BL-169` (`invalid_fallback` / `host_forward`, with `-` and `:-` described differently).
 
 ### BL-164 — `completeness: union` treats a placeholder as satisfying a key (F2)
 
@@ -1804,13 +1807,25 @@ Source: found while mapping every Kubernetes shape to a V1-1 state; not in the p
 
 ### BL-195 — Compose `${VAR?err}` and `${VAR:+alt}` are still read as literal values
 
-Type: `DEPLOYMENT` / `REPORT HONESTY` · Evidence: `CONFIRMED` (code and test, 2026-10-19) · Priority: **P2** (same class as `BL-169`) · Status: **open, for V1-2 ([#16](https://github.com/rabbilyasar/envshield/issues/16))**
+Type: `DEPLOYMENT` / `REPORT HONESTY` · Evidence: `CONFIRMED` (code and test, 2026-10-19) · Priority: **P2** (same class as `BL-169`) · Status: **operators fixed by V1-2 (#16, branch, unmerged); keying open (V1-3)**
 Component: `parsers/_docker_compose.py` (`_INTERPOLATION_RE`)
 Source: V1-1 implementation.
 
 - **Current behavior:** the v5 plan's `Forwarded` operator set is none, `-`, `:-`, `:?`, `+`, and V1-1 implements exactly that. Compose also accepts `?` (error if unset) and `:+` (alternative if set and non-empty). Those two still produce `Concrete("${VAR?err}")` under the container key, so `check` validates the expression text as if it were the deployed value.
 - **Expected behavior:** both are `Forwarded` like their siblings. Under V1-2 an unrecognized expression must never reach VALID.
 - **Relationships:** `BL-169`, `BL-193`, V1-2 (#16). Also for V1-2: a `:?`/`+` state is keyed under the container key (where v4.8.0 kept its literal), while `${VAR}`/`-`/`:-` are keyed under the host variable. V1-2 should key all five by the host variable when it judges them. `fieldRef`/`resourceFieldRef` (not in the plan's table) map to `External`, which V1-2 will report as COULD NOT VERIFY.
+- **V1-2 (2026-10-19):** `?` and `:+` are now `Forwarded` too (`LITERAL_OPERATORS` in `parsers/_base.py`), so all four judge COULD NOT VERIFY (`host_forward`) and never VALID; their legacy text is unchanged, so v1 output and exit codes don't move. Tests: `test_docker_compose_parser.py::TestValueStates::test_the_other_required_and_alternative_operators_are_forwarded`, `test_verdicts.py::test_compose_interpolation`. **Still open:** these four stay keyed under the container key. Re-keying them by the host variable changes the v1 `results`, so it belongs with V1-3 (#17), when the gate moves to verdicts.
+
+### BL-196 — An unreadable source file crashed `check` with a traceback
+
+Type: `BUG` / `ROBUSTNESS` · Evidence: `CONFIRMED` (live, v4.9.1, 2026-10-19) · Priority: **P2** (exit is non-zero, so not a false-clean; but `--json` emits a traceback instead of JSON, the `BL-002` class) · Status: **fixed by V1-2 ([#16](https://github.com/rabbilyasar/envshield/issues/16), branch, unmerged)**
+Component: `core/evaluator.py::evaluate_source`
+Source: checking V1-2's "an unreadable file is ERROR" acceptance criterion.
+
+- **Current behavior (v4.9.1):** `chmod 000 .env; envshield check --json` raises an uncaught `PermissionError` (a Rich traceback, no JSON). `evaluate_source` caught `FileNotFoundError`, `ValueError` and `EnvShieldException`, not `OSError`.
+- **Expected behavior:** ERROR (`source_unreadable`) for that source, in valid JSON, naming the problem (the OS's message) and never the file's content.
+- **Fix:** `evaluate_source` catches `OSError` and records `source_unreadable`. Test: `test_verdicts.py::test_an_unreadable_file_is_error_not_a_crash`.
+- **Not checked:** other commands that read the same file (`doctor`, `setup`, `schema sync`). Their handling isn't part of V1-2.
 
 ## Part 6 — AI-Agent-Friendly EnvShield (strategic direction)
 

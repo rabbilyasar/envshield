@@ -6,6 +6,7 @@ import yaml
 
 from ..core.exceptions import EnvShieldException
 from ._base import (
+    LITERAL_OPERATORS,
     BaseParser,
     Concrete,
     Forwarded,
@@ -17,13 +18,15 @@ from ._deployment import ensure_within_project, safe_yaml_error_message
 from ._dotenv import DotenvParser
 
 # Matches a value that is ENTIRELY one Compose variable-substitution
-# reference: '${VAR}', or '${VAR' + one of '-', ':-', ':?', '+' + text + '}'.
-# Each becomes a Forwarded state (v5 plan §4). A reference embedded inside
-# a larger string ('prefix-${VAR}-suffix') is intentionally left as literal
-# text: resolving a partial substitution would require modeling Compose's
-# full shell-style expansion grammar, which is out of scope here. The other
-# operators ('${VAR?err}', '${VAR:+alt}') don't match and stay literal.
-_INTERPOLATION_RE = re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)(?:(:?-|:\?|\+)(.*))?\}$")
+# reference: '${VAR}', or '${VAR' + an operator ('-', ':-', '?', ':?', '+',
+# ':+') + text + '}'. Each becomes a Forwarded state (v5 plan §4). A
+# reference embedded inside a larger string ('prefix-${VAR}-suffix') is
+# intentionally left as literal text: resolving a partial substitution
+# would require modeling Compose's full shell-style expansion grammar,
+# which is out of scope here.
+_INTERPOLATION_RE = re.compile(
+    r"^\$\{([A-Za-z_][A-Za-z0-9_]*)(?:(:?-|:?\?|:?\+)(.*))?\}$"
+)
 
 
 class DockerComposeParser(BaseParser):
@@ -77,7 +80,9 @@ class DockerComposeParser(BaseParser):
         container = self._resolve_container(services, file_path)
         service_def = services.get(container) or {}
         base_dir = os.path.dirname(os.path.abspath(file_path))
-        return ValueStates(self._extract_service_environment(service_def, base_dir))
+        missing: list[str] = []
+        variables = self._extract_service_environment(service_def, base_dir, missing)
+        return ValueStates(variables, missing_files=missing)
 
     def get_vars_for_layers(
         self, file_paths: list[str], get_values: bool = False
@@ -128,6 +133,7 @@ class DockerComposeParser(BaseParser):
             )
 
         merged: dict[str, ValueState] = {}
+        missing: list[str] = []
         resolved_container: str | None = self.container
 
         for file_path in file_paths:
@@ -143,9 +149,11 @@ class DockerComposeParser(BaseParser):
 
             service_def = services.get(resolved_container) or {}
             base_dir = os.path.dirname(os.path.abspath(file_path))
-            merged.update(self._extract_service_environment(service_def, base_dir))
+            merged.update(
+                self._extract_service_environment(service_def, base_dir, missing)
+            )
 
-        return ValueStates(merged)
+        return ValueStates(merged, missing_files=missing)
 
     def _load_yaml_document(self, file_path: str) -> dict:
         with open(file_path, "r") as f:
@@ -176,9 +184,13 @@ class DockerComposeParser(BaseParser):
         return container
 
     def _extract_service_environment(
-        self, service_def: dict, base_dir: str
+        self, service_def: dict, base_dir: str, missing: list[str]
     ) -> dict[str, ValueState]:
-        """The service's {var: ValueState} map."""
+        """
+        The service's {var: ValueState} map. Appends to `missing` each
+        required env_file that doesn't exist (Compose refuses to start);
+        one marked 'required: false' is skipped, as Compose skips it.
+        """
         variables: dict[str, ValueState] = {}
 
         env_files = service_def.get("env_file")
@@ -186,7 +198,9 @@ class DockerComposeParser(BaseParser):
             if isinstance(env_files, str):
                 env_files = [env_files]
             for env_file in env_files:
+                required = True
                 if isinstance(env_file, dict):
+                    required = env_file.get("required", True) is not False
                     env_file = env_file.get("path")
                 if not env_file:
                     continue
@@ -198,6 +212,8 @@ class DockerComposeParser(BaseParser):
                         variables.update(DotenvParser().get_states(env_file_path))
                     except OSError:
                         pass
+                elif required:
+                    missing.append(env_file)
 
         environment = service_def.get("environment")
         if isinstance(environment, dict):
@@ -229,7 +245,7 @@ class DockerComposeParser(BaseParser):
         e.g. 'AUTHENTIK_POSTGRESQL__PASSWORD: ${PG_PASS}' is a schema-
         relevant statement about PG_PASS, not about
         AUTHENTIK_POSTGRESQL__PASSWORD, which is purely a container-internal
-        rename. A ':?'/'+' reference stays under `key`, where v4.8.0 kept it
+        rename. A LITERAL_OPERATORS reference stays under `key`, where v4.8.0 kept it
         as literal text (legacy_text reproduces that text, so it must match
         `value` exactly, surrounding whitespace included).
         """
@@ -237,7 +253,7 @@ class DockerComposeParser(BaseParser):
         if not match:
             return key, Concrete(value)
         var_name, operator, text = match.groups()
-        if operator in (":?", "+"):
+        if operator in LITERAL_OPERATORS:
             if value != value.strip():
                 return key, Concrete(value)
             return key, Forwarded(var_name, operator, text)

@@ -7,6 +7,7 @@ import questionary
 import toml
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
@@ -31,6 +32,7 @@ from .core import (
     service_discovery,
     service_manager,
     setup_manager,
+    verdicts,
 )
 from .core.exceptions import (
     EnvShieldException,
@@ -144,52 +146,6 @@ def _print_service_header(targets: List[str], target: str) -> None:
     """Labels each service's output when a command is running against more than one."""
     if len(targets) > 1:
         console.print(f"\n[bold underline]── {target} ──[/bold underline]")
-
-
-def _print_union_completeness_summary(
-    service_name: str,
-    union_result: "schema_manager.UnionCompletenessResult",
-    source_errors: List[str],
-) -> None:
-    """
-    `check`'s Rich-output counterpart to each source's own individual diff
-    table above it -- explains *why* a target with one or more
-    individually-incomplete-looking source tables can still exit 0 (or
-    still fail, for a reason none of those tables show on their own, like
-    a cross-source requiredIf ambiguity or a source that failed to load).
-    """
-    console.print(
-        f"\n[bold]Registered-source completeness ({service_name}, completeness: union)[/bold]"
-    )
-    for error in source_errors:
-        console.print(f"  [bold red]✗[/bold red] Source error: {error}")
-    if union_result.is_clean and not source_errors:
-        console.print(
-            "  [bold green]✓ Satisfied by the union of registered sources.[/bold green]"
-        )
-        return
-    if union_result.missing:
-        console.print(
-            "  [red]Missing from every registered source:[/red] "
-            f"{', '.join(sorted(union_result.missing))}"
-        )
-    if union_result.blank:
-        console.print(
-            "  [red]Blank everywhere it's declared:[/red] "
-            f"{', '.join(sorted(union_result.blank))}"
-        )
-    if union_result.invalid:
-        details = "; ".join(
-            f"{k} ({v})" for k, v in sorted(union_result.invalid.items())
-        )
-        console.print(f"  [red]Invalid:[/red] {details}")
-    if union_result.unresolved:
-        console.print(
-            "  [yellow]Cannot confirm (a registered source has an unresolved "
-            f"external reference):[/yellow] {', '.join(sorted(union_result.unresolved))}"
-        )
-    for key, reason in sorted(union_result.ambiguous_requiredif.items()):
-        console.print(f"  [red]Ambiguous ({key}):[/red] {reason}")
 
 
 # --- Commands ---
@@ -523,6 +479,8 @@ def check(
 
     if json_output:
         payload = evaluator.legacy_check_payload(evaluations)
+        # v2: the invocation's verdict, the highest-precedence service verdict.
+        payload["verdict"] = verdicts.worst(e.verdict() for e in evaluations).verdict
         payload["reports"] = [evaluator.build_report(e) for e in evaluations]
         print(json.dumps(payload, indent=2))
 
@@ -530,16 +488,87 @@ def check(
         raise typer.Exit(code=1)
 
 
+_VERDICT_WORD = {
+    "valid": "VALID",
+    "invalid": "INVALID",
+    "unverified": "COULD NOT VERIFY",
+    "not_required": "VALID",
+    "error": "ERROR",
+}
+
+
+def _render_verdict_lines(lines: List[tuple], errors: List[str]) -> None:
+    """
+    One block of verdict lines (name, verdict, reason_code, detail) in v5's
+    order: Errors, Invalid, Could not verify, then valid and not-required.
+    Names and reasons only, never a value.
+    """
+    if errors:
+        console.print("[bold red]Errors[/bold red]")
+        for error in errors:
+            console.print(f"  [red]✗[/red] {escape(error)}")
+    width = max((len(name) for name, *_ in lines), default=0)
+
+    def line(mark: str, name: str, text: str) -> None:
+        console.print(f"  {mark} {escape(name.ljust(width))}   {escape(text)}")
+
+    invalid = [x for x in lines if x[1] == "invalid"]
+    unverified = [x for x in lines if x[1] == "unverified"]
+    if invalid:
+        console.print("[bold red]Invalid[/bold red]")
+        for name, _, reason, detail in invalid:
+            if detail == verdicts.HAS_DEFAULT:
+                detail += ", run 'envshield setup'"  # plan §7's hint, human only
+            line("[red]✗[/red]", name, f"{reason.replace('_', ' ')} ({detail})")
+    if unverified:
+        console.print("[bold yellow]Could not verify[/bold yellow]")
+        for name, _, reason, detail in unverified:
+            line("[yellow]?[/yellow]", name, f"{detail} ({reason})")
+    for name, verdict, *_ in lines:
+        if verdict == "valid":
+            line("[green]✓[/green]", name, "valid")
+        elif verdict == "not_required":
+            line("[dim]·[/dim]", name, "not required")
+
+
 def _render_evaluation(evaluation: "evaluator.ServiceEvaluation") -> None:
-    """'check's Rich output for one service, in evaluation order."""
-    schema = evaluation.view.fields if evaluation.view is not None else {}
-    for source in evaluation.sources:
-        schema_manager.print_source_header(source.path)
-        if evaluation.schema_error is not None:
-            # The contract itself didn't load: one error, nothing else to check.
-            console.print(f"[bold red]Error:[/bold red] {evaluation.schema_error}")
-            return
-        schema_manager.render_source(source, schema)
+    """
+    'check's human output for one service (v5 plan §10): each source's
+    verdict lines (in union mode, one block for the union), then a
+    one-line service verdict. Built from the same verdicts '--json'
+    reports, so the two can't disagree.
+    """
+    judged = evaluation.judged()
+    fields = evaluation.view.fields if evaluation.view is not None else {}
+    failures = evaluation.service_findings()
+    service_errors = [v.detail for v, src in failures if src is None]
+
+    if evaluation.is_union:
+        console.print(
+            f"\n[bold]Validating {escape(evaluation.service)} across its registered "
+            "sources (completeness: union)...[/bold]"
+        )
+        lines = [
+            (name, v.verdict, v.reason, v.detail)
+            for name, (v, _) in sorted(judged.items())
+            if name in fields or v.verdict != "not_required"
+        ]
+        errors = service_errors + [
+            f"{src.path}: {v.detail}" for v, src in failures if src
+        ]
+        _render_verdict_lines(lines, errors)
+    else:
+        for i, source in enumerate(evaluation.sources):
+            schema_manager.print_source_header(source.path)
+            lines = [
+                (name, per[i].verdict, per[i].reason, per[i].detail)
+                for name, (_, per) in sorted(judged.items())
+                if per[i] is not None and per[i].verdict != "error"
+            ]
+            errors = [v.detail for v, src in failures if src is source]
+            _render_verdict_lines(lines, errors)
+        if service_errors:
+            _render_verdict_lines([], service_errors)
     if evaluation.process_environment:
         overlaid = sorted({n for s in evaluation.sources for n in s.overlaid})
         console.print(
@@ -547,14 +576,36 @@ def _render_evaluation(evaluation: "evaluator.ServiceEvaluation") -> None:
             + (", ".join(overlaid) if overlaid else "no schema variables set")
             + "[/dim]"
         )
-    if evaluation.error is not None:
-        console.print(f"[bold red]Error:[/bold red] {evaluation.error}")
-        return
-    if evaluation.union is not None:
-        _print_union_completeness_summary(
-            evaluation.service, evaluation.union, evaluation.union_source_errors
-        )
     _render_code_references(evaluation)
+    _render_service_summary(evaluator.build_report(evaluation))
+
+
+def _render_service_summary(report: Dict[str, Any]) -> None:
+    """'INVALID: 1 invalid, 2 could not be verified, 1 valid.'"""
+    counts = report["summary"]["counts"]
+    verdict = report["summary"]["verdict"]
+    parts = []
+    if report["errors"]:
+        n = len(report["errors"])
+        parts.append(f"{n} error" + ("s" if n > 1 else ""))
+    if counts["invalid"]:
+        parts.append(f"{counts['invalid']} invalid")
+    if counts["unverified"]:
+        parts.append(f"{counts['unverified']} could not be verified")
+    if counts["valid"] or not parts:
+        parts.append(f"{counts['valid']} valid")
+    if verdict in ("valid", "not_required") and not counts["valid"]:
+        parts = ["0 required variables"]
+    color = {
+        "valid": "green",
+        "not_required": "green",
+        "invalid": "red",
+        "unverified": "yellow",
+        "error": "red",
+    }[verdict]
+    console.print(
+        f"\n[bold {color}]{_VERDICT_WORD[verdict]}:[/bold {color}] {', '.join(parts)}."
+    )
 
 
 def _render_code_references(evaluation: "evaluator.ServiceEvaluation") -> None:

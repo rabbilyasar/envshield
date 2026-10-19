@@ -19,9 +19,10 @@ from envshield.tests.check_golden_scenarios import SCENARIOS
 
 runner = CliRunner()
 GOLDEN_PATH = os.path.join(os.path.dirname(__file__), "fixtures", "check_golden.json")
-# 'reports' is the evaluator's addition (evaluator-decisions.md D-5);
-# every other key is the pre-evaluator contract.
-NEW_JSON_KEYS = ("reports",)
+# 'reports' is the evaluator's addition (evaluator-decisions.md D-5), and
+# 'verdict' v5's invocation verdict (V1-2); every other key is the
+# pre-evaluator contract.
+NEW_JSON_KEYS = ("reports", "verdict")
 
 
 def _materialize(files):

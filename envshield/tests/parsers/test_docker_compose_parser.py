@@ -941,9 +941,13 @@ class TestValueStates:
             "Y": Forwarded("B", "+", "alt"),
         }
 
-    def test_unsupported_operators_stay_concrete_literals(self, tmp_path):
+    def test_the_other_required_and_alternative_operators_are_forwarded(self, tmp_path):
+        """'?' and ':+' too (BL-195); like ':?'/'+', kept under their own key."""
         states = self._states(tmp_path, "      A: ${A?e}\n      B: ${B:+alt}\n")
-        assert states == {"A": Concrete("${A?e}"), "B": Concrete("${B:+alt}")}
+        assert states == {
+            "A": Forwarded("A", "?", "e"),
+            "B": Forwarded("B", ":+", "alt"),
+        }
 
     def test_get_vars_reports_legacy_text_and_hides_unseen_values(self, tmp_path):
         path = tmp_path / "docker-compose.yml"

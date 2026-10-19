@@ -601,6 +601,7 @@ def overlay_environment(
     return ValueStates(
         {**local_values, **{name: Concrete(environment[name]) for name in names}},
         local_values.unbound,
+        local_values.missing_files,
     )
 
 
