@@ -77,12 +77,14 @@ issue.
    ([#47](https://github.com/rabbilyasar/envshield/issues/47))
 2. **A shorter command list and the public story** — duplicate commands
    (`install-hook`, `uninstall`) keep working but are deprecated and hidden,
-   and `--help` groups commands by stage. The v5 decisions are recorded in
-   the repository, and the README, website and docs are rewritten around
-   the story above, with a recorded demo. **Released together as v4.9.0.**
+   and `--help` groups commands by stage, and the README, website and docs
+   are rewritten around the story above, with a recorded demo. **Released
+   together as v4.9.0.**
    ([#50](https://github.com/rabbilyasar/envshield/issues/50),
-   [#14](https://github.com/rabbilyasar/envshield/issues/14),
-   [#43](https://github.com/rabbilyasar/envshield/issues/43))
+   [#43](https://github.com/rabbilyasar/envshield/issues/43)) The v5
+   decisions were recorded in the repository afterwards, on 2026-10-19, in
+   [docs/architecture/v5-decisions.md](docs/architecture/v5-decisions.md)
+   ([#14](https://github.com/rabbilyasar/envshield/issues/14)).
 3. **Honest verdicts** — `check` reports one of five verdicts per variable
    and never calls a value valid unless it actually read and validated it.
    Values EnvShield can't see (a Kubernetes Secret, a Compose `${VAR}`)
@@ -139,6 +141,25 @@ issue.
     [#46](https://github.com/rabbilyasar/envshield/issues/46),
     [#28](https://github.com/rabbilyasar/envshield/issues/28),
     [#29](https://github.com/rabbilyasar/envshield/issues/29))
+
+**Plan phases.** The approved plan names seven implementation phases. The
+steps above build them in this order (amendment A3; ROADMAP is the
+authoritative order):
+
+| Order | Plan phase | Issues | Depends on |
+|---|---|---|---|
+| 1 | Phase 1: trustworthy verdicts | #15 (done), #16, #17 | V0-1 (#14) |
+| 2 | Phase 4: environment-aware contracts | #23, #24 | Phase 1 |
+| 3 | Phase 5: runtime verification | #25 | Phase 4 |
+| 4 | Phase 2: one project contract | #18, #19, #44 | V0-1 (#14) |
+| 5 | CLI consolidation (V0-2b, V6-2, V6-3) | #42, #45, #63 | Phase 1 |
+| 6 | Phase 3: onboarding with your vault | #20, #21, #22 (back in planning, A2) | Phase 2 (soft) |
+| 7 | Phase 6: migration | #26 | Phase 2 |
+| 8 | Phase 7: acceptance, documentation, release | #27, #46, #28, #29 | all of the above |
+
+Intermediate phases merge to `main` and aren't released alone; v5.0.0 ships
+after Phase 7. Decisions behind each phase:
+[docs/architecture/v5-decisions.md](docs/architecture/v5-decisions.md).
 
 **For AI coding agents:** v5 positions EnvShield as the deterministic
 configuration check in an agent's loop — hooks and `--json` output an agent

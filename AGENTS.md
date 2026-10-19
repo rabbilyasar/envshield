@@ -12,7 +12,11 @@ findings, limitations, and their reproduction evidence — see
 not*; ROADMAP.md says what's *done*, *in progress*, and *next*; BACKLOG.md
 is the operational record behind both.
 
-Last revised: 2026-09-29: added the "Shared system schema (operational
+Last revised: 2026-10-19: §1 and §2 now state the approved v5 product
+definition (amendment A1), and §19 the current phase, per V0-1 (#14); the
+v5 decisions are recorded in
+[docs/architecture/v5-decisions.md](docs/architecture/v5-decisions.md). No
+engineering principle changed. Previous revision: 2026-09-29: added the "Shared system schema (operational
 rules)" subsection under Target architecture and a current-phase update
 to §19; no principle changed. Previous revision: 2026-08-30 (third
 same-day revision). Same-day follow-up:
@@ -96,25 +100,61 @@ document's prose.
 
 ## 1. Product identity
 
-**EnvShield enforces configuration contracts across code, Git, and
-deployments.**
+**Every service and every deploy gets the configuration it needs, and you
+find out before something breaks.**
 
-The underlying product is still: **a configuration contract engine for
-modern software.**
+That is the v5 product definition (plan amendment A1; every v5 decision is
+in [docs/architecture/v5-decisions.md](docs/architecture/v5-decisions.md)).
+EnvShield does it from one schema file: `env.schema.toml` is the project's
+configuration contract, the single place that says what configuration
+exists, who needs it and where it is required. Underneath, EnvShield is
+still **a configuration contract engine**: it enforces that contract across
+code, Git, and deployments.
 
-> Does this application have exactly the configuration it expects, in every
-> environment and every place it runs — and does every change to that
-> requirement get caught before it breaks something?
+### Three stages, one schema
 
-EnvShield owns **configuration integrity**, not secret storage. Secret
-detection is a supporting capability that exists because misconfigured
-secrets are one visible symptom of a broken configuration contract — it is
-not, and must not become, the product's center of gravity.
+| Stage | What EnvShield does |
+|---|---|
+| **Development** | `check` compares local configuration with the contract. After a pull that adds a required variable, the next `check` or hook names it. |
+| **Deployment** | The contract states what each environment requires. A manifest check (`check --env E`) says what a manifest supplies; `check --runtime --env E`, run as the last step before the application starts, fails a deploy that is missing a required variable. |
+| **Onboarding** | `setup` builds a developer's local configuration and works *with* the team's existing secret tool rather than replacing it. Values the developer can't access are reported, never faked. `setup` is local-only (Q18), and provider references are `setup` inputs, never `check` sources. |
 
-EnvShield is **not** a secret vault, password manager, or replacement for AWS
-Secrets Manager, Vault, Infisical, or Doppler. It is also not a generic
-`.env` editor, and it is not trying to out-scan GitHub Secret Scanning,
-Gitleaks, or GitGuardian at their own game. See §2 for why, concretely.
+Development and deployment lead the story; onboarding works with the vault
+rather than being the headline (A1, evidence in BACKLOG.md's `BL-174`). Each
+stage can be adopted alone. Everything else (`init`/`import`, `schema diff`,
+`explain`, `generate`, discovery, `scan`) supports these three.
+
+### Principles
+
+- **Never report VALID for something unchecked.** VALID requires a concrete
+  value EnvShield actually read and validated (v5-decisions.md, plan §10).
+- **One file to maintain.** If a second hand-kept copy of variable
+  definitions is needed, the design has failed.
+- **Keep existing tools.** `.env` files, config modules and manifests stay
+  where they are.
+- **Secret values never leave the place they belong.** EnvShield never
+  stores, logs, prints or sends a secret value (§4). How `setup` obtains
+  values from a provider is being redesigned (A2) so it validates or
+  references what the provider supplies instead of copying values to disk.
+
+### What EnvShield does not do
+
+- It is not a vault or secret manager. It does not store, sync, rotate or
+  share secret values.
+- It does not replace `.env` files or config modules.
+- It does not inject at runtime, wrap processes or launch applications.
+  There is no `envshield run -- app`.
+- It does not parse launch scripts, launchd plists, systemd units or other
+  launcher configuration.
+- It is not a secret scanner. `scan` stays as an opt-in supporting check;
+  secret detection exists because a misconfigured secret is one visible
+  symptom of a broken contract, and it must not become the product's
+  center of gravity.
+- It cannot prevent a deploy it is not part of.
+
+It is also not trying to out-scan GitHub Secret Scanning, Gitleaks, or
+GitGuardian, or to replace AWS Secrets Manager, Vault, Infisical, or
+Doppler. See §2 for why, concretely.
 
 ---
 
@@ -130,6 +170,13 @@ claim of differentiation as something to defend with evidence, not assert.
 | **GitGuardian / Gitleaks** | Dedicated secret-scanning depth and history-scanning. | Same reasoning as above — a deeper bench than EnvShield can build, in a category EnvShield doesn't want to own. |
 | **Infisical / Doppler / Vault** | Secret storage, distribution, rotation, access control. | Answers "where does the value live and how does it reach runtime," not "does the contract hold." Genuinely complementary — EnvShield should validate that a manifest correctly *references* what these tools provide, and should never retrieve or store the values themselves. |
 | **Typed config libraries** (pydantic-settings, zod, t3-env, envalid) | Typed loading and validation *inside one language, one app*. | Already solved well, widely adopted, and not worth out-building feature-for-feature. EnvShield's codegen is valuable specifically as an *output* of a schema that also drives cross-language, cross-service, cross-environment validation — not as a standalone typed-loader competitor. |
+
+**v5 positioning (A1).** Pulling secrets from a vault into a local `.env`
+is already shipped by 1Password Developer Environments and by Varlock's
+1Password plugin (`BL-174`), so onboarding is not EnvShield's headline.
+What those tools don't do is the development and deployment half: tell you,
+before it breaks, that a service or a deploy is missing configuration the
+contract requires. That is the story v5 leads with.
 
 ### Where EnvShield actually differentiates
 
@@ -168,6 +215,13 @@ occupy the same ground. Close the gap there before investing anywhere else.
 - Any feature justified only by "a competitor has it." See §12.
 
 ### Future direction: external secret-provider references (exploratory, demand-gated)
+
+**Status (2026-10-14):** this moved into v5 as provider support for `setup`
+(ROADMAP.md's v5 step 8, [#22](https://github.com/rabbilyasar/envshield/issues/22)),
+and amendment A2 sent its design back to planning: it should validate or
+reference what the provider supplies against the schema, not copy secret
+values into a plaintext `.env`. Provider references are `setup` inputs only,
+never `check` sources. The boundary below is unchanged.
 
 EnvShield may eventually let a schema field describe *where* a secret is
 expected to come from — a provider reference (1Password, HashiCorp Vault,
@@ -880,15 +934,25 @@ backlog (revision-aware service-directory resolution for the explicit
 two-revision form, discovered-file size cap, `DEFAULT_EXCLUDED_DIRS`-style
 pruning) — none are blockers, and none require another Phase 2C milestone.
 
-**Current phase (updated 2026-10-15): `v4.9.1` released; v5 V1 next.**
+**Current phase (updated 2026-10-19): v5 Phase 1, trustworthy verdicts.**
+V1-1 ([#15](https://github.com/rabbilyasar/envshield/issues/15)) is merged
+(`b30e793`, PR #65): parsers report typed value states, and every output is
+unchanged except two recorded fixes (`BL-193`, `BL-194`). V0-1
+([#14](https://github.com/rabbilyasar/envshield/issues/14)) records the v5
+decisions in
+[docs/architecture/v5-decisions.md](docs/architecture/v5-decisions.md).
+Next: V1-2 ([#16](https://github.com/rabbilyasar/envshield/issues/16)), then
+V1-3 ([#17](https://github.com/rabbilyasar/envshield/issues/17)). The full
+order is ROADMAP.md's "v5 — in progress". Nothing since `v4.9.1` is released.
+
+**Previous phase (updated 2026-10-15): `v4.9.1` released; v5 V1 next.**
 `v4.9.1` is the current released version: release commit `da53321`
 (`v4.9.1^{commit}`; the annotated tag object is `9814727`), published by
 `publish.yml` run `38779892934` with every job green. PyPI lists `4.9.1`
 (wheel and sdist, provenance HTTP 200) requiring `typer<1.0,>=0.16`, and a
 clean-venv `pip install envshield==4.9.1` succeeds with no extras warning:
 verified, not assumed. It ships only `BL-189` (#58), released with the user's
-explicit, v4.9.1-only overrides for `BL-095` and `BL-166`'s gate half. Next:
-V1 (#15, #16, #17). V0-1 (#14) still needs the original v5 plan text.
+explicit, v4.9.1-only overrides for `BL-095` and `BL-166`'s gate half.
 
 **Previous release (v4.9.0):**
 `v4.9.0` is the current released version: release commit `8223619`
