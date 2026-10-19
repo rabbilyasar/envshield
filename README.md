@@ -558,7 +558,7 @@ envshield hook remove --yes    # skip the confirmation prompt
 
 EnvShield is built around the patterns real projects actually use. A few narrower cases aren't handled yet. None of them let a secret leak:
 
-- **Docker Compose:** `${VAR}`, `${VAR:-default}`, and the no-colon `${VAR-default}` form are all supported. The `${VAR:?}`/`${VAR:+}` forms and embedded/multiple interpolation references in one value aren't evaluated yet.
+- **Docker Compose:** a value that is one whole `${VAR}` reference, with or without an operator (`-`, `:-`, `?`, `:?`, `+`, `:+`), is read as coming from the deploy host's `VAR`, which a static check can't see. Embedded or multiple references in one value (`http://${HOST}:8000`) are still read as literal text, so `check` can judge that text valid or invalid ([#68](https://github.com/rabbilyasar/envshield/issues/68)).
 - **Kubernetes:** `env[].valueFrom.secretKeyRef`/`configMapKeyRef` are matched by the container's environment-variable name (`env[].name`) — name your schema variable after the env var, not the key — and, when the referenced Secret/ConfigMap is defined in the same manifest, the referenced key is validated to actually exist there. `envFrom.prefix` is applied. `initContainers` are selectable via `--container` but never auto-selected by default.
 - **Source discovery:** Python is AST-based; JavaScript/TypeScript is pattern-based. No other language is discovered yet.
 - **.env:** multiline quoted values aren't supported.

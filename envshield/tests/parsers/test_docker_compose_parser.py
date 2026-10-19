@@ -468,14 +468,14 @@ class TestNoColonDefaultInterpolation:
 
         assert variables["DB_PORT"] == "3307"
 
-    def test_required_and_alternative_operators_remain_out_of_scope_and_literal(
+    def test_required_and_alternative_operators_are_not_read_as_literals(
         self, tmp_path
     ):
         """
         '${VAR:?err}'/'${VAR?err}' (required-or-error) and '${VAR:+alt}'/
-        '${VAR+alt}' (alternative-value) are different Compose operators,
-        deliberately unsupported -- the widened regex must not accidentally
-        start matching them.
+        '${VAR+alt}' (alternative-value) are different Compose operators:
+        the host decides the value, so it's never visible, and never the
+        expression's own text (BL-195).
         """
         f = tmp_path / "docker-compose.yml"
         f.write_text(
@@ -490,10 +490,7 @@ class TestNoColonDefaultInterpolation:
 
         variables = DockerComposeParser().get_vars(str(f), get_values=True)
 
-        assert variables["A"] == "${A:?missing}"
-        assert variables["B"] == "${B?missing}"
-        assert variables["C"] == "${C:+alt}"
-        assert variables["D"] == "${D+alt}"
+        assert variables == {"A": "", "B": "", "C": "", "D": ""}
 
 
 class TestInterpolationComparesAgainstHostVariableName:
@@ -931,18 +928,14 @@ class TestValueStates:
         states = self._states(tmp_path, f"      A: '{expression}'\n")
         assert states == {"A": Forwarded("A", operator, text)}
 
-    def test_a_required_or_alternative_reference_stays_under_its_own_key(
-        self, tmp_path
-    ):
-        """v4.8.0 kept ':?'/'+' as literal text under the container key."""
-        states = self._states(tmp_path, "      X: ${A:?e}\n      Y: ${B+alt}\n")
-        assert states == {
-            "X": Forwarded("A", ":?", "e"),
-            "Y": Forwarded("B", "+", "alt"),
-        }
+    @pytest.mark.parametrize("operator", ["-", ":-", "?", ":?", "+", ":+"])
+    def test_every_operator_is_keyed_by_the_host_variable(self, tmp_path, operator):
+        """BL-195: like '${A}', every operator is keyed by the variable it names."""
+        states = self._states(tmp_path, f"      X: ${{A{operator}t}}\n")
+        assert states == {"A": Forwarded("A", operator, "t")}
 
     def test_the_other_required_and_alternative_operators_are_forwarded(self, tmp_path):
-        """'?' and ':+' too (BL-195); like ':?'/'+', kept under their own key."""
+        """'?' and ':+' too (BL-195)."""
         states = self._states(tmp_path, "      A: ${A?e}\n      B: ${B:+alt}\n")
         assert states == {
             "A": Forwarded("A", "?", "e"),
@@ -957,7 +950,7 @@ class TestValueStates:
         )
         assert DockerComposeParser().get_vars(str(path), get_values=True) == {
             "A": "1",
-            "B": "${B:?e}",
+            "B": "",  # not visible, like D (BL-195)
             "C": "3",
             "D": "",
         }

@@ -391,6 +391,11 @@ COULD NOT VERIFY findings:
 - A service with nothing required is VALID, not `not_required` (BL-197).
 - `doctor`, `scan`, `undeclared`, `schema diff` and the hooks are
   unchanged; the hooks don't run `check`.
+- Every Compose operator (`-`, `:-`, `?`, `:?`, `+`, `:+`) is keyed by
+  the host variable it names, like `${VAR}`, and `?`/`:?`/`+`/`:+` are no
+  longer read as literal text in the v1 fields (BL-195). This changes v1
+  `results`, `doctor`'s manifest check and `import` for those operators;
+  no exit code on the differential moves.
 
 **Effect.** On the 22 golden scenarios and a 30-scenario differential
 against `main`, no exit code changed: each one that already failed had an

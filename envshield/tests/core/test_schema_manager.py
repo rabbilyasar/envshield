@@ -550,10 +550,10 @@ def test_diff_against_schema_reports_clean_result():
     assert diff.summary() == ""
 
 
-def test_diff_against_schema_validates_required_and_alternative_text_as_v4_8_0():
+def test_diff_against_schema_never_validates_a_required_or_alternative_expression():
     """
-    V1-1 reproduces v4.8.0: a Compose ':?'/'+' expression is judged as its
-    own literal text (V1-2 changes how it's judged), not as unseen.
+    BL-195: a Compose ':?'/'+' value comes from the deploy host, so it's
+    not visible -- not judged as its own literal text (v4.8.0 did that).
     """
     schema = {"D": {"type": "port"}, "E": {"type": "url"}}
 
@@ -561,7 +561,8 @@ def test_diff_against_schema_validates_required_and_alternative_text_as_v4_8_0()
         schema, {"D": Forwarded("D", ":?", "need"), "E": Forwarded("E", "+", "a")}
     )
 
-    assert set(diff.invalid) == {"D", "E"}
+    assert diff.invalid == {}
+    assert not diff.missing
 
 
 def test_diff_against_schema_does_not_flag_an_unresolved_value_as_invalid():

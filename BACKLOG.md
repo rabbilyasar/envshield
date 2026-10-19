@@ -1790,13 +1790,14 @@ Source: found while verifying the SHAs R0-3 was asked to correct (`BL-023`, `BL-
 
 ### BL-193 — `import` from a manifest wrote the placeholder text as a `defaultValue`
 
-Type: `BUG` · Evidence: `CONFIRMED` (live, v4.9.1, 2026-10-19) · Priority: **P2** (an `import` result is a draft the user is told to review; no value leaks, but release-philosophy question 4, "corrupt generated schemas", applies) · Status: **placeholder half fixed by [#15](https://github.com/rabbilyasar/envshield/issues/15) (merged `b30e793`); expression half open**
+Type: `BUG` · Evidence: `CONFIRMED` (live, v4.9.1, 2026-10-19) · Priority: **P2** (an `import` result is a draft the user is told to review; no value leaks, but release-philosophy question 4, "corrupt generated schemas", applies) · Status: **placeholder half fixed by [#15](https://github.com/rabbilyasar/envshield/issues/15) (merged `b30e793`); expression half fixed by V1-3 ([#17](https://github.com/rabbilyasar/envshield/issues/17), branch, unmerged); the `:-` fallback default is kept**
 Component: `core/importer.py::generate_schema_from_file` (via `get_vars(get_values=True)` on a manifest parser)
 Source: found while tracing `UNRESOLVED_VALUE` consumers for V1-1.
 
 - **Current behavior (v4.9.1):** `envshield import docker-compose.yml` with `DB_URL: ${DB_URL}` and a bare `BARE:` writes `defaultValue = "<value not visible in this file>"` for both. A Kubernetes `configMapKeyRef`, `fieldRef`, or `secretKeyRef` to a non-secret-named key does the same. `REQ: ${REQ:?must set}` writes `defaultValue = "${REQ:?must set}"`. `setup` would then copy that text into `.env`.
 - **Expected behavior:** a value EnvShield can't see gives no default. An interpolation expression is not a value.
 - **Fix so far:** with the sentinel removed, a manifest parser's `get_vars(get_values=True)` returns `""` for an unseen value, so `import` writes no default (`test_importer.py::test_import_from_a_manifest_never_defaults_a_value_it_cannot_see`). A `${VAR:?err}`/`${VAR+alt}`/`${VAR?err}`/`${VAR:+alt}` expression still becomes a default, and a `${VAR:-x}` fallback still becomes default `x` (arguably right). Fixing those changes `import` output further, outside V1-1's scope.
+- **V1-3 (#17, 2026-10-19):** with `BL-195`'s keying, a `?`/`:?`/`+`/`:+` value is not visible, so `get_vars(get_values=True)` returns `""` and `import` writes no default; the entry is named after the host variable, like `${VAR}`. Verified on the differential: `defaultValue = "${D:?need it}"`, `"${E+alt}"`, `"${G?e}"` and `"${H:?e}"` are gone. Test: `test_docker_compose_parser.py::TestNoColonDefaultInterpolation::test_required_and_alternative_operators_are_not_read_as_literals`. A `${VAR:-x}`/`${VAR-x}` fallback still becomes default `x`, deliberately.
 - **Relationships:** `BL-163`, `BL-195`. V2-3 ([#44](https://github.com/rabbilyasar/envshield/issues/44), `init` seeds the contract from manifests) needs the same rule; it should read `get_states` and default only from `Concrete`.
 
 ### BL-194 — A Kubernetes env entry with no `value` was treated as an unseen value; Kubernetes delivers `""`
@@ -1811,7 +1812,7 @@ Source: found while mapping every Kubernetes shape to a V1-1 state; not in the p
 
 ### BL-195 — Compose `${VAR?err}` and `${VAR:+alt}` are still read as literal values
 
-Type: `DEPLOYMENT` / `REPORT HONESTY` · Evidence: `CONFIRMED` (code and test, 2026-10-19) · Priority: **P2** (same class as `BL-169`) · Status: **operators fixed by V1-2 (#16, merged `c3f3bcf`); keying open (V1-3)**
+Type: `DEPLOYMENT` / `REPORT HONESTY` · Evidence: `CONFIRMED` (code and test, 2026-10-19) · Priority: **P2** (same class as `BL-169`) · Status: **operators fixed by V1-2 (#16, merged `c3f3bcf`); keying fixed by V1-3 ([#17](https://github.com/rabbilyasar/envshield/issues/17), branch, unmerged)**
 Component: `parsers/_docker_compose.py` (`_INTERPOLATION_RE`)
 Source: V1-1 implementation.
 
@@ -1819,6 +1820,7 @@ Source: V1-1 implementation.
 - **Expected behavior:** both are `Forwarded` like their siblings. Under V1-2 an unrecognized expression must never reach VALID.
 - **Relationships:** `BL-169`, `BL-193`, V1-2 (#16). Also for V1-2: a `:?`/`+` state is keyed under the container key (where v4.8.0 kept its literal), while `${VAR}`/`-`/`:-` are keyed under the host variable. V1-2 should key all five by the host variable when it judges them. `fieldRef`/`resourceFieldRef` (not in the plan's table) map to `External`, which V1-2 will report as COULD NOT VERIFY.
 - **V1-2 (2026-10-19):** `?` and `:+` are now `Forwarded` too (`LITERAL_OPERATORS` in `parsers/_base.py`), so all four judge COULD NOT VERIFY (`host_forward`) and never VALID; their legacy text is unchanged, so v1 output and exit codes don't move. Tests: `test_docker_compose_parser.py::TestValueStates::test_the_other_required_and_alternative_operators_are_forwarded`, `test_verdicts.py::test_compose_interpolation`. **Still open:** these four stay keyed under the container key. Re-keying them by the host variable changes the v1 `results`, so it belongs with V1-3 (#17), when the gate moves to verdicts.
+- **V1-3 (#17, 2026-10-19):** all six operators are keyed by the host variable they name, like `${VAR}` (`_resolve_interpolation`), and `?`/`:?`/`+`/`:+` are not visible in the v1 fields either: `legacy_text` returns `None` for them, and `LITERAL_OPERATORS` is gone. So `X: ${H:?e}` for a `url` `X` no longer reports X `invalid` ("must be a valid URL", judged on the expression text); it says `H` is forwarded from the host, and `X` is missing from the manifest, exactly as `X: ${H}` always has. On the differential, only the two Compose scenarios with these operators change (`results`, `doctor`'s manifest check, `import`); every exit code is the same. Tests: `test_docker_compose_parser.py::TestValueStates::test_every_operator_is_keyed_by_the_host_variable`, `test_schema_manager.py::test_diff_against_schema_never_validates_a_required_or_alternative_expression`.
 
 ### BL-196 — An unreadable source file crashed `check` with a traceback
 
@@ -1891,6 +1893,18 @@ Source: V1-3 implementation; `uv run pytest` modified the file.
 - **Current behavior:** `uv.lock` records `envshield` version `4.0.1` and an unpinned dev `ruff`, while `pyproject.toml` is `4.9.1` with `ruff>=0.16,<0.17`. Every `uv run` re-locks it, leaving an unrelated diff in the working tree.
 - **Expected behavior:** a lock that matches `pyproject.toml`, kept current by the release flow (or the file is removed if the project doesn't use it).
 - **Decision:** open. Reverted on V1-3's branch rather than committed there, since it's outside #17's scope.
+
+### BL-199 — A Compose value with an embedded `${VAR}` is judged on its text, and can be VALID
+
+Type: `DEPLOYMENT` / `REPORT HONESTY` · Evidence: `CONFIRMED` (live, V1-3 branch, 2026-10-19) · Priority: **P2** (manifest-only shape; same class as `BL-169`; it does break the plan §10 VALID invariant) · Status: **open — proposed issue [#68](https://github.com/rabbilyasar/envshield/issues/68)**
+Component: `parsers/_docker_compose.py::_resolve_interpolation`
+Source: V1-3 implementation, while rewriting README's Compose limitation.
+
+- **Current behavior:** only a value that is one whole `${VAR}` reference becomes `Forwarded`. `URL: "http://${HOST}:8000"` for a `url` `URL` is `Concrete`, and `check` prints `✓ URL valid`; `PORT: "${P1}${P2}"` for a `port` prints `✗ PORT invalid value`. The host decides both.
+- **Expected behavior:** a value containing a reference is COULD NOT VERIFY (`host_forward`), not judged on its text.
+- **Impact:** a false VALID (and a false INVALID) on a manifest check; with V1-3 the VALID one passes the gate.
+- **Relationships:** `BL-169`, `BL-195`; README "Known limitations" (Docker Compose) documents it.
+- **Decision:** open; not in #17's scope. Proposed as [#68](https://github.com/rabbilyasar/envshield/issues/68).
 ---
 
 ## Part 7 — Performance / Scalability (research, not yet benchmarked)
