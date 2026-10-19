@@ -1,6 +1,7 @@
 # envshield/tests/test_cli.py
 import json
 import os
+import re
 
 import pytest
 import toml
@@ -2748,7 +2749,9 @@ class TestGate:
             )
         assert as_json.exit_code == human.exit_code
         payload = json.loads(as_json.stdout) if as_json.exit_code != 2 else None
-        return as_json.exit_code, payload, human.stdout + (human.stderr or "")
+        # CI forces color, and Rich styles option names: compare plain text.
+        output = re.sub(r"\x1b\[[0-9;]*m", "", human.stdout + (human.stderr or ""))
+        return as_json.exit_code, payload, output
 
     def test_scenario_5_an_external_secret(self, tmp_path):
         k8s = self.POD
