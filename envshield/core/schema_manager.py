@@ -1,7 +1,7 @@
 # envshield/core/schema_manager.py
 import datetime
 import os
-from typing import Any, Collection, Dict, List, NamedTuple, Optional, Tuple
+from typing import Any, Dict, List, Mapping, NamedTuple, Optional, Tuple, Union
 
 from rich.console import Console
 from rich.table import Table
@@ -12,9 +12,16 @@ from envshield.core.exceptions import (
     EnvShieldException,
     SharedSchemaWriteRefusedError,
 )
-from envshield.parsers._base import BaseParser
+from envshield.parsers._base import (
+    Concrete,
+    ValueState,
+    ValueStates,
+    as_states,
+    legacy_text,
+    not_inspected_names,
+)
 from envshield.parsers._deployment import looks_like_unrendered_helm_template
-from envshield.parsers.factory import get_manifest_parser_and_vars, get_parser
+from envshield.parsers.factory import get_manifest_parser_and_states, get_parser
 
 console = Console()
 
@@ -205,13 +212,13 @@ def trigger_reason(trigger: str) -> str:
 
 def diff_against_schema(
     schema: Dict[str, Any],
-    local_values: Dict[str, str],
-    has_unresolved_source: bool = False,
-    not_inspected: Collection[str] = (),
+    local_values: Mapping[str, Union[str, ValueState]],
 ) -> SchemaDiff:
     """
     Compares `local_values` (as read from a .env file, a deployment
     manifest, or anything else a parser can produce) against `schema`.
+    `local_values` maps each key to its ValueState; a plain string is a
+    Concrete value. A key it doesn't contain is absent.
 
     A variable must be present and non-blank if it has a defaultValue, or
     (when it doesn't) its 'requiredIf' condition currently holds against
@@ -225,74 +232,64 @@ def diff_against_schema(
     `requiredIf` that doesn't hold) is validated too, as "": a typed field,
     or a `pattern` that doesn't match "", is invalid; a plain string is fine.
 
-    `has_unresolved_source` (default False, so every caller that has no
-    such concept -- a dotenv file, a Python module, a Compose file -- is
-    completely unaffected): the parser that produced `local_values`
-    reported an unresolvable external reference (currently: a Kubernetes
-    envFrom.configMapRef/secretRef whose ConfigMap/Secret isn't in the
-    supplied manifest, see BaseParser.has_unresolved_source) that could
-    supply variable names this parser had no way to enumerate. A required
-    variable not found in `local_values` is then reported as `unresolved`
-    rather than `missing` -- EnvShield genuinely doesn't know whether it's
-    supplied, and must not claim either way.
+    States are judged exactly as v4.8.0 judged its strings (legacy_text):
+    a value that isn't visible (an External, KeyPresent or bare Forwarded
+    state) is present and never validated -- validating a placeholder
+    would misreport a legitimately-unknown value as an invalid one; a
+    Compose fallback is validated like a value.
 
-    `not_inspected`: names whose value EnvShield didn't see beyond the
-    UNRESOLVED_VALUE placeholder, which is recognized here anyway (a Compose
-    fallback -- see BaseParser.fallback_keys). A `requiredIf` whose trigger
-    is one of these can't be decided, so a dependent variable that is absent
-    or blank is `unresolved`, naming the trigger, rather than silently not
-    required (R0-6). An empty trigger value is concrete and compares as usual.
+    `ValueStates.unbound` (a Kubernetes envFrom to a ConfigMap/Secret not
+    in the manifest) could supply names this parser can't enumerate: a
+    required variable not found is then `unresolved` rather than `missing`
+    -- EnvShield genuinely doesn't know whether it's supplied, and must not
+    claim either way.
+
+    A `requiredIf` whose trigger's value isn't seen (not_inspected_names:
+    including a Compose fallback) can't be decided, so a dependent variable
+    that is absent or blank is `unresolved`, naming the trigger, rather
+    than silently not required (R0-6). An empty trigger value is concrete
+    and compares as usual.
     """
-    local_vars = set(local_values.keys())
+    states = as_states(local_values)
+    text = {key: legacy_text(state) for key, state in states.items()}
+    local_vars = set(states)
     schema_vars_all = set(schema.keys())
 
     schema_vars_required = {
         key
         for key, details in schema.items()
-        if schema_types.should_be_present(details, local_values)
+        if schema_types.should_be_present(details, text)
     }
 
-    opaque = set(not_inspected) | {
-        key
-        for key, value in local_values.items()
-        if value == BaseParser.UNRESOLVED_VALUE
-    }
+    opaque = not_inspected_names(states)
     unresolved_triggers: Dict[str, str] = {}
     for key, details in schema.items():
         if schema_types.presence_rule(details) != "conditional":
             continue
         condition = details.get("requiredIf")
         trigger = condition.get("var") if isinstance(condition, dict) else None
-        if trigger in opaque and not local_values.get(key):
+        if trigger in opaque and text.get(key, "") == "":
             unresolved_triggers[key] = trigger
 
     missing = set()
     blank = set()
     unresolved = set(unresolved_triggers)
     for key in schema_vars_required - unresolved:
-        if key not in local_values:
-            if has_unresolved_source:
+        if key not in states:
+            if states.unbound:
                 unresolved.add(key)
             else:
                 missing.add(key)
-        elif not local_values[key]:
+        elif text[key] == "":
             blank.add(key)
 
     invalid: Dict[str, str] = {}
-    for key, value in local_values.items():
-        # A manifest parser reports a value it can't statically know (an
-        # env_file reference, a bare shell pass-through, a Kubernetes
-        # secretRef, an unresolvable interpolation) as BaseParser's shared
-        # UNRESOLVED_VALUE placeholder rather than as missing -- validating
-        # that placeholder string against a declared type/enum/pattern would
-        # otherwise always fail, misreporting a legitimately-unknown value
-        # as an invalid one.
-        #
+    for key, value in text.items():
         # An empty value is judged the same way: a required one is already
         # `blank` (above) and isn't also `invalid`; any other one (optional,
         # or a `requiredIf` that doesn't currently hold) is validated as ""
         # because the application receives "", so a typed field fails.
-        if key in schema and key not in blank and value != BaseParser.UNRESOLVED_VALUE:
+        if key in schema and key not in blank and value is not None:
             error = schema_types.validate_value(value, schema[key])
             if error:
                 invalid[key] = error
@@ -335,8 +332,8 @@ class UnionSource(NamedTuple):
     """
 
     label: str
-    local_values: Dict[str, str]
-    has_unresolved_source: bool = False
+    # Each key's ValueState; a plain string is a Concrete value.
+    local_values: Mapping[str, Union[str, ValueState]]
 
 
 class UnionCompletenessResult:
@@ -408,7 +405,7 @@ def _union_key_status(
     """
     Classifies one schema key's presence across all `sources`, mirroring
     `diff_against_schema`'s own single-source presence/validity logic
-    (including its `BaseParser.UNRESOLVED_VALUE` carve-out) generalized to
+    (including its carve-out for a value that isn't visible) generalized to
     N sources. Deliberately never retains *which* value or source
     satisfied the key -- completeness: union unions presence, not values
     (see this module's own docstring-level framing of that boundary).
@@ -422,8 +419,8 @@ def _union_key_status(
     for source in sources:
         if key not in source.local_values:
             continue
-        value = source.local_values[key]
-        if value == BaseParser.UNRESOLVED_VALUE:
+        value = legacy_text(source.local_values[key])
+        if value is None:
             return "ok"
         if not value:
             saw_blank = True
@@ -473,25 +470,40 @@ def _resolve_union_requiredif_triggers(
     resolved: Dict[str, str] = {}
     ambiguous: Dict[str, str] = {}
     for trigger in trigger_vars:
-        seen: Dict[str, List[str]] = {}
+        seen: Dict[Optional[str], List[str]] = {}
         for source in sources:
             if trigger in source.local_values:
-                seen.setdefault(source.local_values[trigger], []).append(source.label)
+                value = legacy_text(source.local_values[trigger])
+                seen.setdefault(value, []).append(source.label)
         if not seen:
             continue
         if len(seen) == 1:
             (value,) = seen.keys()
-            resolved[trigger] = value
+            if value is not None:
+                resolved[trigger] = value
         else:
             parts = "; ".join(
-                f"{value!r} in {', '.join(labels)}"
-                for value, labels in sorted(seen.items())
+                f"{_shown(value)} in {', '.join(labels)}"
+                for value, labels in sorted(seen.items(), key=_shown_order)
             )
             ambiguous[trigger] = (
                 f"requiredIf trigger '{trigger}' has conflicting values across "
                 f"registered sources: {parts}"
             )
     return resolved, ambiguous
+
+
+# How a requiredIf conflict message shows a trigger value that isn't
+# visible -- display only, never compared. The text v4.8.0 printed there.
+_NOT_VISIBLE = "<value not visible in this file>"
+
+
+def _shown_order(item: Tuple[Optional[str], List[str]]) -> str:
+    return _NOT_VISIBLE if item[0] is None else item[0]
+
+
+def _shown(value: Optional[str]) -> str:
+    return repr(_NOT_VISIBLE if value is None else value)
 
 
 def evaluate_union_completeness(
@@ -516,10 +528,11 @@ def evaluate_union_completeness(
     successful union" requirement): this function has no way to know a
     source failed to load and must not be asked to guess.
     """
+    sources = [s._replace(local_values=as_states(s.local_values)) for s in sources]
     union_trigger_values, ambiguous_triggers = _resolve_union_requiredif_triggers(
         schema, sources
     )
-    any_unresolved_source = any(s.has_unresolved_source for s in sources)
+    any_unresolved_source = any(s.local_values.unbound for s in sources)
 
     missing: set = set()
     blank: set = set()
@@ -575,16 +588,20 @@ def environment_overlay_names(
 
 
 def overlay_environment(
-    local_values: Dict[str, str], environment: Dict[str, str], schema: Dict[str, Any]
-) -> Dict[str, str]:
+    local_values: ValueStates, environment: Dict[str, str], schema: Dict[str, Any]
+) -> ValueStates:
     """
-    `local_values` with the process environment laid over it for the
-    names environment_overlay_names picks -- the environment wins, even
-    when it's empty, as a dotenv loader never overrides an already-set
-    variable. Returns a new dict; the caller's values are untouched.
+    `local_values` with the process environment laid over it, as Concrete
+    values, for the names environment_overlay_names picks -- the
+    environment wins, even when it's empty, as a dotenv loader never
+    overrides an already-set variable. Returns new ValueStates; the
+    caller's are untouched.
     """
     names = environment_overlay_names(environment, schema)
-    return {**local_values, **{name: environment[name] for name in names}}
+    return ValueStates(
+        {**local_values, **{name: Concrete(environment[name]) for name in names}},
+        local_values.unbound,
+    )
 
 
 def load_union_sources(
@@ -596,7 +613,7 @@ def load_union_sources(
     Loads every one of a union-mode service's registered sources -- its
     local_file, plus every registered deployment manifest -- for
     `evaluate_union_completeness`. Reuses the exact same loading mechanism
-    (`parsers.factory.get_parser` + `BaseParser.get_vars`) `check_schema`/
+    (`parsers.factory.get_parser` + `BaseParser.get_states`) `check_schema`/
     `check_result` already use; not a second discovery/parsing path.
 
     Returns (successfully loaded sources, human-readable error messages for
@@ -617,16 +634,14 @@ def load_union_sources(
         errors.append(f"{local_file}: {_no_parser_found_message(local_file)}")
     else:
         try:
-            local_values = parser.get_vars(local_file, get_values=True)
+            local_values = parser.get_states(local_file)
             if environment is not None:
                 local_values = overlay_environment(
                     local_values,
                     environment,
                     config_manager.load_schema(service_name=service_name),
                 )
-            sources.append(
-                UnionSource(local_file, local_values, parser.has_unresolved_source)
-            )
+            sources.append(UnionSource(local_file, local_values))
         except FileNotFoundError:
             errors.append(f"{local_file}: file not found.")
         except (ValueError, EnvShieldException) as e:
@@ -635,11 +650,10 @@ def load_union_sources(
     for manifest in config_manager.get_deployment_manifests(service_name):
         manifest_container = manifest.get("container") or container
         try:
-            m_parser, local_values = get_manifest_parser_and_vars(
+            m_parser, local_values = get_manifest_parser_and_states(
                 manifest["paths"],
                 container=manifest_container,
                 prefer=service_name,
-                get_values=True,
             )
         except (EnvShieldException, FileNotFoundError, ValueError) as e:
             errors.append(f"{manifest['path']}: {e}")
@@ -649,9 +663,7 @@ def load_union_sources(
                 f"{manifest['path']}: {_no_parser_found_message(manifest['path'])}"
             )
             continue
-        sources.append(
-            UnionSource(manifest["path"], local_values, m_parser.has_unresolved_source)
-        )
+        sources.append(UnionSource(manifest["path"], local_values))
 
     return sources, errors
 
@@ -908,8 +920,8 @@ def sync_schema(service_name: str) -> bool:
                 key
                 for source in other_sources
                 if source.label != paths["local_file"]
-                for key, value in source.local_values.items()
-                if value
+                for key, state in source.local_values.items()
+                if legacy_text(state) != ""
             }
         return _sync_python_local_file(
             schema, paths["local_file"], already_satisfied=already_satisfied

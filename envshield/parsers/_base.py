@@ -1,8 +1,115 @@
 # envshield/parsers/_base.py
-# Defines the abstract base class for all file parsers.
+# Defines the abstract base class for all file parsers, and the typed value
+# states every parser reports per key.
 
 from abc import ABC, abstractmethod
-from typing import Dict, Set, Union
+from dataclasses import dataclass, field
+from typing import Dict, Iterable, Mapping, Optional, Set, Tuple, Union
+
+# --- Value states (v5 plan §4) ---------------------------------------------
+# What one source says about one key. A key missing from a ValueStates
+# mapping is Absent: the source doesn't bind it. Only Concrete carries a
+# value read from the source; no field holding manifest or file text is
+# ever part of a repr.
+
+
+@dataclass(frozen=True)
+class Concrete:
+    """A value EnvShield actually read, including the empty string."""
+
+    value: str = field(repr=False)
+
+
+@dataclass(frozen=True)
+class Forwarded:
+    """
+    The value comes from the deploy host's environment (Compose
+    interpolation, or a bare Compose KEY). `operator` is None, "-", ":-",
+    ":?" or "+"; `fallback` is the manifest's own text after the operator,
+    if any (a default for "-"/":-", an error message for ":?", the
+    alternative for "+").
+    """
+
+    var: str
+    operator: Optional[str] = None
+    fallback: Optional[str] = field(default=None, repr=False)
+
+
+@dataclass(frozen=True)
+class External:
+    """
+    The value lives in an object outside the manifest. `kind` is the
+    Kubernetes field that points at it (secretKeyRef, configMapKeyRef,
+    fieldRef, resourceFieldRef, secretRef, configMapRef); `ref` names it.
+    """
+
+    ref: str
+    kind: str
+
+
+@dataclass(frozen=True)
+class KeyPresent:
+    """The key exists in an object in this manifest, but its value isn't inspected."""
+
+    ref: str
+
+
+ValueState = Union[Concrete, Forwarded, External, KeyPresent]
+
+
+class ValueStates(Dict[str, ValueState]):
+    """
+    One source's states, by key. `unbound` lists references outside the
+    file that may bind keys this source can't enumerate (a Kubernetes
+    envFrom to a ConfigMap/Secret not in the manifest): a key not in the
+    mapping is then not knowably absent.
+    """
+
+    def __init__(
+        self,
+        states: Mapping[str, ValueState] = (),
+        unbound: Iterable[External] = (),
+    ):
+        super().__init__(states)
+        self.unbound: Tuple[External, ...] = tuple(unbound)
+
+
+def as_states(values: Mapping[str, Union[str, ValueState]]) -> ValueStates:
+    """`values` as ValueStates; a plain string is a Concrete value."""
+    if isinstance(values, ValueStates):
+        return values
+    return ValueStates(
+        {k: Concrete(v) if isinstance(v, str) else v for k, v in values.items()}
+    )
+
+
+def legacy_text(state: ValueState) -> Optional[str]:
+    """
+    The string v4.8.0 used for `state`, so consumers can reproduce its
+    behavior exactly until V1-2 judges states directly: a Concrete value;
+    a Compose "-"/":-" fallback; a ":?"/"+" expression's own text (v4.8.0
+    treated it as a literal). None where v4.8.0 used a placeholder: the
+    value isn't visible.
+    """
+    if isinstance(state, Concrete):
+        return state.value
+    if isinstance(state, Forwarded):
+        if state.operator in ("-", ":-"):
+            return state.fallback
+        if state.operator in (":?", "+"):
+            return f"${{{state.var}{state.operator}{state.fallback}}}"
+    return None
+
+
+def not_inspected_names(states: Mapping[str, ValueState]) -> Set[str]:
+    """Keys whose deployed value EnvShield can't see (R0-5): every state but
+    a Concrete value and a ":?"/"+" expression (a v4.8.0 literal)."""
+    return {
+        key
+        for key, state in states.items()
+        if not isinstance(state, Concrete)
+        and not (isinstance(state, Forwarded) and state.operator in (":?", "+"))
+    }
 
 
 class BaseParser(ABC):
@@ -10,41 +117,6 @@ class BaseParser(ABC):
     Abstract Base Class for file parsers.
     Ensures that every parser implements a 'get_vars' method.
     """
-
-    # Shared sentinel for "this variable is declared here, but its real
-    # value legitimately lives outside this file" -- an env_file reference,
-    # a bare pass-through-from-shell entry, a Kubernetes secretRef, or an
-    # unresolvable interpolation. Every parser that can produce this uses
-    # the exact same string (rather than each defining its own copy) so
-    # schema_manager.diff_against_schema can recognize it by identity and
-    # skip type/enum/pattern validation -- validating a placeholder string
-    # against a declared type would otherwise always fail, misreporting a
-    # legitimately-unknown value as an invalid one.
-    UNRESOLVED_VALUE = "<value not visible in this file>"
-
-    # Set by a parser's own get_vars() (as an instance attribute, shadowing
-    # this class-level default) when the file references an external
-    # source -- e.g. a Kubernetes envFrom.configMapRef/secretRef whose
-    # ConfigMap/Secret isn't defined anywhere in the supplied manifest --
-    # that could supply variable NAMES this parser has no way to enumerate,
-    # not just a value it can't resolve for an already-known name (that
-    # case is UNRESOLVED_VALUE, above). Distinct from UNRESOLVED_VALUE
-    # because it can't be expressed as a per-key entry in the returned
-    # dict at all: there's no key to attach it to when the possible
-    # variable names themselves are unknown. Left False (the default) for
-    # every parser that has no such concept -- schema_manager.
-    # diff_against_schema treats a required variable this parser didn't
-    # report as genuinely missing unless this is True, in which case it's
-    # reported as unresolved instead: EnvShield cannot confirm the
-    # variable is supplied, but must equally not claim it's confirmed
-    # absent.
-    has_unresolved_source = False
-
-    # Set by a parser's own get_vars() to the names whose returned value is
-    # a fallback written in the file (Compose '${VAR-x}'/'${VAR:-x}') rather
-    # than the value the deployment will actually receive -- validated like
-    # any value, but never proof the real one is valid (R0-5, F7).
-    fallback_keys: frozenset = frozenset()
 
     # True for a parser whose target is a deployment manifest (docker-
     # compose, Kubernetes) rather than a local config file (.env, a Python
@@ -71,3 +143,7 @@ class BaseParser(ABC):
             FileNotFoundError: If the file_path does not exist.
         """
         pass
+
+    def get_states(self, file_path: str) -> ValueStates:
+        """Each key's ValueState. A local file reads every value: all Concrete."""
+        return as_states(self.get_vars(file_path, get_values=True))

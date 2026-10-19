@@ -7,7 +7,7 @@ import os
 from typing import Dict, List, Optional, Set, Tuple, Union
 
 from ..core.exceptions import EnvShieldException
-from ._base import BaseParser
+from ._base import BaseParser, ValueStates
 from ._deployment import detect_deployment_format
 from ._docker_compose import DockerComposeParser
 from ._dotenv import DotenvParser
@@ -77,11 +77,33 @@ def get_manifest_parser_and_vars(
     ValueError, or EnvShieldException exactly as get_parser()/.get_vars()
     already do -- callers catch the same exception types as before.
     """
+    parser = _manifest_parser(paths, container, prefer)
+    if parser is None:
+        return None, None
     if len(paths) == 1:
-        parser = get_parser(paths[0], container=container, prefer=prefer)
-        if parser is None:
-            return None, None
         return parser, parser.get_vars(paths[0], get_values=get_values)
+    return parser, parser.get_vars_for_layers(paths, get_values=get_values)
+
+
+def get_manifest_parser_and_states(
+    paths: List[str],
+    container: Optional[str] = None,
+    prefer: Optional[str] = None,
+) -> Tuple[Optional[BaseParser], Optional[ValueStates]]:
+    """get_manifest_parser_and_vars, returning each key's ValueState."""
+    parser = _manifest_parser(paths, container, prefer)
+    if parser is None:
+        return None, None
+    if len(paths) == 1:
+        return parser, parser.get_states(paths[0])
+    return parser, parser.get_states_for_layers(paths)
+
+
+def _manifest_parser(
+    paths: List[str], container: Optional[str], prefer: Optional[str]
+) -> Optional[BaseParser]:
+    if len(paths) == 1:
+        return get_parser(paths[0], container=container, prefer=prefer)
 
     fmt = detect_deployment_format(paths[0])
     if fmt != "docker-compose":
@@ -90,6 +112,4 @@ def get_manifest_parser_and_vars(
             f"for Docker Compose base+override layering -- '{paths[0]}' is "
             "not a docker-compose file."
         )
-    parser = DockerComposeParser(container=container, prefer=prefer)
-    values = parser.get_vars_for_layers(paths, get_values=get_values)
-    return parser, values
+    return DockerComposeParser(container=container, prefer=prefer)

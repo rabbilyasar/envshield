@@ -216,6 +216,21 @@ def test_import_command_python_settings_file(tmp_path):
     assert "secret = true" in schema_content.split("[SECRET_KEY]")[1]
 
 
+def test_import_from_a_manifest_never_defaults_a_value_it_cannot_see(tmp_path):
+    """BL-193: a forwarded or external value has no default to suggest."""
+    compose = tmp_path / "docker-compose.yml"
+    compose.write_text(
+        "services:\n  app:\n    environment:\n"
+        "      HOST_URL: ${HOST_URL}\n      BARE:\n      PORT: '8000'\n"
+    )
+
+    schema = toml.loads(importer.generate_schema_from_file(str(compose)))
+
+    assert "defaultValue" not in schema["HOST_URL"]
+    assert "defaultValue" not in schema["BARE"]
+    assert schema["PORT"]["defaultValue"] == "8000"
+
+
 def test_import_command_happy_path(tmp_path):
     """Tests that a standard .env file is correctly converted into a schema."""
     env_content = "DATABASE_URL=postgres://user:pass@localhost/db\nLOG_LEVEL=info\nSTRIPE_API_KEY=sk_live_123456789abcdefghijklmnopqrstuv\n"

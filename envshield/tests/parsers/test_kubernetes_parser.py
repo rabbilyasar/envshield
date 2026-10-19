@@ -2,6 +2,7 @@
 import pytest
 
 from envshield.core.exceptions import EnvShieldException
+from envshield.parsers._base import Concrete, External, KeyPresent
 from envshield.parsers._deployment import detect_deployment_format
 from envshield.parsers._kubernetes import KubernetesParser
 
@@ -55,9 +56,9 @@ def test_parser_treats_value_from_as_present_placeholder(tmp_path):
         "                  key: url\n"
     )
 
-    variables = KubernetesParser().get_vars(str(f), get_values=True)
+    variables = KubernetesParser().get_states(str(f))
 
-    assert variables["DATABASE_URL"] == KubernetesParser.UNRESOLVED_VALUE
+    assert variables["DATABASE_URL"] == External("db-secret", "secretKeyRef")
 
 
 def test_parser_resolves_configmap_defined_in_the_same_multi_doc_file(tmp_path):
@@ -107,9 +108,9 @@ def test_parser_resolves_secret_keys_as_present_but_unresolved(tmp_path):
         "                name: db-secret\n"
     )
 
-    variables = KubernetesParser().get_vars(str(f), get_values=True)
+    variables = KubernetesParser().get_states(str(f))
 
-    assert variables["DATABASE_URL"] == KubernetesParser.UNRESOLVED_VALUE
+    assert variables["DATABASE_URL"] == KeyPresent("db-secret")
 
 
 class TestValueFromKeyValidation:
@@ -175,9 +176,9 @@ class TestValueFromKeyValidation:
             )
         )
 
-        variables = KubernetesParser().get_vars(str(f), get_values=True)
+        variables = KubernetesParser().get_states(str(f))
 
-        assert variables["DATABASE_PASSWORD"] == KubernetesParser.UNRESOLVED_VALUE
+        assert variables["DATABASE_PASSWORD"] == KeyPresent("db-secret")
 
     def test_broken_in_file_config_map_key_ref_excludes_the_variable(self, tmp_path):
         f = tmp_path / "deployment.yaml"
@@ -207,9 +208,9 @@ class TestValueFromKeyValidation:
             )
         )
 
-        variables = KubernetesParser().get_vars(str(f), get_values=True)
+        variables = KubernetesParser().get_states(str(f))
 
-        assert variables["APP_SETTING"] == KubernetesParser.UNRESOLVED_VALUE
+        assert variables["APP_SETTING"] == KeyPresent("app-config")
 
     def test_multiple_env_vars_referencing_different_keys_of_the_same_secret(
         self, tmp_path
@@ -235,10 +236,10 @@ class TestValueFromKeyValidation:
             )
         )
 
-        variables = KubernetesParser().get_vars(str(f), get_values=True)
+        variables = KubernetesParser().get_states(str(f))
 
-        assert variables["FIRST_VAR"] == KubernetesParser.UNRESOLVED_VALUE
-        assert variables["SECOND_VAR"] == KubernetesParser.UNRESOLVED_VALUE
+        assert variables["FIRST_VAR"] == KeyPresent("db-secret")
+        assert variables["SECOND_VAR"] == KeyPresent("db-secret")
         assert "THIRD_VAR" not in variables
 
     def test_external_secret_reference_keeps_existing_unresolved_behavior(
@@ -255,9 +256,9 @@ class TestValueFromKeyValidation:
             )
         )
 
-        variables = KubernetesParser().get_vars(str(f), get_values=True)
+        variables = KubernetesParser().get_states(str(f))
 
-        assert variables["EXTERNAL_VAR"] == KubernetesParser.UNRESOLVED_VALUE
+        assert variables["EXTERNAL_VAR"] == External("not-in-this-file", "secretKeyRef")
 
     def test_external_config_map_reference_keeps_existing_unresolved_behavior(
         self, tmp_path
@@ -273,9 +274,11 @@ class TestValueFromKeyValidation:
             )
         )
 
-        variables = KubernetesParser().get_vars(str(f), get_values=True)
+        variables = KubernetesParser().get_states(str(f))
 
-        assert variables["EXTERNAL_VAR"] == KubernetesParser.UNRESOLVED_VALUE
+        assert variables["EXTERNAL_VAR"] == External(
+            "not-in-this-file", "configMapKeyRef"
+        )
 
     def test_field_ref_is_unaffected(self, tmp_path):
         f = tmp_path / "deployment.yaml"
@@ -288,9 +291,9 @@ class TestValueFromKeyValidation:
             )
         )
 
-        variables = KubernetesParser().get_vars(str(f), get_values=True)
+        variables = KubernetesParser().get_states(str(f))
 
-        assert variables["POD_NAME"] == KubernetesParser.UNRESOLVED_VALUE
+        assert variables["POD_NAME"] == External("metadata.name", "fieldRef")
 
     def test_resource_field_ref_is_unaffected(self, tmp_path):
         f = tmp_path / "deployment.yaml"
@@ -303,9 +306,9 @@ class TestValueFromKeyValidation:
             )
         )
 
-        variables = KubernetesParser().get_vars(str(f), get_values=True)
+        variables = KubernetesParser().get_states(str(f))
 
-        assert variables["CPU_LIMIT"] == KubernetesParser.UNRESOLVED_VALUE
+        assert variables["CPU_LIMIT"] == External("limits.cpu", "resourceFieldRef")
 
     def test_literal_value_is_unaffected(self, tmp_path):
         f = tmp_path / "deployment.yaml"
@@ -317,12 +320,21 @@ class TestValueFromKeyValidation:
 
         assert variables["LOG_LEVEL"] == "info"
 
+    def test_an_entry_with_no_value_is_an_empty_concrete_value(self, tmp_path):
+        """Kubernetes delivers an env entry with neither 'value' nor 'valueFrom' as ""."""
+        f = tmp_path / "deployment.yaml"
+        f.write_text(self._manifest("            - name: EMPTY\n"))
+
+        states = KubernetesParser().get_states(str(f))
+
+        assert states["EMPTY"] == Concrete("")
+
     def test_malformed_secret_key_ref_missing_its_own_name_falls_back_safely(
         self, tmp_path
     ):
         """
         No 'name:' on the secretKeyRef itself -- the existing lenient
-        fallback (present/UNRESOLVED_VALUE) is preserved rather than
+        fallback (External, with no name) is preserved rather than
         crashing or misbehaving on malformed manifest content.
         """
         f = tmp_path / "deployment.yaml"
@@ -335,9 +347,9 @@ class TestValueFromKeyValidation:
             )
         )
 
-        variables = KubernetesParser().get_vars(str(f), get_values=True)
+        variables = KubernetesParser().get_states(str(f))
 
-        assert variables["MALFORMED"] == KubernetesParser.UNRESOLVED_VALUE
+        assert variables["MALFORMED"] == External("", "secretKeyRef")
 
 
 class TestEnvFromUnresolvedReference:
@@ -348,7 +360,7 @@ class TestEnvFromUnresolvedReference:
     existing at all. That's a false negative: the object is very likely
     real (just externally managed, e.g. by Helm/Kustomize, or applied
     separately), and could supply variables this parser has no way to
-    enumerate. has_unresolved_source now surfaces that ambiguity instead
+    enumerate. ValueStates.unbound now surfaces that ambiguity instead
     of silently resolving to "nothing".
     """
 
@@ -375,10 +387,10 @@ class TestEnvFromUnresolvedReference:
         )
         parser = KubernetesParser()
 
-        variables = parser.get_vars(str(f), get_values=True)
+        variables = parser.get_states(str(f))
 
-        assert variables == {"LOG_LEVEL": "info"}
-        assert parser.has_unresolved_source is False
+        assert variables == {"LOG_LEVEL": Concrete("info")}
+        assert variables.unbound == ()
 
     def test_secret_defined_in_the_manifest_is_not_unresolved(self, tmp_path):
         """Requirement #2 and #8: a locally-defined Secret still resolves cleanly, no ambiguity flagged."""
@@ -403,10 +415,10 @@ class TestEnvFromUnresolvedReference:
         )
         parser = KubernetesParser()
 
-        variables = parser.get_vars(str(f), get_values=True)
+        variables = parser.get_states(str(f))
 
-        assert variables["DATABASE_URL"] == KubernetesParser.UNRESOLVED_VALUE
-        assert parser.has_unresolved_source is False
+        assert variables["DATABASE_URL"] == KeyPresent("db-secret")
+        assert variables.unbound == ()
 
     def test_configmap_ref_not_in_the_manifest_is_unresolved_not_ignored(
         self, tmp_path
@@ -428,10 +440,12 @@ class TestEnvFromUnresolvedReference:
         )
         parser = KubernetesParser()
 
-        variables = parser.get_vars(str(f), get_values=True)
+        variables = parser.get_states(str(f))
 
         assert variables == {}
-        assert parser.has_unresolved_source is True
+        assert variables.unbound == (
+            External("externally-managed-config", "configMapRef"),
+        )
 
     def test_secret_ref_not_in_the_manifest_is_unresolved_not_ignored(self, tmp_path):
         """Requirement #4: an externally-managed Secret is flagged unresolved, not silently contributing zero variables."""
@@ -451,17 +465,19 @@ class TestEnvFromUnresolvedReference:
         )
         parser = KubernetesParser()
 
-        variables = parser.get_vars(str(f), get_values=True)
+        variables = parser.get_states(str(f))
 
         assert variables == {}
-        assert parser.has_unresolved_source is True
+        assert variables.unbound == (
+            External("externally-managed-secret", "secretRef"),
+        )
 
     def test_optional_flag_does_not_clear_the_unresolved_signal(self, tmp_path):
         """
         'optional: true' only means K8s won't fail pod startup if the
         object is genuinely absent -- it says nothing about whether the
         object exists elsewhere in the cluster and supplies variables this
-        parser can't see, so it must not suppress has_unresolved_source.
+        parser can't see, so it must still be recorded as unbound.
         """
         f = tmp_path / "deployment.yaml"
         f.write_text(
@@ -480,15 +496,11 @@ class TestEnvFromUnresolvedReference:
         )
         parser = KubernetesParser()
 
-        parser.get_vars(str(f), get_values=True)
+        states = parser.get_states(str(f))
 
-        assert parser.has_unresolved_source is True
+        assert states.unbound
 
-    def test_a_fresh_parser_instance_defaults_to_not_unresolved(self):
-        """The class-level default (BaseParser.has_unresolved_source) before get_vars is ever called."""
-        assert KubernetesParser().has_unresolved_source is False
-
-    def test_unresolved_flag_resets_between_calls_on_the_same_instance(self, tmp_path):
+    def test_unbound_is_reported_per_call(self, tmp_path):
         unresolved_file = tmp_path / "unresolved.yaml"
         unresolved_file.write_text(
             "apiVersion: apps/v1\n"
@@ -519,11 +531,8 @@ class TestEnvFromUnresolvedReference:
         )
         parser = KubernetesParser()
 
-        parser.get_vars(str(unresolved_file))
-        assert parser.has_unresolved_source is True
-
-        parser.get_vars(str(clean_file))
-        assert parser.has_unresolved_source is False
+        assert parser.get_states(str(unresolved_file)).unbound
+        assert parser.get_states(str(clean_file)).unbound == ()
 
 
 class TestEnvFromPrefix:
@@ -585,9 +594,9 @@ class TestEnvFromPrefix:
             )
         )
 
-        variables = KubernetesParser().get_vars(str(f), get_values=True)
+        variables = KubernetesParser().get_states(str(f))
 
-        assert variables["SEC_SECRET_KEY_A"] == KubernetesParser.UNRESOLVED_VALUE
+        assert variables["SEC_SECRET_KEY_A"] == KeyPresent("app-secret")
         assert "SECRET_KEY_A" not in variables
 
     def test_prefix_applies_independently_to_every_key_under_the_same_source(
@@ -657,7 +666,7 @@ class TestEnvFromPrefix:
     ):
         """
         A ConfigMap not defined in this file has unknowable keys, so there's
-        nothing to prefix -- existing has_unresolved_source behavior is
+        nothing to prefix -- it's recorded as unbound,
         preserved exactly, not silently dropped because a prefix was given.
         """
         f = tmp_path / "deployment.yaml"
@@ -670,10 +679,10 @@ class TestEnvFromPrefix:
         )
         parser = KubernetesParser()
 
-        variables = parser.get_vars(str(f), get_values=True)
+        variables = parser.get_states(str(f))
 
         assert variables == {}
-        assert parser.has_unresolved_source is True
+        assert variables.unbound == (External("not-in-this-file", "configMapRef"),)
 
     def test_external_secret_reference_with_prefix_stays_unresolved_not_ignored(
         self, tmp_path
@@ -688,10 +697,10 @@ class TestEnvFromPrefix:
         )
         parser = KubernetesParser()
 
-        variables = parser.get_vars(str(f), get_values=True)
+        variables = parser.get_states(str(f))
 
         assert variables == {}
-        assert parser.has_unresolved_source is True
+        assert variables.unbound == (External("not-in-this-file", "secretRef"),)
 
     def test_prefix_on_configmap_does_not_affect_a_sibling_unprefixed_secret(
         self, tmp_path
@@ -707,10 +716,10 @@ class TestEnvFromPrefix:
             )
         )
 
-        variables = KubernetesParser().get_vars(str(f), get_values=True)
+        variables = KubernetesParser().get_states(str(f))
 
-        assert variables["CM_CM_KEY_A"] == "valueA"
-        assert variables["SECRET_KEY_A"] == KubernetesParser.UNRESOLVED_VALUE
+        assert variables["CM_CM_KEY_A"] == Concrete("valueA")
+        assert variables["SECRET_KEY_A"] == KeyPresent("app-secret")
 
 
 def test_parser_raises_when_container_ambiguous(tmp_path):
