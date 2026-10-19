@@ -23,6 +23,7 @@ from ..parsers.factory import get_manifest_parser_and_states
 from ..utils import git_utils
 from . import discovery, schema_manager, schema_types, source_files, verdicts
 from .exceptions import EnvShieldException
+from .verdicts import Verdict
 
 REPORT_VERSION = 2
 
@@ -50,7 +51,7 @@ class SourceEvaluation:
     # v5 (plan §10), all value-free: each name's verdict in this source, the
     # source's requiredness opinion per declared name (verdicts.requirement),
     # envFrom references outside the file, and why an errored source failed.
-    verdicts: Dict[str, verdicts.Verdict] = field(default_factory=dict)
+    verdicts: Dict[str, Verdict] = field(default_factory=dict)
     needs: Dict[str, Optional[str]] = field(default_factory=dict)
     unbound: Tuple[Any, ...] = ()
     error_reason: Optional[str] = None
