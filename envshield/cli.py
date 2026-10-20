@@ -958,13 +958,15 @@ def _render_explain_report(report: "explain.ExplainReport") -> None:
     schema = report.schema
     console.print("\n[bold]Contract[/bold]")
     console.print(f"  Type:       {schema['type']}")
-    if "requiredIn" in schema:
-        listed = ", ".join(schema["requiredIn"]) or "no environment"
-        answer = "Yes" if schema["requiredness"] == "required" else "No"
-        console.print(
-            f"  Required:   {answer} in {escape(report.environment)} "
-            f"(requiredIn: {escape(listed)})"
-        )
+    if "environments" in schema:
+        for label, key in (
+            ("Required in", "required"),
+            ("Conditional in", "conditional"),
+            ("Optional in", "optional"),
+        ):
+            if schema["environments"][key]:
+                names = ", ".join(schema["environments"][key])
+                console.print(f"  {label + ':':<15} {escape(names)}")
     else:
         console.print(
             f"  Required:   {_EXPLAIN_REQUIREDNESS_LABEL[schema['requiredness']]}"
@@ -1740,7 +1742,11 @@ def schema_diff(
                 target, right_revision
             )
             result = contract_diff.diff_schemas(
-                schema_left, view_right.fields, system_left, set(view_right.system)
+                schema_left,
+                view_right.fields,
+                system_left,
+                set(view_right.system),
+                environments=config_manager.get_environments(),
             )
         except EnvShieldException as e:
             had_error = True
@@ -1927,7 +1933,11 @@ def generate(
             # buy here. Read the schema directly rather than forcing
             # 'envshield init'/'service add' just to run this command.
             schema = config_manager.load_bare_schema()
-        content = generator.generate_config(schema, lang=resolved_lang)
+        content = generator.generate_config(
+            schema,
+            lang=resolved_lang,
+            environments=tuple(config_manager.get_environments()),
+        )
 
         with file_updater.open_for_write(resolved_output) as f:
             f.write(content)

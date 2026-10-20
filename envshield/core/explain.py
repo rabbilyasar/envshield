@@ -148,7 +148,9 @@ def _manifest_references(
 
 
 def _describe_field(
-    field_schema: Dict[str, Any], env: str = schema_types.LOCAL
+    field_schema: Dict[str, Any],
+    env: str = schema_types.LOCAL,
+    environments: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """
     The schema-declarative facts about one field -- never evaluated
@@ -182,6 +184,17 @@ def _describe_field(
     }
     if "requiredIn" in field_schema:
         described["requiredIn"] = list(field_schema["requiredIn"] or [])
+    environments = environments or [schema_types.LOCAL]
+    if len(environments) > 1 or "requiredIn" in field_schema:
+        # Where it's required, optional or conditional (plan §7, V4-2).
+        where: Dict[str, List[str]] = {
+            "required": [],
+            "optional": [],
+            "conditional": [],
+        }
+        for name in environments:
+            where[schema_types.requiredness_label(field_schema, name)].append(name)
+        described["environments"] = where
     return described
 
 
@@ -354,7 +367,7 @@ def build_report(
     return ExplainReport(
         variable=variable,
         service=service_name,
-        schema=_describe_field(field_schema, env),
+        schema=_describe_field(field_schema, env, config_manager.get_environments()),
         provenance=provenance,
         required_by=_reverse_required_by(schema, variable),
         source_usages=_discover_current_usages(

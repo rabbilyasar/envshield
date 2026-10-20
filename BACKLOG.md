@@ -1169,7 +1169,7 @@ Component: `README.md` ("For AI coding agents"), docs, website
 
 ### BL-187 — kemonchilo, the v5 reference project, permanently fails `check` in v4.8.0
 
-Type: `PRODUCT` · Evidence: `CONFIRMED` (real-repo trial, 2026-10-14) · Priority: decision input for V4-1 · Status: **fixed by V4-1 ([#23](https://github.com/rabbilyasar/envshield/issues/23), branch, unmerged)**
+Type: `PRODUCT` · Evidence: `CONFIRMED` (real-repo trial, 2026-10-14) · Priority: decision input for V4-1 · Status: **fixed by V4-1 ([#23](https://github.com/rabbilyasar/envshield/issues/23), merged `578af57`, unreleased)**
 Component: requiredness model (no environment dimension)
 
 - **Current behavior:** `check` and `doctor` exit 1 on kemonchilo's own `.env` for `BUILD_TIME`, `GIT_REF`, `GIT_SHA`, `KEMONCHILO_ENV`, `NEXT_RUNTIME`, `NODE_ENV` and `RECOVERY_TIMING_SCALE`, all marked required. Most are injected by the build, platform or test runner, not by a developer's `.env`. The only ways to go green are adding fake local values or making them optional everywhere.
@@ -1921,7 +1921,7 @@ Source: the #68 differential, where it showed up as a spurious difference.
 
 ### BL-201 — Real product repos can't get a clean local `check`: per-environment rules live only in descriptions
 
-Type: `PRODUCT EVIDENCE` / `LIMITATION` · Evidence: `CONFIRMED` (live, 2026-10-21: read-only `check --json` on local clones with `envshield==4.9.1` and `main` `7fa590b`; same exit and findings on both) · Priority: **P2** (no false-clean; the documented agent loop "run `check --json` clean before a PR" can't be followed) · Status: **`requiredIn` part fixed by V4-1 ([#23](https://github.com/rabbilyasar/envshield/issues/23), branch, unmerged); "must not be set" part open, proposed as [#71](https://github.com/rabbilyasar/envshield/issues/71)**
+Type: `PRODUCT EVIDENCE` / `LIMITATION` · Evidence: `CONFIRMED` (live, 2026-10-21: read-only `check --json` on local clones with `envshield==4.9.1` and `main` `7fa590b`; same exit and findings on both) · Priority: **P2** (no false-clean; the documented agent loop "run `check --json` clean before a PR" can't be followed) · Status: **`requiredIn` part fixed by V4-1 ([#23](https://github.com/rabbilyasar/envshield/issues/23), merged `578af57`, unreleased); "must not be set" part open, proposed as [#71](https://github.com/rabbilyasar/envshield/issues/71)**
 Component: contract (`env.schema.toml` semantics), `check`
 Source: the maintainer asked (2026-10-21) that EnvShield fit how their product team works: agents write most code and must run `undeclared --json` and `check --json` clean before a PR, deploys go through staging, `doctor` runs in reconciliation.
 

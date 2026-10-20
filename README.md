@@ -188,7 +188,7 @@ description = "Set by the deploy script; never in .env."
 requiredIn = ["staging", "production"]
 ```
 
-Plain `envshield check` judges your local file (and untagged manifests) by `local`'s requirements, so `GIT_SHA` isn't needed there. `envshield check --env production` (or `ENVSHIELD_ENV=production`) checks the manifests tagged `production` against production's requirements. `envshield check deploy/production.env --env production` checks one env file the same way. A variable sets at most one of `required`, `requiredIn` or `requiredIf`.
+Plain `envshield check` judges your local file (and untagged manifests) by `local`'s requirements, so `GIT_SHA` isn't needed there. `envshield explain GIT_SHA` lists where it's required, `schema diff` says which environment a requiredness change affects (a variable added with `requiredIn = ["production"]` is breaking for production only), and `generate` makes it optional in the generated loader, since that loader runs in every environment. `envshield check --env production` (or `ENVSHIELD_ENV=production`) checks the manifests tagged `production` against production's requirements. `envshield check deploy/production.env --env production` checks one env file the same way. A variable sets at most one of `required`, `requiredIn` or `requiredIf`.
 
 **`envshield setup`** — interactive onboarding: fills in whatever's missing, blank, or now-invalid in your local file, prompting with each variable's description.
 

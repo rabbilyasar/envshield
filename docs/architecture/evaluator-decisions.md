@@ -104,9 +104,9 @@ unconditional, and `required = true`):
 | added: conditional | informational |
 | added: optional | non_breaking |
 
-**`schema diff`** still compares requiredness in `local` only, so a
-`requiredIn` that omits `local` reads as optional there. Per-environment
-classification is V4-2 (#24).
+**`schema diff`** classifies requiredness per environment since V4-2
+(D-12): the table above applies in each environment, and a change takes
+its most severe per-environment category.
 
 ## D-3. Process environment is an opt-in overlay on the local file
 
@@ -475,3 +475,38 @@ required only when its condition holds. On the golden scenarios that
 changes one variable in `requiredif_met_unmet_and_default_wins` (`LEVEL`:
 INVALID → NOT REQUIRED; the exit code is unchanged, since another variable
 still fails).
+
+## D-12. Environment-aware `schema diff`, `explain` and `generate` (V4-2, #24)
+
+**Before.** All three read requiredness in `local` only, so a variable
+added with `requiredIn = ["production"]` was reported as an optional,
+non-breaking addition, and `requiredIn = ["production"]` →
+`["staging", "production"]` wasn't reported at all.
+
+**Now** (plan §7):
+
+- **`schema diff`** compares requiredness in every environment: the
+  declared ones (from the current `envshield.yml`), plus any a `requiredIn`
+  on either side names, since an older revision may name one the current
+  config doesn't. Each environment uses D-2's table. When the categories
+  differ, the change takes the most severe one (`breaking` >
+  `security` > `requires_review` > `informational` > `default_changed` >
+  `non_breaking`), its description says where it applies, and
+  `detail.environments` maps each environment to its category or
+  `unchanged`. When every environment agrees, the change is exactly what
+  it was before: single-environment output is unchanged.
+- **`explain`** adds `schema.environments: {required, optional,
+  conditional}` (lists of environment names) when environments are
+  declared or the field has `requiredIn`. Human output shows "Required in",
+  "Conditional in" and "Optional in". `--env` still sets
+  `schema.requiredness` for one environment (D-11).
+- **`generate`** emits a variable as optional unless it's required in every
+  environment: a `requiredIn` that lists them all is required; any other is
+  optional. Legacy and `required = true` variables are unchanged. A
+  `defaultValue` stays the loader's fallback, which is application
+  behavior, not something `check` verified.
+
+**Not done here:** the plan's `explain` "Value source" line (a provider
+reference from `secrets:`). Provider support is back in planning under
+amendment A2, so there is no `secrets:` to read; `explain` never shows a
+value either way.
