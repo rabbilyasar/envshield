@@ -33,6 +33,9 @@ class Forwarded:
     var: str
     operator: Optional[str] = None
     fallback: Optional[str] = field(default=None, repr=False)
+    # The value is text with references inside it ('http://${HOST}:80');
+    # `var` then lists every host variable it names, comma-separated.
+    embedded: bool = False
 
 
 @dataclass(frozen=True)

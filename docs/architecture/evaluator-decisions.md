@@ -396,6 +396,10 @@ COULD NOT VERIFY findings:
   longer read as literal text in the v1 fields (BL-195). This changes v1
   `results`, `doctor`'s manifest check and `import` for those operators;
   no exit code on the differential moves.
+- A Compose value with any unescaped reference (`http://${HOST}:8000`,
+  `$VAR`, `${A:-${B}}`) is never judged on its text: it's Forwarded, and
+  COULD NOT VERIFY (`host_forward`). Only a value with no reference is
+  Concrete, with `$$` unescaped to `$` (BL-199, #68).
 
 **Effect.** On the 22 golden scenarios and a 30-scenario differential
 against `main`, no exit code changed: each one that already failed had an

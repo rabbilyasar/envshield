@@ -944,8 +944,11 @@ decisions in
 (merged `24a53b8`, PR #66). V1-2
 ([#16](https://github.com/rabbilyasar/envshield/issues/16)) is merged
 (`c3f3bcf`, PR #67): five verdicts, reason codes and report v2. V1-3
-([#17](https://github.com/rabbilyasar/envshield/issues/17)) makes the exit
-code the gate on those verdicts, with `--accept-unverified`. The full
+([#17](https://github.com/rabbilyasar/envshield/issues/17)) is merged
+(`c5aa9f5`, PR #69): the exit code is the gate on those verdicts, with
+`--accept-unverified`. [#68](https://github.com/rabbilyasar/envshield/issues/68)
+(`BL-199`) closes Phase 1: a Compose value with an embedded reference is
+never judged on its text. Next: V4 (#23, #24). The full
 order is ROADMAP.md's "v5 — in progress". Nothing since `v4.9.1` is released.
 
 **Previous phase (updated 2026-10-15): `v4.9.1` released; v5 V1 next.**
