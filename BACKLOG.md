@@ -1175,6 +1175,7 @@ Component: requiredness model (no environment dimension)
 - **Current behavior:** `check` and `doctor` exit 1 on kemonchilo's own `.env` for `BUILD_TIME`, `GIT_REF`, `GIT_SHA`, `KEMONCHILO_ENV`, `NEXT_RUNTIME`, `NODE_ENV` and `RECOVERY_TIMING_SCALE`, all marked required. Most are injected by the build, platform or test runner, not by a developer's `.env`. The only ways to go green are adding fake local values or making them optional everywhere.
 - **Impact:** a check that is always red teaches the team to ignore it. This is the strongest real-world evidence for V4-1's `requiredIn`.
 - **Relationships:** V4-1 (#23); its acceptance should include kemonchilo going green locally while those variables stay required in production.
+- **Re-confirmed 2026-10-21:** still failing on `main` `7fa590b`, now with `WORKER_HEARTBEAT_URL` too; see `BL-201` (which also records the "must not be set in E" case and the v5 ordering decision).
 
 ---
 - **Issue:** V4-1 [#23](https://github.com/rabbilyasar/envshield/issues/23) (comment).
@@ -1933,7 +1934,7 @@ Source: the maintainer asked (2026-10-21) that EnvShield fit how their product t
 - **Other observations:**
   - None of these repos has a Compose or Kubernetes manifest. They deploy with scripts and env files, so `check --runtime` (V5-1, #25) is their deployment check, not a manifest check.
   - The variables the runtime sets (`NODE_ENV`, `NEXT_RUNTIME`) can already be declared `required = false` today.
-- **Relationships:** V4-1 (#23, `requiredIn`), V5-1 (#25), #42/#63 (the agent loop), `BL-175`–`BL-188` (the 2026-10-14 trial).
+- **Relationships:** **re-confirms `BL-187`** (the same KemonChilo failure, first recorded in the 2026-10-14 trial; it now also fails on `WORKER_HEARTBEAT_URL`). The `requiredIn` half stays tracked there and by V4-1 (#23). This entry adds the "must not be set" case, the no-manifests observation and the ordering decision. Also V5-1 (#25), #42/#63 (the agent loop), `BL-175`–`BL-188`.
 - **Decision (2026-10-21, maintainer):**
   - CLI consolidation and the agent recipe (#42, #45, #63) move ahead of V2 in the v5 order (ROADMAP.md, v5-decisions.md).
   - V4-1 uses this schema shape as an acceptance model.
