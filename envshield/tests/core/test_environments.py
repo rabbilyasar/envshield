@@ -88,18 +88,27 @@ def test_an_invalid_declaration_is_a_load_error(tmp_path, config, fragment):
         _environments(tmp_path, config)
 
 
-def test_env_precedence(tmp_path, monkeypatch):
+def test_an_undeclared_name_is_refused(tmp_path):
     with runner.isolated_filesystem(temp_dir=tmp_path):
         _write({"envshield.yml": SERVICE + ENVS})
-        monkeypatch.delenv("ENVSHIELD_ENV", raising=False)
         assert config_manager.resolve_environment() == "local"
-        monkeypatch.setenv("ENVSHIELD_ENV", "staging")
-        assert config_manager.resolve_environment() == "staging"
         assert config_manager.resolve_environment("production") == "production"
         with pytest.raises(
             UnknownEnvironmentError, match="Declared: local, staging, production"
         ):
             config_manager.resolve_environment("prod")
+
+
+def test_env_precedence_on_the_cli(tmp_path):
+    files = {**PROD, "env.schema.toml": '[OTHER]\n\n[K]\nrequiredIn = ["production"]\n'}
+    _, payload, _ = _check(tmp_path, files)
+    assert payload["environment"] == "local"
+    _, payload, _ = _check(tmp_path, files, env={"ENVSHIELD_ENV": "production"})
+    assert payload["environment"] == "production"
+    _, payload, _ = _check(
+        tmp_path, files, "--env", "staging", env={"ENVSHIELD_ENV": "production"}
+    )
+    assert payload["environment"] == "staging"
 
 
 # --- The contract: requiredIn ---------------------------------------------

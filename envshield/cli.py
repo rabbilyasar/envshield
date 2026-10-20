@@ -456,9 +456,10 @@ def check(
     env: Optional[str] = typer.Option(
         None,
         "--env",
+        envvar="ENVSHIELD_ENV",
         help=(
             "The environment to judge requirements for (declared under "
-            "'environments:' in envshield.yml). Default: $ENVSHIELD_ENV, then local."
+            "'environments:' in envshield.yml). Default: local."
         ),
     ),
 ):
@@ -536,8 +537,9 @@ def check(
 
 
 def _resolve_env(env: Optional[str], json_output: bool) -> str:
-    """--env, then ENVSHIELD_ENV, then local (plan §7). An undeclared name is
-    a usage error (exit 2); an invalid 'environments:' declaration exits 1."""
+    """--env, then ENVSHIELD_ENV (Typer's envvar), then local (plan §7). An
+    undeclared name is a usage error (exit 2); an invalid 'environments:'
+    declaration exits 1."""
     try:
         return config_manager.resolve_environment(env)
     except UnknownEnvironmentError as e:
@@ -777,9 +779,10 @@ def doctor_command(
     env: Optional[str] = typer.Option(
         None,
         "--env",
+        envvar="ENVSHIELD_ENV",
         help=(
             "The environment to judge requirements for (declared under "
-            "'environments:' in envshield.yml). Default: $ENVSHIELD_ENV, then local."
+            "'environments:' in envshield.yml). Default: local."
         ),
     ),
 ):
@@ -1022,9 +1025,10 @@ def explain_command(
     env: Optional[str] = typer.Option(
         None,
         "--env",
+        envvar="ENVSHIELD_ENV",
         help=(
             "The environment to judge requirements for (declared under "
-            "'environments:' in envshield.yml). Default: $ENVSHIELD_ENV, then local."
+            "'environments:' in envshield.yml). Default: local."
         ),
     ),
 ):

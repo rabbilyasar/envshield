@@ -266,11 +266,11 @@ def get_environments() -> List[str]:
 
 def resolve_environment(name: Optional[str] = None) -> str:
     """
-    The environment a command runs in: `name` (--env), then ENVSHIELD_ENV,
-    then 'local'. Raises UnknownEnvironmentError for an undeclared name,
-    listing the declared ones.
+    The environment a command runs in: `name`, or 'local'. (The CLI fills
+    `name` from --env, then ENVSHIELD_ENV.) Raises UnknownEnvironmentError
+    for an undeclared name, listing the declared ones.
     """
-    chosen = name or os.environ.get("ENVSHIELD_ENV") or schema_types.LOCAL
+    chosen = name or schema_types.LOCAL
     declared = get_environments()
     if chosen not in declared:
         raise UnknownEnvironmentError(chosen, declared)
