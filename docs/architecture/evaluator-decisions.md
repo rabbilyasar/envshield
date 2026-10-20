@@ -10,7 +10,8 @@ Implementation: `envshield/core/evaluator.py`. It is orchestration only:
 presence/validity is still `schema_manager.diff_against_schema` +
 `schema_types.validate_value`, sources are still `parsers.factory`,
 code references are still `discovery.py`. Since V1-2, v5's verdicts are
-`envshield/core/verdicts.py`, judged from the parsers' value states (D-9).
+`envshield/core/verdicts.py`, judged from the parsers' value states (D-9),
+and since V1-3 they decide `check`'s exit code (D-10).
 
 ---
 
@@ -293,7 +294,8 @@ union fixture.
 
 **Not yet the gate.** Until V1-3 (#17), the exit code, `success`,
 `results`, `combined` and `summary.clean` are computed as before (D-6).
-A run can therefore print COULD NOT VERIFY and still exit 0.
+A run can therefore print COULD NOT VERIFY and still exit 0. *Superseded
+by D-10: the exit code and `success` now follow the verdict.*
 
 **JSON (additive).** Top level: `verdict`, the invocation's verdict (the
 highest-precedence service verdict). Each report keeps every v1 field with
@@ -346,3 +348,58 @@ Errors, Invalid, Could not verify, then valid and not-required lines, and
 ends each service with a line like `INVALID: 1 invalid, 2 could not be
 verified, 1 valid.` It replaces the v1 table and its suggestions; next
 steps are in the JSON findings.
+
+## D-10. The gate and `--accept-unverified` (V1-3, #17)
+
+**Before.** `check`'s exit code and `success` came from the v4.8.0 diff
+(D-6): a value EnvShield never saw (a Compose host forward, an external
+Kubernetes reference, an in-file Secret) passed, though V1-2 already
+called it COULD NOT VERIFY.
+
+**Now** (plan §10, in [v5-decisions.md](v5-decisions.md)). The verdict says
+what EnvShield found; the gate says whether the pipeline may proceed.
+`verdicts.gate()` computes it from the invocation's verdict and its
+COULD NOT VERIFY findings:
+
+- **Exit 0:** the verdict is VALID, or COULD NOT VERIFY with every
+  finding's reason accepted. **Exit 1:** anything else, INVALID and ERROR
+  included. **Exit 2:** a usage error.
+- **`--accept-unverified=REASON[,REASON]`**, repeatable, accepts only
+  `host_forward`, `external_reference` and `value_not_inspected`, for the
+  whole invocation. `ambiguous_requirement`, any INVALID or ERROR reason,
+  `all`, an unknown name or an empty value is a usage error (exit 2,
+  `verdicts.parse_accepted`).
+- **The verdict never changes.** JSON adds `gate: {"result": "pass" |
+  "fail", "accepted": {"<reason>": ["NAME", ...]}}`, and `success` is
+  `true` only when the verdict is VALID: `false` for an accepted run even
+  though it exits 0.
+- **Human output** ends an accepted run with `PASSED WITH UNVERIFIED
+  VALUES (accepted: ...)`, after every `?` line. A run that fails only on
+  unverified values ends with `FAILED: some values could not be verified
+  (...)` and the `--accept-unverified=` that would pass it, or says why
+  `ambiguous_requirement` can't be accepted.
+
+**Decisions made while implementing:**
+
+- `accepted` lists, per accepted reason, the variables it covered in this
+  run; a reason that covered nothing maps to `[]`. It's reported on a
+  failing gate too.
+- The v1 fields `results[].clean`, `combined` and `summary.clean` keep
+  their v4.8.0 meaning (plan: "the v1 fields released in 4.8.0 stay
+  through v5"), so they can say clean when the gate fails on an
+  unverified value. `success` is the one v1 field that follows the gate.
+- A service with nothing required is VALID, not `not_required` (BL-197).
+- `doctor`, `scan`, `undeclared`, `schema diff` and the hooks are
+  unchanged; the hooks don't run `check`.
+- Every Compose operator (`-`, `:-`, `?`, `:?`, `+`, `:+`) is keyed by
+  the host variable it names, like `${VAR}`, and `?`/`:?`/`+`/`:+` are no
+  longer read as literal text in the v1 fields (BL-195). This changes v1
+  `results`, `doctor`'s manifest check and `import` for those operators;
+  no exit code on the differential moves.
+
+**Effect.** On the 22 golden scenarios and a 30-scenario differential
+against `main`, no exit code changed: each one that already failed had an
+INVALID or ERROR, and the golden text gains only the closing line on
+`kubernetes_unresolved_envfrom`. What changes is the class those
+scenarios didn't cover, which the plan intends (F1/F2/F4/F7): a check whose
+only problems are unverified values now exits 1.

@@ -25,7 +25,7 @@ class Forwarded:
     """
     The value comes from the deploy host's environment (Compose
     interpolation, or a bare Compose KEY). `operator` is None, "-", ":-",
-    or one of LITERAL_OPERATORS; `fallback` is the manifest's own text
+    "?", ":?", "+" or ":+"; `fallback` is the manifest's own text
     after the operator, if any (a default for "-"/":-", an error message
     for "?"/":?", the alternative for "+"/":+").
     """
@@ -55,10 +55,6 @@ class KeyPresent:
 
 
 ValueState = Union[Concrete, Forwarded, External, KeyPresent]
-
-# Compose operators v4.8.0 kept as literal text: required-or-error and
-# alternative-value. Their legacy_text is the expression itself.
-LITERAL_OPERATORS = ("?", ":?", "+", ":+")
 
 
 class ValueStates(Dict[str, ValueState]):
@@ -93,32 +89,22 @@ def as_states(values: Mapping[str, Union[str, ValueState]]) -> ValueStates:
 
 def legacy_text(state: ValueState) -> Optional[str]:
     """
-    The string v4.8.0 used for `state`, so the v1 report fields, `results`
-    and the exit code reproduce its behavior until V1-3 gates on verdicts
-    (core/verdicts.py judges states directly): a Concrete value; a Compose
-    "-"/":-" fallback; a LITERAL_OPERATORS expression's own text (v4.8.0
-    treated it as a literal). None where v4.8.0 used a placeholder: the
-    value isn't visible.
+    The string v4.8.0 used for `state`, for the v1 report fields and
+    `results` (core/verdicts.py judges states directly): a Concrete value,
+    or a Compose "-"/":-" fallback. None where v4.8.0 used a placeholder:
+    the value isn't visible.
     """
     if isinstance(state, Concrete):
         return state.value
-    if isinstance(state, Forwarded):
-        if state.operator in ("-", ":-"):
-            return state.fallback
-        if state.operator in LITERAL_OPERATORS:
-            return f"${{{state.var}{state.operator}{state.fallback}}}"
+    if isinstance(state, Forwarded) and state.operator in ("-", ":-"):
+        return state.fallback
     return None
 
 
 def not_inspected_names(states: Mapping[str, ValueState]) -> Set[str]:
     """Keys whose deployed value EnvShield can't see (R0-5): every state but
-    a Concrete value and a LITERAL_OPERATORS expression (a v4.8.0 literal)."""
-    return {
-        key
-        for key, state in states.items()
-        if not isinstance(state, Concrete)
-        and not (isinstance(state, Forwarded) and state.operator in LITERAL_OPERATORS)
-    }
+    a Concrete value."""
+    return {key for key, state in states.items() if not isinstance(state, Concrete)}
 
 
 class BaseParser(ABC):

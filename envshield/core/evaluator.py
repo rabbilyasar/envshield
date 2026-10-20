@@ -411,11 +411,17 @@ class ServiceEvaluation:
         return found
 
     def verdict(self) -> Any:
-        """The service's verdict: the highest-precedence one found anywhere."""
-        return verdicts.worst(
+        """
+        The service's verdict: the highest-precedence one found anywhere.
+        A service with nothing required is VALID ("0 required variables").
+        """
+        found = verdicts.worst(
             [v for v, _ in self.judged().values()]
             + [v for v, _ in self.service_findings()]
         )
+        if found.verdict == verdicts.NOT_REQUIRED:
+            return verdicts.Verdict(verdicts.VALID)
+        return found
 
     def legacy_results(self) -> List[Dict[str, Any]]:
         """This service's entries in 'check --json' `results`, as always."""

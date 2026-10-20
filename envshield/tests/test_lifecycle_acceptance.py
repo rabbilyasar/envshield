@@ -66,6 +66,7 @@ def cli_json(*args, code=0):
     if args and args[0] == "check":
         assert len(payload.pop("reports")) >= 1
         assert payload.pop("verdict") in ("valid", "invalid", "unverified", "error")
+        assert payload.pop("gate")["result"] in ("pass", "fail")
     return payload
 
 
@@ -189,8 +190,12 @@ class TestZeusModel:
         manifests = config_manager.get_deployment_manifests("athena")
         assert sorted(m["container"] for m in manifests) == ["athena", "athenalambda"]
 
+        # V1-3: athena's Compose file forwards DATABASE_URL from the deploy
+        # host, which a static check can't verify. The gate fails unless that
+        # reason is accepted; the exit code is the gate (cli_json checks 0).
+        cli("check", "--service", "athena", code=1)
         for name in ("athena", "hermes"):
-            assert cli_json("check", "--service", name)["success"]
+            cli_json("check", "--service", name, "--accept-unverified=host_forward")
             checks = cli_json("doctor", "--service", name, code=None)["results"][0]
             failing = [c["name"] for c in checks["checks"] if not c["passed"]]
             assert failing == ["Git Hooks"], checks
@@ -458,7 +463,9 @@ class TestIssueBearModel:
             "issuebear-util",
         ]
 
-        assert cli_json("check", "--service", "issuebear")["success"]
+        # V1-3: SECRET_KEY is forwarded from the deploy host (host_forward).
+        cli("check", "--service", "issuebear", code=1)
+        cli_json("check", "--service", "issuebear", "--accept-unverified=host_forward")
         cli("setup", "--service", "issuebear")  # patch-in-place, nothing asked
         assert read("config/env_config.local.py").startswith('SECRET_KEY = "dev-only"')
         before = install_hooks()

@@ -148,7 +148,7 @@ authoritative order):
 
 | Order | Plan phase | Issues | Depends on |
 |---|---|---|---|
-| 1 | Phase 1: trustworthy verdicts | #15 (done), #16, #17 | V0-1 (#14) |
+| 1 | Phase 1: trustworthy verdicts | #15 (done), #16 (done), #17 | V0-1 (#14, done) |
 | 2 | Phase 4: environment-aware contracts | #23, #24 | Phase 1 |
 | 3 | Phase 5: runtime verification | #25 | Phase 4 |
 | 4 | Phase 2: one project contract | #18, #19, #44 | V0-1 (#14) |

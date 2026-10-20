@@ -6,7 +6,6 @@ import yaml
 
 from ..core.exceptions import EnvShieldException
 from ._base import (
-    LITERAL_OPERATORS,
     BaseParser,
     Concrete,
     Forwarded,
@@ -239,24 +238,18 @@ class DockerComposeParser(BaseParser):
         """
         `key: value`'s (name, state). A value that is entirely one
         interpolation reference is Forwarded from the host variable it
-        names; anything else is the Concrete literal, under `key`.
+        names, and keyed under that variable; anything else is the
+        Concrete literal, under `key`.
 
-        A '${VAR}'/'${VAR-x}'/'${VAR:-x}' reference is keyed under VAR --
-        e.g. 'AUTHENTIK_POSTGRESQL__PASSWORD: ${PG_PASS}' is a schema-
+        E.g. 'AUTHENTIK_POSTGRESQL__PASSWORD: ${PG_PASS}' is a schema-
         relevant statement about PG_PASS, not about
         AUTHENTIK_POSTGRESQL__PASSWORD, which is purely a container-internal
-        rename. A LITERAL_OPERATORS reference stays under `key`, where v4.8.0 kept it
-        as literal text (legacy_text reproduces that text, so it must match
-        `value` exactly, surrounding whitespace included).
+        rename. Every operator is keyed the same way (BL-195).
         """
         match = _INTERPOLATION_RE.match(value.strip())
         if not match:
             return key, Concrete(value)
         var_name, operator, text = match.groups()
-        if operator in LITERAL_OPERATORS:
-            if value != value.strip():
-                return key, Concrete(value)
-            return key, Forwarded(var_name, operator, text)
         return var_name, Forwarded(var_name, operator, text)
 
 

@@ -1,7 +1,9 @@
 # envshield/tests/test_cli.py
 import json
 import os
+import re
 
+import pytest
 import toml
 from typer.testing import CliRunner
 
@@ -1720,8 +1722,9 @@ def test_check_json_reports_clean_state(tmp_path):
             "unverified": [],
         }
         assert summary["verdict"] == "valid"
-        # v2's invocation verdict is additive too.
+        # v2's invocation verdict and gate are additive too.
         assert payload.pop("verdict") == "valid"
+        assert payload.pop("gate") == {"result": "pass", "accepted": {}}
         assert payload == {
             "success": True,
             "results": [
@@ -1871,10 +1874,14 @@ def test_check_json_combined_key_reports_ambiguous_requiredif(tmp_path):
 
         result = runner.invoke(app, ["check", "--json"])
 
-        assert result.exit_code == 1
         payload = json.loads(result.stdout)
-        assert payload["success"] is False
+        # The v1 `combined` still names the conflict, but DEPENDENT is
+        # supplied and valid, so it's VALID whether or not it's required
+        # (evaluator-decisions.md D-9), and the gate passes (V1-3).
         assert "DEPENDENT" in payload["combined"]["app"]["ambiguous_requiredif"]
+        assert payload["verdict"] == "valid"
+        assert result.exit_code == 0
+        assert payload["success"] is True
 
 
 def test_check_json_combined_reports_false_clean_when_a_source_fails_to_load(tmp_path):
@@ -2672,7 +2679,7 @@ class TestRequiredIfTriggerEnvShieldCannotSee:
         assert code == 0
         assert var["sources"][0]["status"] == "not_required"
 
-    def test_union_verdict_with_a_placeholder_trigger_is_unchanged(self, tmp_path):
+    def test_union_with_a_placeholder_trigger_fails_the_gate(self, tmp_path):
         with runner.isolated_filesystem(temp_dir=tmp_path):
             with open(CONFIG_FILE_NAME, "w") as f:
                 f.write(
@@ -2689,8 +2696,168 @@ class TestRequiredIfTriggerEnvShieldCannotSee:
                 f.write(self._compose("${PAYMENTS}"))
             result = runner.invoke(app, ["check", "--json"])
         payload = json.loads(result.stdout)
-        assert result.exit_code == 0
-        assert payload["success"] is True
+        # The v1 `combined` is unchanged...
         combined = payload["combined"]["app"]
         assert combined["unresolved"] == [] and combined["missing"] == []
         assert combined.get("ambiguous_requiredif", {}) == {}
+        # ...but PAYMENTS is a host forward, so whether STRIPE_KEY is
+        # required is unknown, and that can't be accepted (V1-3).
+        reasons = {
+            f["variable"]: f["reason_code"] for f in payload["reports"][0]["unverified"]
+        }
+        assert reasons == {
+            "PAYMENTS": "host_forward",
+            "STRIPE_KEY": "ambiguous_requirement",
+        }
+        assert result.exit_code == 1
+        assert payload["success"] is False
+        assert payload["gate"]["result"] == "fail"
+
+
+class TestGate:
+    """V1-3 (#17): the exit code is the gate, and --accept-unverified."""
+
+    SCHEMA = '[DB]\ntype = "url"\n\n[TOKEN]\nsecret = true\n'
+    SECRET = (
+        "apiVersion: v1\nkind: Secret\nmetadata: {name: s}\n"
+        "stringData: {token: x}\n---\n"
+    )
+    POD = (
+        "apiVersion: v1\nkind: Pod\nmetadata: {name: p}\nspec:\n  containers:\n"
+        "  - name: app\n    image: x\n    env:\n"
+        "    - name: DB\n      valueFrom: {secretKeyRef: {name: ext, key: db}}\n"
+    )
+    TOKEN_IN_FILE = (
+        "    - name: TOKEN\n      valueFrom: {secretKeyRef: {name: s, key: token}}\n"
+    )
+
+    def _check(self, tmp_path, *args, k8s=None, schema=None):
+        files = {
+            CONFIG_FILE_NAME: "services:\n  app:\n    schema: env.schema.toml\n",
+            SCHEMA_FILE_NAME: schema if schema is not None else self.SCHEMA,
+            "k.yaml": k8s
+            if k8s is not None
+            else self.SECRET + self.POD + self.TOKEN_IN_FILE,
+        }
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            for path, content in files.items():
+                with open(path, "w") as f:
+                    f.write(content)
+            as_json = runner.invoke(app, ["check", "k.yaml", *args, "--json"])
+            human = runner.invoke(
+                app, ["check", "k.yaml", *args], env={"COLUMNS": "200"}
+            )
+        assert as_json.exit_code == human.exit_code
+        payload = json.loads(as_json.stdout) if as_json.exit_code != 2 else None
+        # CI forces color, and Rich styles option names: compare plain text.
+        output = re.sub(r"\x1b\[[0-9;]*m", "", human.stdout + (human.stderr or ""))
+        return as_json.exit_code, payload, output
+
+    def test_scenario_5_an_external_secret(self, tmp_path):
+        k8s = self.POD
+        schema = '[DB]\ntype = "url"\n'
+        code, payload, human = self._check(tmp_path, k8s=k8s, schema=schema)
+        assert (code, payload["verdict"], payload["success"]) == (
+            1,
+            "unverified",
+            False,
+        )
+        assert payload["gate"] == {"result": "fail", "accepted": {}}
+        assert "VALID:" not in human and "COULD NOT VERIFY" in human
+        assert "--accept-unverified=external_reference" in human
+
+        code, payload, human = self._check(
+            tmp_path, "--accept-unverified=external_reference", k8s=k8s, schema=schema
+        )
+        assert code == 0
+        assert payload["verdict"] == "unverified"
+        assert payload["reports"][0]["summary"]["verdict"] == "unverified"
+        assert payload["success"] is False
+        assert payload["gate"] == {
+            "result": "pass",
+            "accepted": {"external_reference": ["DB"]},
+        }
+        assert "? DB" in human and "VALID:" not in human
+        assert "PASSED WITH UNVERIFIED VALUES (accepted: external_reference)." in human
+
+    def test_partial_acceptance_fails(self, tmp_path):
+        # DB is external_reference, TOKEN value_not_inspected.
+        code, payload, _ = self._check(
+            tmp_path, "--accept-unverified=external_reference"
+        )
+        assert code == 1
+        assert payload["gate"] == {
+            "result": "fail",
+            "accepted": {"external_reference": ["DB"]},
+        }
+
+    def test_accepting_the_wrong_reason_fails(self, tmp_path):
+        code, payload, _ = self._check(
+            tmp_path,
+            "--accept-unverified=host_forward",
+            k8s=self.POD,
+            schema='[DB]\ntype = "url"\n',
+        )
+        assert code == 1 and payload["gate"]["result"] == "fail"
+
+    def test_every_reason_accepted_passes_comma_or_repeated(self, tmp_path):
+        for args in (
+            ["--accept-unverified=external_reference,value_not_inspected"],
+            [
+                "--accept-unverified=external_reference",
+                "--accept-unverified",
+                "value_not_inspected",
+            ],
+        ):
+            code, payload, _ = self._check(tmp_path, *args)
+            assert code == 0, args
+            assert payload["gate"]["accepted"] == {
+                "external_reference": ["DB"],
+                "value_not_inspected": ["TOKEN"],
+            }
+
+    def test_valid_passes_and_success_is_true(self, tmp_path):
+        k8s = self.POD.replace(
+            "valueFrom: {secretKeyRef: {name: ext, key: db}}", "value: http://x"
+        )
+        code, payload, human = self._check(
+            tmp_path, k8s=k8s, schema='[DB]\ntype = "url"\n'
+        )
+        assert (code, payload["verdict"], payload["success"]) == (0, "valid", True)
+        assert payload["gate"] == {"result": "pass", "accepted": {}}
+        assert "PASSED WITH" not in human and "FAILED" not in human
+
+    def test_invalid_fails_even_with_every_reason_accepted(self, tmp_path):
+        all_three = (
+            "--accept-unverified=host_forward,external_reference,value_not_inspected"
+        )
+        schema = self.SCHEMA + '\n[MISSING]\ndescription = "m"\n'
+        code, payload, human = self._check(tmp_path, all_three, schema=schema)
+        assert (code, payload["verdict"], payload["success"]) == (1, "invalid", False)
+        assert payload["gate"]["result"] == "fail"
+        assert "PASSED WITH" not in human
+
+    def test_error_fails_even_with_every_reason_accepted(self, tmp_path):
+        all_three = (
+            "--accept-unverified=host_forward,external_reference,value_not_inspected"
+        )
+        code, payload, _ = self._check(tmp_path, all_three, schema="[DB\n")
+        assert (code, payload["verdict"], payload["success"]) == (1, "error", False)
+        assert payload["gate"]["result"] == "fail"
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "nope",
+            "ambiguous_requirement",
+            "contract_error",
+            "missing",
+            "all",
+            "",
+            "host_forward,all",
+        ],
+    )
+    def test_a_reason_outside_the_closed_set_is_a_usage_error(self, tmp_path, value):
+        code, _, output = self._check(tmp_path, f"--accept-unverified={value}")
+        assert code == 2
+        assert "--accept-unverified" in output

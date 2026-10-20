@@ -156,7 +156,7 @@
       "success": false
     },
     "json_exit": 1,
-    "text": "\nValidating .env against schema...\n  \u2713 A   valid\n  \u2713 B   valid\n\nValidating k8s.yml against schema...\nCould not verify\n  ? B   Secret 'external-secret' is defined outside this manifest and may supply it (external_reference)\n  \u2713 A   valid\n\nCOULD NOT VERIFY: 1 could not be verified, 1 valid.\n",
+    "text": "\nValidating .env against schema...\n  \u2713 A   valid\n  \u2713 B   valid\n\nValidating k8s.yml against schema...\nCould not verify\n  ? B   Secret 'external-secret' is defined outside this manifest and may supply it (external_reference)\n  \u2713 A   valid\n\nCOULD NOT VERIFY: 1 could not be verified, 1 valid.\n\nFAILED: some values could not be verified (external_reference).\nIf that's expected, rerun with --accept-unverified=external_reference.\n",
     "text_exit": 1
   },
   "local_file_missing": {

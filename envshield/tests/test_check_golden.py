@@ -22,7 +22,7 @@ GOLDEN_PATH = os.path.join(os.path.dirname(__file__), "fixtures", "check_golden.
 # 'reports' is the evaluator's addition (evaluator-decisions.md D-5), and
 # 'verdict' v5's invocation verdict (V1-2); every other key is the
 # pre-evaluator contract.
-NEW_JSON_KEYS = ("reports", "verdict")
+NEW_JSON_KEYS = ("reports", "verdict", "gate")
 
 
 def _materialize(files):

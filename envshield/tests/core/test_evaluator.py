@@ -542,13 +542,14 @@ K8S_POD = (
 )
 
 
-def _check(tmp_path, files, file=None):
+def _check(tmp_path, files, file=None, accept=()):
     from envshield.cli import app
 
+    args = ["check"] + ([file] if file else []) + list(accept)
     with runner.isolated_filesystem(temp_dir=tmp_path):
         _materialize(files)
-        result = runner.invoke(app, ["check"] + ([file] if file else []) + ["--json"])
-        human = runner.invoke(app, ["check"] + ([file] if file else []))
+        result = runner.invoke(app, args + ["--json"])
+        human = runner.invoke(app, args)
     payload = json.loads(result.stdout)
     return result.exit_code, payload, human.stdout
 
@@ -562,8 +563,15 @@ def _port(payload):
 class TestValuesEnvShieldNeverSaw:
     """
     R0-5 (F1, F2, F4, F7): a value EnvShield didn't inspect is never reported
-    valid. The report changes; the gate (exit code, success, results) doesn't.
+    valid. Since V1-3 (#17) it fails the gate too, unless its reason is
+    accepted; the v1 `results` keep their v4.8.0 meaning.
     """
+
+    REASON = {
+        "k8s_external_secret": "external_reference",
+        "k8s_external_configmap": "external_reference",
+        "k8s_same_file_secret": "value_not_inspected",
+    }
 
     MANIFESTS = {
         "k8s_external_secret": (
@@ -607,7 +615,7 @@ class TestValuesEnvShieldNeverSaw:
     }
 
     @pytest.mark.parametrize("name", sorted(MANIFESTS))
-    def test_reported_unverified_and_the_gate_is_unchanged(self, tmp_path, name):
+    def test_reported_unverified_and_the_gate_fails(self, tmp_path, name):
         path, content = self.MANIFESTS[name]
         files = {"envshield.yml": ONE_SERVICE, "env.schema.toml": PORT_SCHEMA}
         files[path] = content
@@ -617,13 +625,44 @@ class TestValuesEnvShieldNeverSaw:
         assert var["valid"] is None
         assert var["sources"][0]["status"] == "not_visible"
         assert summary["unverified"] == ["PORT"]
-        # The v4 gate is unchanged: these values still pass.
-        assert code == 0
-        assert payload["success"] is True
-        assert payload["results"][0]["clean"] is True
+        assert payload["verdict"] == "unverified"
+        assert code == 1
+        assert payload["success"] is False
+        assert payload["gate"] == {"result": "fail", "accepted": {}}
+        assert payload["results"][0]["clean"] is True  # v1 meaning kept
         assert "perfectly in sync" not in human
         assert "PORT" in human
         assert "notanumber" not in human + json.dumps(payload)
+
+    @pytest.mark.parametrize("name", sorted(MANIFESTS))
+    def test_accepting_its_reason_passes_the_gate_only(self, tmp_path, name):
+        path, content = self.MANIFESTS[name]
+        reason = self.REASON.get(name, "host_forward")
+        files = {"envshield.yml": ONE_SERVICE, "env.schema.toml": PORT_SCHEMA}
+        files[path] = content
+        code, payload, human = _check(
+            tmp_path, files, file=path, accept=[f"--accept-unverified={reason}"]
+        )
+
+        assert code == 0
+        assert payload["verdict"] == "unverified"  # unchanged
+        assert payload["success"] is False  # strict
+        assert payload["gate"] == {"result": "pass", "accepted": {reason: ["PORT"]}}
+        assert "PASSED WITH UNVERIFIED VALUES" in human
+        assert "COULD NOT VERIFY" in human and "VALID:" not in human
+
+        others = [
+            r
+            for r in ("host_forward", "external_reference", "value_not_inspected")
+            if r != reason
+        ]
+        code, payload, _ = _check(
+            tmp_path,
+            files,
+            file=path,
+            accept=[f"--accept-unverified={','.join(others)}"],
+        )
+        assert code == 1 and payload["gate"]["result"] == "fail"
 
     def test_an_invalid_fallback_still_fails(self, tmp_path):
         files = {
@@ -678,5 +717,6 @@ class TestValuesEnvShieldNeverSaw:
         assert statuses["docker-compose.yml"] == "not_visible"
         assert var["valid"] is None
         assert summary["unverified"] == ["PORT"]
-        # Union pass/fail is unchanged.
-        assert code == 0 and payload["success"] is True
+        # The union can't verify PORT, so the gate fails (V1-3).
+        assert payload["verdict"] == "unverified"
+        assert code == 1 and payload["success"] is False
