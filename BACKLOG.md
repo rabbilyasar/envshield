@@ -1916,6 +1916,28 @@ Source: the #68 differential, where it showed up as a spurious difference.
 - **Current behavior:** a Secret's `data`/`stringData` keys are collected into a `set`; an `envFrom` `secretRef` to it iterates that set, so `envshield import k8s.yml` orders those variables by string hash, which changes between Python processes.
 - **Expected behavior:** the same manifest always produces the same schema (manifest order, or sorted).
 - **Decision:** open; one `sorted()` or a dict would fix it. Not in #68's scope.
+
+### BL-201 — Real product repos can't get a clean local `check`: per-environment rules live only in descriptions
+
+Type: `PRODUCT EVIDENCE` / `LIMITATION` · Evidence: `CONFIRMED` (live, 2026-10-21: read-only `check --json` on local clones with `envshield==4.9.1` and `main` `7fa590b`; same exit and findings on both) · Priority: **P2** (no false-clean; the documented agent loop "run `check --json` clean before a PR" can't be followed) · Status: **open — `requiredIn` part planned in V4-1 ([#23](https://github.com/rabbilyasar/envshield/issues/23)); "must not be set" part proposed as [#71](https://github.com/rabbilyasar/envshield/issues/71)**
+Component: contract (`env.schema.toml` semantics), `check`
+Source: the maintainer asked (2026-10-21) that EnvShield fit how their product team works: agents write most code and must run `undeclared --json` and `check --json` clean before a PR, deploys go through staging, `doctor` runs in reconciliation.
+
+- **Current behavior:** KemonChilo's local `check` is INVALID on 8 `missing` variables that its own schema descriptions say don't belong in a developer's `.env`. They fall into four kinds:
+  - build identity set by the deploy script (`GIT_SHA`, `GIT_REF`, `BUILD_TIME`: "Never in .env");
+  - production/staging only (`WORKER_HEARTBEAT_URL`: "Unset = no ping (development)"; `KEMONCHILO_ENV`: unset means development);
+  - set by the runtime, never by hand (`NODE_ENV`, `NEXT_RUNTIME`);
+  - local testing only (`RECOVERY_TIMING_SCALE`: "Leave unset everywhere real").
+  JossJobs is INVALID on one `extra` (`TELEGRAM_WEBHOOK_SECRET`, in `.env` but not the schema: that repo's own drift, not an EnvShield bug).
+- **Expected behavior:** the contract can say where a variable is required, so the local check is clean and staging/production checks still require it. Some variables must *not* be set in an environment (`RECOVERY_TIMING_SCALE` in production), and the plan has no field for that.
+- **Other observations:**
+  - None of these repos has a Compose or Kubernetes manifest. They deploy with scripts and env files, so `check --runtime` (V5-1, #25) is their deployment check, not a manifest check.
+  - The variables the runtime sets (`NODE_ENV`, `NEXT_RUNTIME`) can already be declared `required = false` today.
+- **Relationships:** V4-1 (#23, `requiredIn`), V5-1 (#25), #42/#63 (the agent loop), `BL-175`–`BL-188` (the 2026-10-14 trial).
+- **Decision (2026-10-21, maintainer):**
+  - CLI consolidation and the agent recipe (#42, #45, #63) move ahead of V2 in the v5 order (ROADMAP.md, v5-decisions.md).
+  - V4-1 uses this schema shape as an acceptance model.
+  - "Must not be set in E" is recorded and proposed as #71, not added to V4: the application already refuses that value at startup, so it isn't urgent.
 ---
 
 ## Part 7 — Performance / Scalability (research, not yet benchmarked)

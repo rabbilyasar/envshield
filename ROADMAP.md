@@ -104,14 +104,7 @@ issue.
    environment it runs in, so a deploy missing a required variable fails at
    that step instead of at startup.
    ([#25](https://github.com/rabbilyasar/envshield/issues/25))
-6. **One project contract** — one schema for the whole project by default,
-   which `init` and the service commands add to. `init` builds the first
-   contract from what the code actually reads, the manifests that deploy
-   it and the services it finds, and never invents a requirement.
-   ([#18](https://github.com/rabbilyasar/envshield/issues/18),
-   [#19](https://github.com/rabbilyasar/envshield/issues/19),
-   [#44](https://github.com/rabbilyasar/envshield/issues/44))
-7. **A smaller, consistent CLI** — overlapping commands folded into
+6. **A smaller, consistent CLI** — overlapping commands folded into
    `check` (`undeclared` becomes `check --since`; `scan` keeps only secret
    detection), with the old forms kept working through v5; the same answer
    in a terminal and in CI; output that stays readable in CI logs; the
@@ -122,6 +115,13 @@ issue.
    ([#42](https://github.com/rabbilyasar/envshield/issues/42),
    [#45](https://github.com/rabbilyasar/envshield/issues/45),
    [#63](https://github.com/rabbilyasar/envshield/issues/63))
+7. **One project contract** — one schema for the whole project by default,
+   which `init` and the service commands add to. `init` builds the first
+   contract from what the code actually reads, the manifests that deploy
+   it and the services it finds, and never invents a requirement.
+   ([#18](https://github.com/rabbilyasar/envshield/issues/18),
+   [#19](https://github.com/rabbilyasar/envshield/issues/19),
+   [#44](https://github.com/rabbilyasar/envshield/issues/44))
 8. **Onboarding that works with your vault** — `setup` reports exactly what
    is ready, what needs access and what you must set yourself, never hangs
    without a terminal, and never overwrites a value without asking. Secret
@@ -151,11 +151,21 @@ authoritative order):
 | 1 | Phase 1: trustworthy verdicts | #15, #16, #17 (done), #68 | V0-1 (#14, done) |
 | 2 | Phase 4: environment-aware contracts | #23, #24 | Phase 1 |
 | 3 | Phase 5: runtime verification | #25 | Phase 4 |
-| 4 | Phase 2: one project contract | #18, #19, #44 | V0-1 (#14) |
-| 5 | CLI consolidation (V0-2b, V6-2, V6-3) | #42, #45, #63 | Phase 1 |
+| 4 | CLI consolidation (V0-2b, V6-2, V6-3) | #42, #45, #63 | Phase 1; #63 after #42 |
+| 5 | Phase 2: one project contract | #18, #19, #44 | V0-1 (#14) |
 | 6 | Phase 3: onboarding with your vault | #20, #21, #22 (back in planning, A2) | Phase 2 (soft) |
 | 7 | Phase 6: migration | #26 | Phase 2 |
 | 8 | Phase 7: acceptance, documentation, release | #27, #46, #28, #29 | all of the above |
+
+**Order changed 2026-10-21** (maintainer decision, amending A3's order):
+CLI consolidation and the agent recipe moved ahead of the one project
+contract. Running EnvShield on the maintainer's own product repositories
+showed that their agents can't yet follow the documented "run `check --json`
+before a PR" loop: per-environment requirements (Phase 4) and one command
+with a hook recipe (#42, #63) are what that loop needs first. The repos
+deploy with scripts and env files rather than manifests, which also puts
+the runtime check (Phase 5) ahead of more manifest work. `BL-201` records
+the evidence.
 
 Intermediate phases merge to `main` and aren't released alone; v5.0.0 ships
 after Phase 7. Decisions behind each phase:

@@ -26,6 +26,9 @@ that's where the `requiredIf` + `defaultValue` change (Q3) is implemented.
 section is the authoritative order. It was written with A3 on 2026-10-14
 and differs from A3's wording in one place: it puts the CLI work (V0-2b #42,
 V6-2 #45, and since 2026-10-19 V6-3 #63) before onboarding (V3).
+**2026-10-21, maintainer decision:** that CLI work also moves ahead of V2
+(one contract). The order is now V1 → V4 → V5 → CLI consolidation (#42,
+#45, #63) → V2 → V3 → V6 → V7. The evidence is in BACKLOG.md's `BL-201`.
 
 ## Decision record (plan §20)
 
