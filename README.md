@@ -109,14 +109,15 @@ What each field actually means:
 | `pattern` | A regex the value must also match, e.g. `pattern = "^v\\d+\\.\\d+\\.\\d+$"`. |
 | `secret` | Marks the variable sensitive — masked input in `setup`, masked in generated code. `import` auto-suggests it from the variable's name/value; it never overwrites a `secret` value you've already committed. |
 | `defaultValue` | What `setup` writes automatically (and `.env.example` and generated code show). A default never makes a variable optional: it still has to be explicitly present in your local file — `check`/`doctor` name the default inline so a missing one is obvious. |
-| `required` | Optional. `required = false` makes a variable optional: it may be absent or blank, but a value that is set must still be valid. `required = true` is the default. Can't be combined with `requiredIf`. |
+| `required` | Optional. `required = false` makes a variable optional: it may be absent or blank, but a value that is set must still be valid. `required = true` is the default. |
+| `requiredIn` | Optional. A list of environments where the variable is required, e.g. `["staging", "production"]`; it's optional everywhere else (see Environments, below). |
 | `description` | Shown in `setup`, copied into generated code. |
 
-Requiredness: every variable is required unless `required = false`, or `requiredIf` makes it conditional (see below). Any other key, or an unknown `type`, is an error — a typo like `default = "8000"` is reported (`did you mean 'defaultValue'?`) instead of silently ignored.
+Requiredness: every variable is required unless `required = false`, `requiredIn` limits it to some environments, or `requiredIf` makes it conditional (see below). A variable sets at most one of the three. A `defaultValue` never changes whether a variable is required. Any other key, or an unknown `type`, is an error — a typo like `default = "8000"` is reported (`did you mean 'defaultValue'?`) instead of silently ignored.
 
 ### Conditional requirements (`requiredIf`)
 
-A variable that's only relevant behind a feature flag doesn't need to be required unconditionally. `requiredIf = { var = "OTHER_VAR", equals = "some value" }` makes a field required only when that condition holds — with no `defaultValue` and no `requiredIf`, a variable stays required unconditionally, exactly as before this existed:
+A variable that's only relevant behind a feature flag doesn't need to be required unconditionally. `requiredIf = { var = "OTHER_VAR", equals = "some value" }` makes a field required only when that condition holds, with or without a `defaultValue`. Without `requiredIf`, a variable stays required unconditionally:
 
 ```toml
 [PAYMENTS_ENABLED]
@@ -168,6 +169,26 @@ INVALID: 2 invalid, 1 valid.
 ```
 
 Every variable gets one verdict: valid, invalid, could not verify, not required, or error. `check` never calls a value valid unless it read it. A manifest often only *points* at a value (a Kubernetes Secret, a Compose `${VAR}` from the deploy host), so those variables are "could not verify", and `check` exits 1. When that's expected, accept the specific reason: `envshield check k8s/prod.yaml --accept-unverified=external_reference` exits 0, still lists every unverified variable, and ends with `PASSED WITH UNVERIFIED VALUES`. The reasons you can accept are `host_forward`, `external_reference` and `value_not_inspected`. In `--json`, `success` stays `false` for an accepted run.
+
+**Environments.** A variable can be optional on a laptop and required in production. Declare the environments in `envshield.yml` and say where each variable is required:
+
+```yaml
+# envshield.yml
+environments: [staging, production]   # `local` is built in
+manifests:
+  - file: k8s/production.yaml
+    environment: production
+    containers: {api: api}
+```
+
+```toml
+# env.schema.toml
+[GIT_SHA]
+description = "Set by the deploy script; never in .env."
+requiredIn = ["staging", "production"]
+```
+
+Plain `envshield check` judges your local file (and untagged manifests) by `local`'s requirements, so `GIT_SHA` isn't needed there. `envshield check --env production` (or `ENVSHIELD_ENV=production`) checks the manifests tagged `production` against production's requirements. `envshield check deploy/production.env --env production` checks one env file the same way. A variable sets at most one of `required`, `requiredIn` or `requiredIf`.
 
 **`envshield setup`** — interactive onboarding: fills in whatever's missing, blank, or now-invalid in your local file, prompting with each variable's description.
 

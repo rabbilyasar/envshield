@@ -95,6 +95,7 @@ def evaluate_source(
     environment: Optional[Mapping[str, str]] = None,
     kind: str = "local_file",
     union: bool = False,
+    env: str = schema_types.LOCAL,
 ) -> SourceEvaluation:
     """
     Evaluates one source against `service_name`'s contract.
@@ -102,7 +103,8 @@ def evaluate_source(
     `schema` is the service's effective schema, loaded here if omitted.
     `paths` is a manifest's ordered layer files (BL-025); omitted, the file
     is parsed alone. `environment`, when given, is laid over a non-manifest
-    source (D-3). Every failure is captured in the result, never raised.
+    source (D-3). Requiredness is judged for environment `env` (plan §7).
+    Every failure is captured in the result, never raised.
     """
     source = SourceEvaluation(
         kind=kind, path=file_path, service=service_name, container=container
@@ -151,7 +153,7 @@ def evaluate_source(
 
     # Overlaid names are Concrete now, so never among these.
     source.not_inspected = tuple(sorted(not_inspected_names(local_values)))
-    diff = schema_manager.diff_against_schema(schema, local_values)
+    diff = schema_manager.diff_against_schema(schema, local_values, env)
     # An undeclared requiredIf trigger taken from the environment decides
     # requiredness only; it isn't this file's extra variable.
     diff.extra -= set(source.overlaid) - file_names
@@ -171,9 +173,10 @@ def evaluate_source(
         diff.out_of_scope,
         union=union,
         manifest=parser.is_deployment_manifest,
+        env=env,
     )
     source.needs = {
-        name: verdicts.requirement(details, local_values)
+        name: verdicts.requirement(details, local_values, env)
         for name, details in schema.items()
     }
     source.unbound = local_values.unbound
@@ -287,6 +290,8 @@ class ServiceEvaluation:
     error: Optional[str] = None
     explicit_file: bool = False
     process_environment: bool = False
+    # The environment requiredness is judged for (plan §7).
+    env: str = schema_types.LOCAL
     # None: not evaluated (explicit file, or the contract didn't load).
     code: Optional[CodeReferences] = None
 
@@ -342,7 +347,7 @@ class ServiceEvaluation:
         if self.is_union or name not in fields:
             return None
         if source.status == "missing":
-            need = verdicts.requirement(fields[name], ValueStates())
+            need = verdicts.requirement(fields[name], ValueStates(), self.env)
             return verdicts.judge_variable(
                 fields[name], None, need, missing_file=source.path
             )
@@ -446,22 +451,30 @@ def evaluate_service(
     container: Optional[str] = None,
     environment: Optional[Mapping[str, str]] = None,
     code: bool = False,
+    env: str = schema_types.LOCAL,
 ) -> ServiceEvaluation:
     """
-    Evaluates one service the way 'check' always has: its local file (or
-    the explicit `file`), then -- only without an explicit file -- every
-    registered deployment manifest, then the union verdict if the service
-    opted into `completeness: union`. With `code`, and no explicit file,
-    also the service's code references (D-7).
+    Evaluates one service in environment `env` (plan §7). In 'local', the
+    way 'check' always has: its local file (or the explicit `file`), then
+    -- only without an explicit file -- every untagged (or 'local'-tagged)
+    deployment manifest, then the union verdict if the service opted into
+    `completeness: union`. In another environment, only the manifests
+    tagged with it (or the explicit `file`), judged by its requirements;
+    none is an error, never a pass. With `code`, and no explicit file, also
+    the service's code references (D-7).
     """
+    local = env == schema_types.LOCAL
     evaluation = ServiceEvaluation(
         service=service_name,
         explicit_file=bool(file),
         process_environment=environment is not None,
+        env=env,
     )
-    # Outside the try, exactly as 'check' always resolved it.
+    # Outside the try, exactly as 'check' always resolved it. Union mode is
+    # a local-file-plus-manifests rule: 'local' only.
     evaluation.is_union = (
-        not file
+        local
+        and not file
         and config_manager.get_service_completeness_mode(service_name) == "union"
     )
     try:
@@ -487,14 +500,27 @@ def evaluate_service(
                     error_reason="contract_error",
                 )
             return evaluate_source(
-                path, service_name, schema=schema, union=evaluation.is_union, **kwargs
+                path,
+                service_name,
+                schema=schema,
+                union=evaluation.is_union,
+                env=env,
+                **kwargs,
             )
 
-        evaluation.sources.append(
-            _evaluate(resolved_file, container=container, environment=environment)
-        )
+        if local or file:
+            evaluation.sources.append(
+                _evaluate(resolved_file, container=container, environment=environment)
+            )
         if not file:
-            for manifest in config_manager.get_deployment_manifests(service_name):
+            manifests = config_manager.manifests_for_environment(service_name, env)
+            if not manifests and not local:
+                raise EnvShieldException(
+                    f"No deployment manifest for '{service_name}' is tagged "
+                    f"'{env}', so there is nothing to check in {env}. Tag one "
+                    f"with 'environment: {env}' under 'manifests:' in envshield.yml."
+                )
+            for manifest in manifests:
                 evaluation.sources.append(
                     _evaluate(
                         manifest["path"],
@@ -664,7 +690,9 @@ def build_report(evaluation: ServiceEvaluation) -> Dict[str, Any]:
             entry.update(
                 {
                     "secret": bool(field_schema.get("secret", False)),
-                    "requiredness": schema_types.requiredness_label(field_schema),
+                    "requiredness": schema_types.requiredness_label(
+                        field_schema, evaluation.env
+                    ),
                     "present": present,
                     "valid": valid,
                     "reason": (invalid_reasons or trigger_reasons or [None])[0],
@@ -700,6 +728,7 @@ def build_report(evaluation: ServiceEvaluation) -> Dict[str, Any]:
     return {
         "report_version": REPORT_VERSION,
         "service": evaluation.service,
+        "environment": evaluation.env,
         "sources": sources,
         "variables": variables,
         "union": evaluation.legacy_combined(),

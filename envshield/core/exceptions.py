@@ -244,3 +244,19 @@ class FileContractConflictError(EnvShieldException):
             "in envshield.yml)."
         )
         super().__init__(self.message)
+
+
+class UnknownEnvironmentError(EnvShieldException):
+    """
+    `--env` or ENVSHIELD_ENV names an environment envshield.yml doesn't
+    declare (plan §7). A usage error: the message lists the declared names.
+    """
+
+    def __init__(self, name: str, declared: list):
+        self.name = name
+        self.declared = declared
+        self.message = (
+            f"Unknown environment '{name}'. Declared: {', '.join(declared)} "
+            "(add others under 'environments:' in envshield.yml)."
+        )
+        super().__init__(self.message)

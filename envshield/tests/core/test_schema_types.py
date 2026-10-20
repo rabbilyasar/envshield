@@ -354,8 +354,8 @@ class TestNormalizeDefaultValue:
         ({}, "always"),
         ({"defaultValue": "1"}, "always"),
         ({"requiredIf": {"var": "F"}}, "conditional"),
-        # Legacy precedence: a default wins over requiredIf.
-        ({"requiredIf": {"var": "F"}, "defaultValue": "1"}, "always"),
+        # v5 (V4-1, #23): a default no longer wins over requiredIf.
+        ({"requiredIf": {"var": "F"}, "defaultValue": "1"}, "conditional"),
         ({"required": True}, "always"),
         ({"required": True, "defaultValue": "1"}, "always"),
         ({"required": False}, "never"),
@@ -364,6 +364,46 @@ class TestNormalizeDefaultValue:
 )
 def test_presence_rule(field, expected):
     assert schema_types.presence_rule(field) == expected
+
+
+# Plan §7 / #23: required in environment E, for every schema form, with and
+# without a default. "if" = the requiredIf decides.
+_ENVS = ("local", "staging", "production")
+REQUIREDNESS = [
+    ({}, ("always", "always", "always")),
+    ({"required": True}, ("always", "always", "always")),
+    ({"required": False}, ("never", "never", "never")),
+    ({"requiredIn": ["production"]}, ("never", "never", "always")),
+    ({"requiredIn": ["staging", "production"]}, ("never", "always", "always")),
+    ({"requiredIn": []}, ("never", "never", "never")),
+    ({"requiredIf": {"var": "F", "equals": "on"}}, ("if", "if", "if")),
+]
+
+
+@pytest.mark.parametrize("default", [False, True])
+@pytest.mark.parametrize("field, expected", REQUIREDNESS)
+def test_requiredness_in_each_environment(field, expected, default):
+    field = {**field, **({"defaultValue": "1"} if default else {})}
+    for env, want in zip(_ENVS, expected):
+        rule = schema_types.presence_rule(field, env)
+        assert rule == ("conditional" if want == "if" else want), (field, env)
+
+
+@pytest.mark.parametrize(
+    "values, required",
+    [({"F": "on"}, True), ({"F": "off"}, False), ({"F": ""}, False), ({}, False)],
+)
+@pytest.mark.parametrize("default", [False, True])
+@pytest.mark.parametrize("env", _ENVS)
+def test_a_requiredif_is_decided_by_its_trigger_in_every_environment(
+    values, required, default, env
+):
+    """Holds, doesn't hold, empty (a concrete "" compares normally) and
+    absent. An unseen trigger is ambiguous: test_verdicts covers it."""
+    field = {"requiredIf": {"var": "F", "equals": "on"}}
+    if default:
+        field["defaultValue"] = "1"
+    assert schema_types.should_be_present(field, values, env) is required
 
 
 def test_a_default_never_makes_a_field_optional_for_check():
@@ -408,8 +448,21 @@ def test_required_true_is_prompted_unless_defaulted():
         (
             "PORT",
             {"required": True, "requiredIf": {"var": "F"}},
-            "sets both 'required' and 'requiredIf'",
+            "sets 'required' and 'requiredIf'",
         ),
+        (
+            "PORT",
+            {"required": True, "requiredIn": ["production"]},
+            "sets 'required' and 'requiredIn'",
+        ),
+        (
+            "PORT",
+            {"requiredIn": ["production"], "requiredIf": {"var": "F"}},
+            "sets 'requiredIn' and 'requiredIf'",
+        ),
+        ("PORT", {"requiredIn": "production"}, "requiredIn must be a list"),
+        ("PORT", {"requiredIn": ["Prod"]}, "requiredIn must be a list"),
+        ("PORT", {"requiredIn": [1]}, "requiredIn must be a list"),
         ("BAD-NAME", {}, "is not a valid variable name"),
         ("PORT", "8000", "must be a table"),
     ],

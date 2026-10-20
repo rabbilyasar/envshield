@@ -213,6 +213,7 @@ def trigger_reason(trigger: str) -> str:
 def diff_against_schema(
     schema: Dict[str, Any],
     local_values: Mapping[str, Union[str, ValueState]],
+    env: str = schema_types.LOCAL,
 ) -> SchemaDiff:
     """
     Compares `local_values` (as read from a .env file, a deployment
@@ -258,13 +259,13 @@ def diff_against_schema(
     schema_vars_required = {
         key
         for key, details in schema.items()
-        if schema_types.should_be_present(details, text)
+        if schema_types.should_be_present(details, text, env)
     }
 
     opaque = not_inspected_names(states)
     unresolved_triggers: Dict[str, str] = {}
     for key, details in schema.items():
-        if schema_types.presence_rule(details) != "conditional":
+        if schema_types.presence_rule(details, env) != "conditional":
             continue
         condition = details.get("requiredIf")
         trigger = condition.get("var") if isinstance(condition, dict) else None
@@ -981,6 +982,11 @@ def sync_schema(service_name: str) -> bool:
         condition_text = schema_types.requiredif_condition_text(details, schema)
         if condition_text:
             annotations.append(f"required if {condition_text}")
+        elif "requiredIn" in details:
+            listed = ", ".join(details["requiredIn"] or [])
+            annotations.append(
+                f"required in {listed}" if listed else "optional everywhere"
+            )
         elif schema_types.presence_rule(details) == "never":
             annotations.append("optional")
         if annotations:

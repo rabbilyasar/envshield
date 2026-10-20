@@ -1169,12 +1169,13 @@ Component: `README.md` ("For AI coding agents"), docs, website
 
 ### BL-187 — kemonchilo, the v5 reference project, permanently fails `check` in v4.8.0
 
-Type: `PRODUCT` · Evidence: `CONFIRMED` (real-repo trial, 2026-10-14) · Priority: decision input for V4-1 · Status: **open, expected to be resolved by V4-1**
+Type: `PRODUCT` · Evidence: `CONFIRMED` (real-repo trial, 2026-10-14) · Priority: decision input for V4-1 · Status: **fixed by V4-1 ([#23](https://github.com/rabbilyasar/envshield/issues/23), branch, unmerged)**
 Component: requiredness model (no environment dimension)
 
 - **Current behavior:** `check` and `doctor` exit 1 on kemonchilo's own `.env` for `BUILD_TIME`, `GIT_REF`, `GIT_SHA`, `KEMONCHILO_ENV`, `NEXT_RUNTIME`, `NODE_ENV` and `RECOVERY_TIMING_SCALE`, all marked required. Most are injected by the build, platform or test runner, not by a developer's `.env`. The only ways to go green are adding fake local values or making them optional everywhere.
 - **Impact:** a check that is always red teaches the team to ignore it. This is the strongest real-world evidence for V4-1's `requiredIn`.
 - **Relationships:** V4-1 (#23); its acceptance should include kemonchilo going green locally while those variables stay required in production.
+- **Fix (V4-1, #23, 2026-10-21):** `requiredIn` and `environments:` (evaluator-decisions.md D-11). With the deploy-injected variables declared `requiredIn = ["staging", "production"]` (or `["production"]`) and the runtime-set ones `required = false`, kemonchilo's local `check` is VALID, while `check production.env --env production` still reports `BUILD_TIME`, `GIT_SHA` and `WORKER_HEARTBEAT_URL` missing. Test: `test_environments.py::test_kemonchilo_is_green_locally_and_still_strict_in_production`. The kemonchilo repo itself still needs its schema updated, in that repo, once a release ships this.
 
 ---
 - **Issue:** V4-1 [#23](https://github.com/rabbilyasar/envshield/issues/23) (comment).

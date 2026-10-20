@@ -147,7 +147,9 @@ def _manifest_references(
     return references
 
 
-def _describe_field(field_schema: Dict[str, Any]) -> Dict[str, Any]:
+def _describe_field(
+    field_schema: Dict[str, Any], env: str = schema_types.LOCAL
+) -> Dict[str, Any]:
     """
     The schema-declarative facts about one field -- never evaluated
     against any ambient local values (that's 'check'/'doctor's job,
@@ -155,9 +157,10 @@ def _describe_field(field_schema: Dict[str, Any]) -> Dict[str, Any]:
     schema_types.requiredness_label: 'required' (must be present in the
     file -- a defaultValue doesn't change that, it's only what 'setup'
     fills in), 'conditional' (its requiredIf decides), or 'optional'
-    ('required = false') -- describing the contract, not resolving it.
+    ('required = false', or a `requiredIn` that omits `env`) -- describing
+    the contract in environment `env`, not resolving it.
     """
-    requiredness = schema_types.requiredness_label(field_schema)
+    requiredness = schema_types.requiredness_label(field_schema, env)
 
     is_secret = bool(field_schema.get("secret", False))
     # A secret field's default is never surfaced here, even though
@@ -167,7 +170,7 @@ def _describe_field(field_schema: Dict[str, Any]) -> Dict[str, Any]:
     # above still reflects a default's presence without echoing its value.
     default_value = None if is_secret else field_schema.get("defaultValue")
 
-    return {
+    described = {
         "type": schema_types.resolve_field_type(field_schema),
         "requiredness": requiredness,
         "requiredIf": field_schema.get("requiredIf"),
@@ -177,6 +180,9 @@ def _describe_field(field_schema: Dict[str, Any]) -> Dict[str, Any]:
         "pattern": field_schema.get("pattern"),
         "description": field_schema.get("description"),
     }
+    if "requiredIn" in field_schema:
+        described["requiredIn"] = list(field_schema["requiredIn"] or [])
+    return described
 
 
 def _reverse_required_by(schema: Dict[str, Any], variable: str) -> List[Dict[str, Any]]:
@@ -198,9 +204,11 @@ class ExplainReport:
     required_by: List[Dict[str, Any]]
     source_usages: List[discovery.DiscoveredVariableUsage]
     manifest_references: List[ManifestReference]
+    # The environment `schema.requiredness` is for (plan §7).
+    environment: str = schema_types.LOCAL
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        result = {
             "variable": self.variable,
             "service": self.service,
             "found": True,
@@ -213,6 +221,9 @@ class ExplainReport:
             "source_usages": [u.to_dict() for u in self.source_usages],
             "manifest_references": [m.to_dict() for m in self.manifest_references],
         }
+        if self.environment != schema_types.LOCAL:
+            result["environment"] = self.environment
+        return result
 
 
 @dataclass
@@ -295,7 +306,9 @@ def error_dict(variable: str, service: Optional[str], message: str) -> Dict[str,
     return {"variable": variable, "service": service, "found": False, "error": message}
 
 
-def build_report(variable: str, service_name: str) -> ExplainReport:
+def build_report(
+    variable: str, service_name: str, env: str = schema_types.LOCAL
+) -> ExplainReport:
     """
     The one public entry point for a *declared* variable: aggregates every
     relationship EnvShield can currently prove about `variable` within
@@ -341,11 +354,12 @@ def build_report(variable: str, service_name: str) -> ExplainReport:
     return ExplainReport(
         variable=variable,
         service=service_name,
-        schema=_describe_field(field_schema),
+        schema=_describe_field(field_schema, env),
         provenance=provenance,
         required_by=_reverse_required_by(schema, variable),
         source_usages=_discover_current_usages(
             service_name, service_dir, additional_roots, variable
         ),
         manifest_references=_manifest_references(manifests, variable),
+        environment=env,
     )
