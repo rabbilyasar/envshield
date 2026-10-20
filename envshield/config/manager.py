@@ -18,6 +18,7 @@ from envshield.core.exceptions import (
     SchemaValidationError,
     SecretDefaultConflictError,
     ServiceConfigError,
+    UnknownEnvironmentError,
     UnsafePathError,
 )
 from envshield.utils import git_utils
@@ -210,16 +211,70 @@ def _validate_schema_fields(schema: Dict[str, Any], schema_path: str) -> None:
     """
     Refuses a merged schema with any structurally invalid entry (see
     schema_types.field_problems): an unknown key or type is an error, never
-    silently ignored. Live loads only -- a historical revision must still
-    be representable for 'schema diff' (see schema_snapshot).
+    silently ignored. A `requiredIn` naming an environment envshield.yml
+    doesn't declare is one too. Live loads only -- a historical revision
+    must still be representable for 'schema diff' (see schema_snapshot).
     """
     problems = [
         problem
         for name, details in schema.items()
         for problem in schema_types.field_problems(name, details)
     ]
+    if not problems:
+        declared = get_environments()
+        for name, details in schema.items():
+            unknown = [e for e in details.get("requiredIn") or [] if e not in declared]
+            if unknown:
+                problems.append(
+                    f"'{name}'.requiredIn names {', '.join(map(repr, unknown))}, "
+                    f"which {CONFIG_FILE_NAME} doesn't declare (declared: "
+                    f"{', '.join(declared)})"
+                )
     if problems:
         raise SchemaValidationError(schema_path, problems)
+
+
+def get_environments() -> List[str]:
+    """
+    Every environment: the built-in 'local', then the names envshield.yml
+    declares under `environments:` (plan §7). Raises ConfigParseError for
+    an invalid declaration.
+    """
+    declared = load_config().get("environments")
+    if declared is None:
+        return [schema_types.LOCAL]
+
+    def invalid(problem: str) -> ConfigParseError:
+        return ConfigParseError(CONFIG_FILE_NAME, f"'environments': {problem}")
+
+    if not isinstance(declared, list):
+        raise invalid("must be a list of names, like [staging, production]")
+    for name in declared:
+        if not isinstance(name, str) or not schema_types.ENVIRONMENT_NAME_RE.match(
+            name
+        ):
+            raise invalid(
+                f"{name!r} isn't a valid name (lowercase, matching "
+                f"{schema_types.ENVIRONMENT_NAME_RE.pattern})"
+            )
+        if name == schema_types.LOCAL:
+            raise invalid("'local' is built in; don't declare it")
+    if len(set(declared)) != len(declared):
+        raise invalid("a name is declared twice")
+    return [schema_types.LOCAL, *declared]
+
+
+def resolve_environment(name: Optional[str] = None) -> str:
+    """
+    The environment a command runs in: `name`, or 'local'. (The CLI fills
+    `name` from --env, then ENVSHIELD_ENV.) Raises UnknownEnvironmentError
+    for an undeclared name, listing the declared ones.
+    """
+    chosen = name or schema_types.LOCAL
+    declared = get_environments()
+    if chosen not in declared:
+        raise UnknownEnvironmentError(chosen, declared)
+    return chosen
 
 
 def get_schema_users(schema_path: str) -> List[str]:
@@ -817,16 +872,46 @@ def get_deployment_manifests(service_name: str) -> List[Dict[str, Any]]:
         paths = _resolve_manifest_entry_paths(entry)
         if paths is None:
             continue
+        environment = _manifest_environment(entry, paths)
         for container_name, mapped_service in containers.items():
             if mapped_service == service_name:
-                results.append(
-                    {
-                        "path": _manifest_display_path(paths),
-                        "paths": paths,
-                        "container": container_name,
-                    }
-                )
+                manifest = {
+                    "path": _manifest_display_path(paths),
+                    "paths": paths,
+                    "container": container_name,
+                }
+                if environment is not None:
+                    manifest["environment"] = environment
+                results.append(manifest)
     return results
+
+
+def _manifest_environment(entry: Dict[str, Any], paths: List[str]) -> Optional[str]:
+    """A manifest entry's `environment:` tag (plan §7), validated; None if untagged."""
+    if "environment" not in entry:
+        return None
+    tag = entry["environment"]
+    declared = get_environments()
+    if tag not in declared:
+        raise InvalidManifestDefinitionError(
+            f"Manifest '{_manifest_display_path(paths)}' has environment "
+            f"{tag!r}, which {CONFIG_FILE_NAME} doesn't declare (declared: "
+            f"{', '.join(declared)})."
+        )
+    return tag
+
+
+def manifests_for_environment(service_name: str, env: str) -> List[Dict[str, Any]]:
+    """
+    The manifests 'check' evaluates for `service_name` in `env`: those
+    tagged `env`, plus, in 'local', the untagged ones (today's behavior).
+    """
+    return [
+        m
+        for m in get_deployment_manifests(service_name)
+        if m.get("environment") == env
+        or (m.get("environment") is None and env == schema_types.LOCAL)
+    ]
 
 
 def get_service_dir(service_name: str) -> str:

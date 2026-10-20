@@ -29,6 +29,7 @@ from .core import (
     scanner,
     schema_manager,
     schema_snapshot,
+    schema_types,
     service_discovery,
     service_manager,
     setup_manager,
@@ -37,6 +38,7 @@ from .core import (
 from .core.exceptions import (
     EnvShieldException,
     SchemaNotFoundError,
+    UnknownEnvironmentError,
     VariableNotFoundError,
 )
 from .utils import git_utils
@@ -451,6 +453,15 @@ def check(
             "line are still reported."
         ),
     ),
+    env: Optional[str] = typer.Option(
+        None,
+        "--env",
+        envvar="ENVSHIELD_ENV",
+        help=(
+            "The environment to judge requirements for (declared under "
+            "'environments:' in envshield.yml). Default: local."
+        ),
+    ),
 ):
     """Validates a local environment file against the schema. Also accepts a docker-compose or Kubernetes manifest."""
     accepted: List[str] = []
@@ -483,12 +494,20 @@ def check(
         file = None
 
     environment = dict(os.environ) if process_env else None
+    env_name = _resolve_env(env, json_output)
+    if not json_output and env_name != schema_types.LOCAL:
+        console.print(f"[bold]Environment:[/bold] {escape(env_name)}")
     evaluations = []
     for target in targets:
         if not json_output:
             _print_service_header(targets, target)
         evaluation = evaluator.evaluate_service(
-            target, file=file, container=container, environment=environment, code=True
+            target,
+            file=file,
+            container=container,
+            environment=environment,
+            code=True,
+            env=env_name,
         )
         evaluations.append(evaluation)
         if not json_output:
@@ -505,6 +524,7 @@ def check(
         payload = evaluator.legacy_check_payload(evaluations)
         # Strict: false under accepted unverified values, though the exit is 0.
         payload["success"] = verdict == verdicts.VALID
+        payload["environment"] = env_name
         payload["verdict"] = verdict
         payload["gate"] = gate
         payload["reports"] = reports
@@ -513,6 +533,22 @@ def check(
         _render_gate(verdict, gate, reports)
 
     if gate["result"] != "pass":
+        raise typer.Exit(code=1)
+
+
+def _resolve_env(env: Optional[str], json_output: bool) -> str:
+    """--env, then ENVSHIELD_ENV (Typer's envvar), then local (plan §7). An
+    undeclared name is a usage error (exit 2); an invalid 'environments:'
+    declaration exits 1."""
+    try:
+        return config_manager.resolve_environment(env)
+    except UnknownEnvironmentError as e:
+        raise typer.BadParameter(str(e), param_hint="--env / ENVSHIELD_ENV")
+    except EnvShieldException as e:
+        if json_output:
+            print(json.dumps({"success": False, "error": str(e)}, indent=2))
+        else:
+            console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(code=1)
 
 
@@ -740,6 +776,15 @@ def doctor_command(
         "--json",
         help="Print machine-readable JSON instead of a report; suppresses all other output. Incompatible with --fix.",
     ),
+    env: Optional[str] = typer.Option(
+        None,
+        "--env",
+        envvar="ENVSHIELD_ENV",
+        help=(
+            "The environment to judge requirements for (declared under "
+            "'environments:' in envshield.yml). Default: local."
+        ),
+    ),
 ):
     """Runs a full health check on your project's EnvShield setup."""
     if json_output and fix:
@@ -762,6 +807,7 @@ def doctor_command(
             console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(code=1)
 
+    env_name = _resolve_env(env, json_output)
     had_error = False
     results = []
     for target in targets:
@@ -769,12 +815,12 @@ def doctor_command(
             _print_service_header(targets, target)
         try:
             if json_output:
-                result = doctor.run_health_check_json(service_name=target)
+                result = doctor.run_health_check_json(service_name=target, env=env_name)
                 results.append(result)
                 if not result["passed"]:
                     had_error = True
             else:
-                doctor.run_health_check(fix=fix, service_name=target)
+                doctor.run_health_check(fix=fix, service_name=target, env=env_name)
         except typer.Exit as e:
             if e.exit_code:
                 had_error = True
@@ -912,9 +958,17 @@ def _render_explain_report(report: "explain.ExplainReport") -> None:
     schema = report.schema
     console.print("\n[bold]Contract[/bold]")
     console.print(f"  Type:       {schema['type']}")
-    console.print(
-        f"  Required:   {_EXPLAIN_REQUIREDNESS_LABEL[schema['requiredness']]}"
-    )
+    if "requiredIn" in schema:
+        listed = ", ".join(schema["requiredIn"]) or "no environment"
+        answer = "Yes" if schema["requiredness"] == "required" else "No"
+        console.print(
+            f"  Required:   {answer} in {escape(report.environment)} "
+            f"(requiredIn: {escape(listed)})"
+        )
+    else:
+        console.print(
+            f"  Required:   {_EXPLAIN_REQUIREDNESS_LABEL[schema['requiredness']]}"
+        )
     if schema["requiredness"] == "conditional":
         condition = schema["requiredIf"] or {}
         console.print(
@@ -968,6 +1022,15 @@ def explain_command(
         "--json",
         help="Print machine-readable JSON instead of a report; suppresses all other output.",
     ),
+    env: Optional[str] = typer.Option(
+        None,
+        "--env",
+        envvar="ENVSHIELD_ENV",
+        help=(
+            "The environment to judge requirements for (declared under "
+            "'environments:' in envshield.yml). Default: local."
+        ),
+    ),
 ):
     """
     Reports what EnvShield currently knows about one environment variable:
@@ -987,8 +1050,9 @@ def explain_command(
             console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(code=1)
 
+    env_name = _resolve_env(env, json_output)
     try:
-        report = explain.build_report(variable, resolved_service)
+        report = explain.build_report(variable, resolved_service, env_name)
     except VariableNotFoundError:
         # Degrade gracefully instead of only erroring -- exactly the
         # workflow moment a developer reaches for 'explain' most: a

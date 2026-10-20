@@ -172,14 +172,16 @@ def _trigger_reason(trigger: str) -> str:
     )
 
 
-def requirement(field_schema: Dict[str, Any], states: ValueStates) -> Optional[str]:
+def requirement(
+    field_schema: Dict[str, Any], states: ValueStates, env: str = schema_types.LOCAL
+) -> Optional[str]:
     """
     REQUIRED, OPTIONAL or AMBIGUOUS in this source. For a requiredIf, None
     when the trigger is absent from the source (no opinion; it compares as
     unset, so OPTIONAL by itself). A trigger that isn't a Concrete value --
     or that an unbound envFrom could supply -- is AMBIGUOUS.
     """
-    rule = schema_types.presence_rule(field_schema)
+    rule = schema_types.presence_rule(field_schema, env)
     if rule == "always":
         return REQUIRED
     if rule == "never":
@@ -299,6 +301,7 @@ def judge_source(
     *,
     union: bool = False,
     manifest: bool = False,
+    env: str = schema_types.LOCAL,
 ) -> Dict[str, Verdict]:
     """
     Every declared variable's verdict in one source, plus INVALID for each
@@ -311,7 +314,7 @@ def judge_source(
     result: Dict[str, Verdict] = {}
     for name, field_schema in fields.items():
         state = states.get(name)
-        need = requirement(field_schema, states)
+        need = requirement(field_schema, states, env)
         if union and state is None:
             result[name] = Verdict(NOT_REQUIRED)
             continue

@@ -67,6 +67,7 @@ def cli_json(*args, code=0):
         assert len(payload.pop("reports")) >= 1
         assert payload.pop("verdict") in ("valid", "invalid", "unverified", "error")
         assert payload.pop("gate")["result"] in ("pass", "fail")
+        assert payload.pop("environment") == "local"
     return payload
 
 

@@ -1725,6 +1725,7 @@ def test_check_json_reports_clean_state(tmp_path):
         # v2's invocation verdict and gate are additive too.
         assert payload.pop("verdict") == "valid"
         assert payload.pop("gate") == {"result": "pass", "accepted": {}}
+        assert payload.pop("environment") == "local"
         assert payload == {
             "success": True,
             "results": [

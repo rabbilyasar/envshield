@@ -15,6 +15,7 @@ from . import (
     evaluator,
     hooks_manager,
     schema_manager,
+    schema_types,
     service_discovery,
     setup_manager,
 )
@@ -89,7 +90,7 @@ def _check_config_files(service_name: str):
     return True, "Found and accessible."
 
 
-def _check_local_env_sync(service_name: str):
+def _check_local_env_sync(service_name: str, env: str = schema_types.LOCAL):
     try:
         schema = config_manager.load_schema(service_name=service_name)
         local_file = config_manager.get_env_paths(service_name=service_name)[
@@ -107,7 +108,7 @@ def _check_local_env_sync(service_name: str):
         )
 
     # The same evaluation 'check' runs, so the two can never disagree.
-    source = evaluator.evaluate_source(local_file, service_name, schema=schema)
+    source = evaluator.evaluate_source(local_file, service_name, schema=schema, env=env)
     if source.unparseable:
         return False, f"Cannot parse local env file '{local_file}'."
     if source.error is not None:
@@ -117,10 +118,17 @@ def _check_local_env_sync(service_name: str):
     return False, source.diff.summary()
 
 
-def _check_deployment_manifest(service_name: str):
-    manifests = config_manager.get_deployment_manifests(service_name)
+def _check_deployment_manifest(service_name: str, env: str = schema_types.LOCAL):
+    """The manifests 'check' evaluates in `env`, judged by its requirements."""
+    manifests = config_manager.manifests_for_environment(service_name, env)
     if not manifests:
-        return True, "No deployment manifest registered -- nothing to check."
+        if env != schema_types.LOCAL:
+            return (
+                False,
+                f"No deployment manifest for '{service_name}' is tagged '{env}' "
+                "-- nothing to check.",
+            )
+        return True, "No untagged deployment manifest -- nothing to check locally."
 
     try:
         schema = config_manager.load_schema(service_name=service_name)
@@ -137,6 +145,7 @@ def _check_deployment_manifest(service_name: str):
             paths=manifest["paths"],
             schema=schema,
             kind="manifest",
+            env=env,
         )
         if source.unparseable:
             all_clean = False
@@ -502,19 +511,40 @@ def _run_init_fix() -> None:
         )
 
 
-def _build_checks(service_name: str) -> List[HealthCheck]:
+def _check_manifest_environments(service_name: str):
+    """
+    Plan §7's warning: environments are declared but none of this
+    service's manifests is tagged, so 'check --env' has nothing to check.
+    Always passes (a warning: doctor's exit code is unchanged, N2).
+    """
+    return True, (
+        f"Warning: {config_manager.CONFIG_FILE_NAME} declares "
+        f"{', '.join(config_manager.get_environments()[1:])}, but no manifest "
+        f"for '{service_name}' is tagged with one, so 'check --env' can't "
+        "check a deploy. Add 'environment: <name>' to its 'manifests:' entry."
+    )
+
+
+def _build_checks(
+    service_name: str, env: str = schema_types.LOCAL
+) -> List[HealthCheck]:
     """
     The list of health checks to run, shared by run_health_check (Rich
     rendering + --fix) and run_health_check_json (--json) so they can never
-    quietly diverge on which checks exist.
+    quietly diverge on which checks exist. In an environment other than
+    'local', the local-file checks don't apply, and the manifest check
+    covers the manifests tagged with it (plan §7).
     """
+    local = env == schema_types.LOCAL
     # completeness: union (BL-030) changes what "Local Environment Sync"/
     # "Deployment Manifest" mean for THIS service only: under union, no
     # single registered source is required to be self-sufficient, so
     # asserting "this one file satisfies the whole schema" would be wrong
     # by design. Every other service (the default -- this key unset) keeps
     # today's checks completely unchanged, in both content and position.
-    is_union = config_manager.get_service_completeness_mode(service_name) == "union"
+    is_union = (
+        local and config_manager.get_service_completeness_mode(service_name) == "union"
+    )
 
     checks: List[HealthCheck] = [
         HealthCheck(
@@ -533,7 +563,7 @@ def _build_checks(service_name: str) -> List[HealthCheck]:
                 fix_func=None,
             )
         )
-    else:
+    elif local:
         checks.append(
             HealthCheck(
                 "Local Environment Sync",
@@ -613,7 +643,8 @@ def _build_checks(service_name: str) -> List[HealthCheck]:
     # Only shown at all when a manifest is actually registered for this
     # service -- a project that doesn't use one shouldn't see a check for
     # it every single run.
-    if config_manager.get_deployment_manifests(service_name):
+    manifests = config_manager.get_deployment_manifests(service_name)
+    if manifests or not local:
         if is_union:
             checks.append(
                 HealthCheck(
@@ -626,10 +657,22 @@ def _build_checks(service_name: str) -> List[HealthCheck]:
             checks.append(
                 HealthCheck(
                     "Deployment Manifest",
-                    lambda: _check_deployment_manifest(service_name),
+                    lambda: _check_deployment_manifest(service_name, env),
                     fix_func=None,
                 )
             )
+    if (
+        manifests
+        and len(config_manager.get_environments()) > 1
+        and not any(m.get("environment") for m in manifests)
+    ):
+        checks.append(
+            HealthCheck(
+                "Deployment Environments",
+                lambda: _check_manifest_environments(service_name),
+                fix_func=None,
+            )
+        )
 
     if is_union:
         checks.append(
@@ -643,11 +686,11 @@ def _build_checks(service_name: str) -> List[HealthCheck]:
     return checks
 
 
-def run_health_check(fix: bool, service_name: str):
+def run_health_check(fix: bool, service_name: str, env: str = schema_types.LOCAL):
     """Runs a suite of health checks on one service's EnvShield setup."""
     console.print("\n[bold cyan]Running EnvShield Health Check...[/bold cyan]")
 
-    checks = _build_checks(service_name)
+    checks = _build_checks(service_name, env)
 
     all_passed = True
     for check in checks:
@@ -667,7 +710,7 @@ def run_health_check(fix: bool, service_name: str):
         raise typer.Exit(code=1)
 
 
-def run_health_check_json(service_name: str) -> dict:
+def run_health_check_json(service_name: str, env: str = schema_types.LOCAL) -> dict:
     """
     Same checks as run_health_check, collected as a plain, JSON-serializable
     dict instead of Rich output -- for '--json'. Never offers --fix: an
@@ -675,7 +718,7 @@ def run_health_check_json(service_name: str) -> dict:
     """
     results = []
     all_passed = True
-    for check in _build_checks(service_name):
+    for check in _build_checks(service_name, env):
         try:
             passed, message = check.check_func()
         except EnvShieldException as e:

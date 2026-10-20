@@ -57,11 +57,14 @@ There was no way to declare an unconditionally optional variable.
 `SchemaValidationError`:
 
 - Field keys must be one of: `type`, `enum`, `pattern`, `defaultValue`,
-  `requiredIf`, `required`, `secret`, `description`, `services`.
+  `requiredIf`, `requiredIn`, `required`, `secret`, `description`,
+  `services`.
 - `type` must be one of `string`, `int`, `float`, `bool`, `port`, `url`,
   `email`, `enum`.
 - `required` and `secret` must be booleans; `requiredIf` must be a table
-  whose keys are `var` and `equals`; `enum` must be a list.
+  whose keys are `var` and `equals`; `enum` must be a list; `requiredIn`
+  must be a list of environment names, each `local` or declared under
+  `environments:` in `envshield.yml` (D-11).
 - Variable names must match `^[A-Za-z_][A-Za-z0-9_]*$`.
 - A top-level value must be a table, except `extends`.
 
@@ -72,19 +75,20 @@ schema (same reasoning as BL-001's revision-path exemption).
 This is a breaking change for any schema that relied on an ignored key:
 it now fails to load, with a message naming the key.
 
-**`required` semantics:**
+**`required` semantics, in environment E** (updated by V4-1, #23; plan §7):
 
-| Schema | Must be present in the file? | `setup` |
+| Schema | Must be present in E? | `setup` (always `local`) |
 |---|---|---|
-| no `required`, no `requiredIf`, no default (legacy) | always | prompts |
-| no `required`, `defaultValue` (legacy) | always | fills default |
-| `requiredIf`, no default | when the condition holds | prompts when it holds |
-| `requiredIf` and `defaultValue` (legacy) | always: the default wins | fills default |
+| no `required`/`requiredIn`/`requiredIf`, no default (legacy) | always | prompts |
+| no `required`/`requiredIn`/`requiredIf`, `defaultValue` (legacy) | always | fills default |
+| `requiredIf`, with or without a default | when the condition holds against E's values. **Changed in V4-1:** a default used to make it always required; it no longer changes requiredness | prompts when it holds, or fills default |
+| `requiredIf` whose trigger isn't a Concrete value | ambiguous: COULD NOT VERIFY (`ambiguous_requirement`) | prompts when it holds |
+| `requiredIn = [..]` | when E is listed; otherwise optional (a present value must still be valid) | prompts only if `local` is listed, or fills default |
 | `required = true` | always (same as legacy) | prompts, or fills default |
 | `required = false` | never; if present and non-blank it must still be valid | fills default if any, never prompts |
 
-`required` together with `requiredIf` is rejected: the two answer the same
-question. `required = false` is the only new capability.
+At most one of `required`, `requiredIn` and `requiredIf` per variable;
+more is rejected, since each one alone answers the question.
 
 **`schema diff` requiredness states** (`always` covers legacy defaulted and
 unconditional, and `required = true`):
@@ -99,6 +103,10 @@ unconditional, and `required = true`):
 | added: always | breaking |
 | added: conditional | informational |
 | added: optional | non_breaking |
+
+**`schema diff`** still compares requiredness in `local` only, so a
+`requiredIn` that omits `local` reads as optional there. Per-environment
+classification is V4-2 (#24).
 
 ## D-3. Process environment is an opt-in overlay on the local file
 
@@ -407,3 +415,63 @@ INVALID or ERROR, and the golden text gains only the closing line on
 `kubernetes_unresolved_envfrom`. What changes is the class those
 scenarios didn't cover, which the plan intends (F1/F2/F4/F7): a check whose
 only problems are unverified values now exits 1.
+
+## D-11. Environments and `requiredIn` (V4-1, #23)
+
+**Before.** Requiredness had no environment dimension: a variable a deploy
+injects (a build SHA, a production heartbeat URL) was required in every
+developer's `.env` too, so a project's local `check` could never be green
+without fake values (BL-187, BL-201).
+
+**Now** (plan §7, in [v5-decisions.md](v5-decisions.md)):
+
+- **`environments:`** in `envshield.yml` declares names matching
+  `^[a-z][a-z0-9_-]*$`. `local` is built in and can't be declared.
+- **`requiredIn = ["staging", "production"]`** on a variable: required
+  where listed, optional elsewhere (D-2's table). A name that isn't
+  `local` or declared is a load error.
+- **`--env NAME`** on `check`, `explain` and `doctor`, then
+  `ENVSHIELD_ENV`, then `local`. An undeclared name is a usage error
+  (exit 2) listing the declared names; an invalid `environments:`
+  declaration exits 1, like any other configuration error.
+- **Manifests** may carry `environment:`. In `local`, `check` evaluates the
+  local file and the untagged (or `local`-tagged) manifests: today's
+  behavior. In another environment it evaluates only the manifests tagged
+  with it. An explicit `FILE` argument is always evaluated, against the
+  chosen environment's requirements.
+- **Reports:** `check --json` gains a top-level `environment`, and each
+  report an `environment` key. `requiredness` is for that environment.
+  `explain --json` adds `schema.requiredIn` when the field has one and
+  `environment` when it isn't `local`. An untagged manifest's record is
+  unchanged.
+
+**Decisions made while implementing:**
+
+- **Nothing to check is ERROR, not VALID.** `check --env E` for a service
+  with no manifest tagged E (and no explicit file) is ERROR
+  (`topology_error`) naming the fix. Otherwise an empty evaluation would
+  pass, a false clean.
+- **Union mode applies in `local` only.** It's a "local file plus
+  manifests together" rule; in another environment each tagged manifest is
+  judged on its own. Combining tagged manifests into one union is left
+  open.
+- **`doctor --env E`** skips the local-file checks and checks the manifests
+  tagged E. Plain `doctor` now checks only the untagged (and
+  `local`-tagged) manifests, the same set as `check`. For a project with no
+  tags, nothing changes.
+- **The untagged-manifest warning** is a passing "Deployment Environments"
+  line with a warning message, so `doctor`'s exit code is unchanged (N2).
+  It appears only when the service has manifests and none of them is
+  tagged. A project that declares environments only for `requiredIn` and
+  deploys without manifests (with an explicit env file, or `--runtime` in
+  V5) isn't told to tag files it doesn't have.
+- **`.env.example`** annotates a `requiredIn` variable "required in
+  staging, production" instead of "optional". The names are restricted by
+  the regex above, so they can't break the comment line.
+
+**Effect.** Every existing schema gives the same verdicts as before,
+except a `requiredIf` variable with a `defaultValue`, which is now
+required only when its condition holds. On the golden scenarios that
+changes one variable in `requiredif_met_unmet_and_default_wins` (`LEVEL`:
+INVALID → NOT REQUIRED; the exit code is unchanged, since another variable
+still fails).

@@ -332,7 +332,6 @@
           "file": ".env",
           "invalid": {},
           "missing": [
-            "LEVEL",
             "NEEDED"
           ],
           "service": "app",
@@ -342,7 +341,7 @@
       "success": false
     },
     "json_exit": 1,
-    "text": "\nValidating .env against schema...\nInvalid\n  \u2717 LEVEL    missing (required; has a default, run 'envshield setup')\n  \u2717 NEEDED   missing (required)\n  \u2713 FLAG     valid\n  \u00b7 UNMET    not required\n\nINVALID: 2 invalid, 1 valid.\n",
+    "text": "\nValidating .env against schema...\nInvalid\n  \u2717 NEEDED   missing (required)\n  \u2713 FLAG     valid\n  \u00b7 LEVEL    not required\n  \u00b7 UNMET    not required\n\nINVALID: 1 invalid, 1 valid.\n",
     "text_exit": 1
   },
   "secret_with_default": {

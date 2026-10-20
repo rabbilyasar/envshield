@@ -37,6 +37,7 @@ FIELD_KEYS = frozenset(
         "pattern",
         "defaultValue",
         "requiredIf",
+        "requiredIn",
         "required",
         "secret",
         "description",
@@ -44,6 +45,10 @@ FIELD_KEYS = frozenset(
     }
 )
 _REQUIREDIF_KEYS = frozenset({"var", "equals"})
+# The built-in environment; others are declared in envshield.yml (plan §7).
+LOCAL = "local"
+ENVIRONMENT_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]*$")
+_REQUIREDNESS_KEYS = ("required", "requiredIn", "requiredIf")
 # Near-misses worth naming in the error -- `default` in particular, since
 # nothing else would tell a user their default was silently ignored.
 _KEY_HINTS = {"default": "defaultValue", "required_if": "requiredIf"}
@@ -111,11 +116,23 @@ def field_problems(name: str, field_schema: Any) -> list[str]:
         else:
             for key in sorted(set(condition) - _REQUIREDIF_KEYS):
                 problems.append(f"'{name}'.requiredIf has unknown key '{key}'")
-        if "required" in field_schema:
-            problems.append(
-                f"'{name}' sets both 'required' and 'requiredIf' -- use one: "
-                "requiredIf already says when it's required"
-            )
+    environments = field_schema.get("requiredIn")
+    if "requiredIn" in field_schema and not (
+        isinstance(environments, list)
+        and all(
+            isinstance(e, str) and ENVIRONMENT_NAME_RE.match(e) for e in environments
+        )
+    ):
+        problems.append(
+            f"'{name}'.requiredIn must be a list of environment names, like "
+            '["staging", "production"]'
+        )
+    used = [key for key in _REQUIREDNESS_KEYS if key in field_schema]
+    if len(used) > 1:
+        problems.append(
+            f"'{name}' sets {' and '.join(repr(k) for k in used)} -- use one: "
+            "each one alone says when it's required"
+        )
     return problems
 
 
@@ -233,35 +250,35 @@ def secret_default_conflict(field_schema: dict[str, Any]) -> bool:
     return str(field_schema.get("defaultValue", "")) != ""
 
 
-def presence_rule(field_schema: Dict[str, Any]) -> str:
+def presence_rule(field_schema: Dict[str, Any], env: str = LOCAL) -> str:
     """
-    When a field must be explicitly present (non-blank) in a checked file:
-    'always', 'conditional' (its requiredIf decides), or 'never'.
+    When a field must be explicitly present (non-blank) in a checked file
+    in environment `env`: 'always', 'conditional' (its requiredIf
+    decides), or 'never' (plan §7, docs/architecture/evaluator-decisions.md
+    D-2).
 
-    An explicit boolean `required` decides outright. Otherwise the legacy
-    rule: a defaultValue makes it always required -- even over a
-    requiredIf, since 'setup' fills the default in regardless -- then
-    `requiredIf` makes it conditional, and anything else is always
-    required. A defaultValue never makes a field optional
-    (docs/architecture/evaluator-decisions.md D-1): it's what 'setup' fills
-    in, not proof the file's own copy may be missing.
+    An explicit boolean `required` decides outright, and `requiredIn`
+    decides by whether `env` is listed. Otherwise `requiredIf` makes it
+    conditional, and anything else (with or without a defaultValue) is
+    always required. A defaultValue never changes requiredness: it's what
+    'setup' fills in, not proof a value exists (D-1).
     """
     required = field_schema.get("required")
     if required is True:
         return "always"
     if required is False:
         return "never"
-    if "defaultValue" in field_schema:
-        return "always"
+    if "requiredIn" in field_schema:
+        return "always" if env in (field_schema["requiredIn"] or []) else "never"
     if field_schema.get("requiredIf"):
         return "conditional"
     return "always"
 
 
-def requiredness_label(field_schema: Dict[str, Any]) -> str:
+def requiredness_label(field_schema: Dict[str, Any], env: str = LOCAL) -> str:
     """presence_rule, as the contract vocabulary 'explain' and reports use."""
     return {"always": "required", "conditional": "conditional", "never": "optional"}[
-        presence_rule(field_schema)
+        presence_rule(field_schema, env)
     ]
 
 
@@ -276,7 +293,9 @@ def _condition_holds(
     return local_values.get(other_var) == expected
 
 
-def is_required_now(field_schema: Dict[str, Any], local_values: Dict[str, str]) -> bool:
+def is_required_now(
+    field_schema: Dict[str, Any], local_values: Dict[str, str], env: str = LOCAL
+) -> bool:
     """
     Whether 'setup' must ask for this field right now, given its
     `requiredIf` condition (if any) evaluated against the project's other
@@ -288,7 +307,7 @@ def is_required_now(field_schema: Dict[str, Any], local_values: Dict[str, str]) 
     """
     if "defaultValue" in field_schema:
         return False
-    rule = presence_rule(field_schema)
+    rule = presence_rule(field_schema, env)
     if rule == "never":
         return False
     if rule == "conditional":
@@ -326,7 +345,7 @@ def requiredif_condition_text(
 
 
 def should_be_present(
-    field_schema: Dict[str, Any], local_values: Dict[str, str]
+    field_schema: Dict[str, Any], local_values: Dict[str, str], env: str = LOCAL
 ) -> bool:
     """
     Whether a field must have an explicit, non-blank value in the target
@@ -337,7 +356,7 @@ def should_be_present(
     file actually falls back the same way, or falls back at all. See
     presence_rule.
     """
-    rule = presence_rule(field_schema)
+    rule = presence_rule(field_schema, env)
     if rule == "conditional":
         return _condition_holds(field_schema, local_values)
     return rule == "always"
