@@ -263,6 +263,12 @@ def judge_variable(
                     "the host value is unset or empty"
                 )
             return Verdict(UNVERIFIED, "host_forward", detail)
+        if state.embedded:
+            return Verdict(
+                UNVERIFIED,
+                "host_forward",
+                f"the value includes the deploy host's {state.var}",
+            )
         return Verdict(
             UNVERIFIED, "host_forward", f"from the deploy host's {state.var}"
         )

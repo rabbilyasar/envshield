@@ -18,14 +18,30 @@ from ._dotenv import DotenvParser
 
 # Matches a value that is ENTIRELY one Compose variable-substitution
 # reference: '${VAR}', or '${VAR' + an operator ('-', ':-', '?', ':?', '+',
-# ':+') + text + '}'. Each becomes a Forwarded state (v5 plan §4). A
-# reference embedded inside a larger string ('prefix-${VAR}-suffix') is
-# intentionally left as literal text: resolving a partial substitution
-# would require modeling Compose's full shell-style expansion grammar,
-# which is out of scope here.
+# ':+') + text + '}'. Each becomes a Forwarded state (v5 plan §4).
 _INTERPOLATION_RE = re.compile(
     r"^\$\{([A-Za-z_][A-Za-z0-9_]*)(?:(:?-|:?\?|:?\+)(.*))?\}$"
 )
+# Any reference, braced or bare ('$VAR'), once '$$' (an escaped '$') is
+# removed. A value with one anywhere is decided by the deploy host (BL-199).
+_REFERENCE_RE = re.compile(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)|([A-Za-z_][A-Za-z0-9_]*))")
+
+
+def _closes_early(text: str) -> bool:
+    """Whether a '}' in `text` closes the outer '${' before the end, as in
+    '${A:-x}${B}' (whose operator text would be 'x}${B')."""
+    depth = 0
+    for ch in text:
+        depth += {"{": 1, "}": -1}.get(ch, 0)
+        if depth < 0:
+            return True
+    return False
+
+
+def _references(value: str) -> list[str]:
+    """The host variables `value` references, in order, without repeats."""
+    names = (a or b for a, b in _REFERENCE_RE.findall(value.replace("$$", "")))
+    return list(dict.fromkeys(names))
 
 
 class DockerComposeParser(BaseParser):
@@ -237,20 +253,30 @@ class DockerComposeParser(BaseParser):
     def _resolve_interpolation(self, key: str, value: str) -> tuple[str, ValueState]:
         """
         `key: value`'s (name, state). A value that is entirely one
-        interpolation reference is Forwarded from the host variable it
-        names, and keyed under that variable; anything else is the
-        Concrete literal, under `key`.
+        reference ('${VAR}', '$VAR', or '${VAR' + operator + text + '}') is
+        Forwarded from the host variable it names, and keyed under that
+        variable; a value with references inside it is Forwarded under
+        `key` (BL-199). Anything else is the Concrete literal, under
+        `key`, with '$$' unescaped as Compose delivers it.
 
         E.g. 'AUTHENTIK_POSTGRESQL__PASSWORD: ${PG_PASS}' is a schema-
         relevant statement about PG_PASS, not about
         AUTHENTIK_POSTGRESQL__PASSWORD, which is purely a container-internal
         rename. Every operator is keyed the same way (BL-195).
         """
+        names = _references(value)
+        if not names:
+            return key, Concrete(value.replace("$$", "$"))
         match = _INTERPOLATION_RE.match(value.strip())
-        if not match:
-            return key, Concrete(value)
-        var_name, operator, text = match.groups()
-        return var_name, Forwarded(var_name, operator, text)
+        if match and not _closes_early(match.group(3) or ""):
+            var_name, operator, text = match.groups()
+            if not _references(text or ""):
+                return var_name, Forwarded(var_name, operator, text)
+            # A fallback that is itself a reference ('${A:-${B}}').
+            return var_name, Forwarded(var_name)
+        if re.fullmatch(r"\$[A-Za-z_][A-Za-z0-9_]*", value.strip()):
+            return names[0], Forwarded(names[0])
+        return key, Forwarded(", ".join(names), embedded=True)
 
 
 def _as_vars(states: ValueStates, get_values: bool) -> set[str] | dict[str, str]:

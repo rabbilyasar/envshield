@@ -370,12 +370,10 @@ class TestVariableInterpolation:
         assert states["FLASK_APP"] == Forwarded("FLASK_APP", ":-", "app")
         assert states["QUEUE_URL"] == Forwarded("QUEUE_URL")
 
-    def test_embedded_reference_inside_a_larger_string_is_left_literal(self, tmp_path):
+    def test_embedded_reference_inside_a_larger_string_is_not_visible(self, tmp_path):
         """
-        Out of scope by design: resolving a partial reference embedded in a
-        larger string would require modeling Compose's full shell-style
-        expansion grammar. Only a value that is entirely one reference is
-        resolved.
+        BL-199: a reference inside a larger string isn't resolved, and the
+        text isn't the deployed value either: the host decides part of it.
         """
         f = tmp_path / "docker-compose.yml"
         f.write_text(
@@ -387,7 +385,7 @@ class TestVariableInterpolation:
 
         variables = DockerComposeParser().get_vars(str(f), get_values=True)
 
-        assert variables["URL"] == "https://${HOST:-localhost}/api"
+        assert variables["URL"] == ""
 
 
 class TestNoColonDefaultInterpolation:
@@ -633,7 +631,7 @@ class TestInterpolationComparesAgainstHostVariableName:
         assert states == {"PG_PASS": Forwarded("PG_PASS")}
 
     def test_embedded_reference_is_still_keyed_by_container_name(self, tmp_path):
-        """Non-regression: an embedded (not whole-value) reference never triggers the rename -- no host name to extract."""
+        """An embedded (not whole-value) reference never triggers the rename: no single host name to key it by."""
         f = tmp_path / "docker-compose.yml"
         f.write_text(
             "services:\n"
@@ -642,9 +640,9 @@ class TestInterpolationComparesAgainstHostVariableName:
             "      URL: https://${HOST:-localhost}/api\n"
         )
 
-        variables = DockerComposeParser().get_vars(str(f), get_values=True)
-
-        assert variables == {"URL": "https://${HOST:-localhost}/api"}
+        assert DockerComposeParser().get_states(str(f)) == {
+            "URL": Forwarded("HOST", embedded=True)
+        }
 
     def test_environment_block_rename_still_overrides_env_file(
         self, tmp_path, monkeypatch
@@ -933,6 +931,26 @@ class TestValueStates:
         """BL-195: like '${A}', every operator is keyed by the variable it names."""
         states = self._states(tmp_path, f"      X: ${{A{operator}t}}\n")
         assert states == {"A": Forwarded("A", operator, "t")}
+
+    @pytest.mark.parametrize(
+        "value, expected",
+        [
+            ("http://${HOST}:8000", {"X": Forwarded("HOST", embedded=True)}),
+            ("'${A}${B}${A}'", {"X": Forwarded("A, B", embedded=True)}),
+            ("pre-$A", {"X": Forwarded("A", embedded=True)}),
+            ("$A", {"A": Forwarded("A")}),
+            ("${A:-${B}}", {"A": Forwarded("A")}),
+            ("${A:-x}${B}", {"X": Forwarded("A, B", embedded=True)}),
+            ("'${A:-x}y}'", {"X": Forwarded("A", embedded=True)}),
+            ("'a$$b'", {"X": Concrete("a$b")}),
+            ("'$$A'", {"X": Concrete("$A")}),
+            ("'$$$A'", {"X": Forwarded("A", embedded=True)}),
+            ("'cost: $5'", {"X": Concrete("cost: $5")}),
+        ],
+    )
+    def test_any_reference_is_decided_by_the_host(self, tmp_path, value, expected):
+        """BL-199: only a value with no unescaped reference is Concrete."""
+        assert self._states(tmp_path, f"      X: {value}\n") == expected
 
     def test_the_other_required_and_alternative_operators_are_forwarded(self, tmp_path):
         """'?' and ':+' too (BL-195)."""

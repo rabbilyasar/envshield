@@ -1896,7 +1896,7 @@ Source: V1-3 implementation; `uv run pytest` modified the file.
 
 ### BL-199 — A Compose value with an embedded `${VAR}` is judged on its text, and can be VALID
 
-Type: `DEPLOYMENT` / `REPORT HONESTY` · Evidence: `CONFIRMED` (live, V1-3 branch, 2026-10-19) · Priority: **P2** (manifest-only shape; same class as `BL-169`; it does break the plan §10 VALID invariant) · Status: **open — proposed issue [#68](https://github.com/rabbilyasar/envshield/issues/68)**
+Type: `DEPLOYMENT` / `REPORT HONESTY` · Evidence: `CONFIRMED` (live, V1-3 branch, 2026-10-19) · Priority: **P2** (manifest-only shape; same class as `BL-169`; it does break the plan §10 VALID invariant) · Status: **fixed by [#68](https://github.com/rabbilyasar/envshield/issues/68) (branch, unmerged)**
 Component: `parsers/_docker_compose.py::_resolve_interpolation`
 Source: V1-3 implementation, while rewriting README's Compose limitation.
 
@@ -1904,7 +1904,18 @@ Source: V1-3 implementation, while rewriting README's Compose limitation.
 - **Expected behavior:** a value containing a reference is COULD NOT VERIFY (`host_forward`), not judged on its text.
 - **Impact:** a false VALID (and a false INVALID) on a manifest check; with V1-3 the VALID one passes the gate.
 - **Relationships:** `BL-169`, `BL-195`; README "Known limitations" (Docker Compose) documents it.
-- **Decision:** open; not in #17's scope. Proposed as [#68](https://github.com/rabbilyasar/envshield/issues/68).
+- **Decision:** not in #17's scope; proposed as [#68](https://github.com/rabbilyasar/envshield/issues/68), approved 2026-10-21.
+- **Fix (#68, 2026-10-21):** a Compose value is `Concrete` only when it has no unescaped reference, and `$$` is unescaped to `$` as Compose delivers it. A value with references inside it is `Forwarded(..., embedded=True)` under the container key, naming every host variable (`host_forward`: "the value includes the deploy host's P1, P2"). The same root cause also covered two forms not in the original report, fixed alongside: a bare whole-value `$VAR` (was judged as the text `$VAR`; now `Forwarded`, keyed by `VAR` like `${VAR}`), and a fallback that is itself a reference, `${A:-${B}}` (its fallback text `${B}` was validated; now `Forwarded(A)` with no fallback). On the differential, only the new embedded scenario changes: v1 `results`, `doctor`'s manifest check, and `import`, which no longer writes the expression as a `defaultValue` or infers a `type` from it. Tests: `test_docker_compose_parser.py::TestValueStates::test_any_reference_is_decided_by_the_host`, `test_verdicts.py::test_compose_interpolation` (five new rows, also in the VALID-invariant fixtures), `test_verdicts.py::test_an_embedded_reference_is_never_valid`. **Not changed:** Compose interpolation inside an `env_file` (read as literal `.env` content, as before) and the open question of whether a literal part that alone breaks the contract (`not-a-url-${X}`) should be INVALID; it stays COULD NOT VERIFY.
+
+### BL-200 — `import` from a Kubernetes manifest writes `envFrom` Secret keys in a random order
+
+Type: `BUG` / `DETERMINISM` · Evidence: `CONFIRMED` (2026-10-21: four differential runs on `main` `c5aa9f5` gave both orders for one manifest) · Priority: **P3** (cosmetic; the content is the same, but the generated schema isn't reproducible) · Status: **open**
+Component: `parsers/_kubernetes.py` (Secret keys stored as a `set`, line ~121)
+Source: the #68 differential, where it showed up as a spurious difference.
+
+- **Current behavior:** a Secret's `data`/`stringData` keys are collected into a `set`; an `envFrom` `secretRef` to it iterates that set, so `envshield import k8s.yml` orders those variables by string hash, which changes between Python processes.
+- **Expected behavior:** the same manifest always produces the same schema (manifest order, or sorted).
+- **Decision:** open; one `sorted()` or a dict would fix it. Not in #68's scope.
 ---
 
 ## Part 7 — Performance / Scalability (research, not yet benchmarked)

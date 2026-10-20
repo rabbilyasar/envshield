@@ -219,6 +219,12 @@ COMPOSE = {
     "${VAR+alt}": ("${PORT+1}", ("unverified", "host_forward")),
     "${VAR?err}": ("${PORT?set it}", ("unverified", "host_forward")),
     "${VAR:+alt}": ("${PORT:+1}", ("unverified", "host_forward")),
+    # BL-199: a reference anywhere in the value; '$$' is an escaped '$'.
+    "embedded": ("'80${X}'", ("unverified", "host_forward")),
+    "two references": ("'${A}${B}'", ("unverified", "host_forward")),
+    "bare $VAR": ("$PORT", ("unverified", "host_forward")),
+    "nested fallback": ("${PORT:-${DEF}}", ("unverified", "host_forward")),
+    "escaped $$": ("'80$$'", ("invalid", "invalid_value")),
 }
 
 
@@ -589,3 +595,23 @@ def test_gate_and_accepted_reasons():
     ):
         with pytest.raises(ValueError):
             verdicts.parse_accepted(bad)
+
+
+def test_an_embedded_reference_is_never_valid(tmp_path):
+    """BL-199 / #68: the reproduction, and accepting it passes the gate only."""
+    files = {
+        "envshield.yml": ONE,
+        "env.schema.toml": '[URL]\ntype="url"\n\n[PORT]\ntype="port"\n',
+        "docker-compose.yml": _compose(
+            '      URL: "http://${HOST}:8000"\n      PORT: "${P1}${P2}"\n'
+        ),
+    }
+    code, payload, human = _run(tmp_path, files, "docker-compose.yml")
+    assert _verdict(payload, "URL") == ("unverified", "host_forward")
+    assert _verdict(payload, "PORT") == ("unverified", "host_forward")
+    assert "the value includes the deploy host's P1, P2" in human
+    assert code == 1
+    code, payload, _ = _run(
+        tmp_path, files, "docker-compose.yml", "--accept-unverified=host_forward"
+    )
+    assert code == 0 and payload["verdict"] == "unverified"
