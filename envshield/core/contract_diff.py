@@ -113,11 +113,76 @@ class ContractDiff:
         }
 
 
+# Most severe first wins when environments disagree (plan §7, V4-2).
+_SEVERITY = {
+    "non_breaking": 0,
+    "default_changed": 1,
+    "informational": 2,
+    "requires_review": 3,
+    "security": 4,
+    "breaking": 5,
+}
+
+
+def _environments_for(
+    environments: Iterable[str], *schemas: Dict[str, Any]
+) -> List[str]:
+    """`environments`, then any other name a `requiredIn` on either side uses
+    (a revision's contract may name one the current config doesn't)."""
+    names = list(dict.fromkeys(environments))
+    for schema in schemas:
+        for details in schema.values():
+            if isinstance(details, dict):
+                for env in details.get("requiredIn") or []:
+                    if env not in names:
+                        names.append(env)
+    return names
+
+
+def _per_environment(
+    by_env: Dict[str, Optional[ContractChange]],
+) -> Optional[ContractChange]:
+    """
+    One requiredness change from its per-environment versions (None:
+    unchanged there). When every environment agrees, that change exactly as
+    it always was; otherwise the most severe one, naming where it applies,
+    with `detail.environments` mapping each environment to its category.
+    """
+    found = [c for c in by_env.values() if c is not None]
+    if not found:
+        return None
+    first = found[0]
+    if len(found) == len(by_env) and all(
+        (c.category, c.detail) == (first.category, first.detail) for c in found
+    ):
+        return first
+    worst = max(found, key=lambda c: _SEVERITY[c.category])
+    categories = {
+        env: (c.category if c is not None else "unchanged") for env, c in by_env.items()
+    }
+    where = [env for env, cat in categories.items() if cat == worst.category]
+    elsewhere = [
+        f"{env}: {cat.replace('_', ' ')}"
+        for env, cat in categories.items()
+        if env not in where
+    ]
+    return ContractChange(
+        variable=worst.variable,
+        category=worst.category,
+        description=(
+            f"{worst.description} This applies in {', '.join(where)} "
+            f"({'; '.join(elsewhere)})."
+        ),
+        detail={**worst.detail, "environments": categories},
+    )
+
+
 def diff_schemas(
     schema_a: Dict[str, Any],
     schema_b: Dict[str, Any],
     system_a: Optional[Iterable[str]] = None,
     system_b: Optional[Iterable[str]] = None,
+    environments: Iterable[str] = (schema_types.LOCAL,),
 ) -> ContractDiff:
     """
     The one public entry point: compare two resolved schema dicts.
@@ -127,7 +192,12 @@ def diff_schemas(
     while still defined system-wide is a grant change, not a declaration
     added/removed -- same category, but its detail carries
     `scope: "out_of_scope"` for the side it was out of scope on.
+
+    Requiredness is compared in each of `environments` (plus any a
+    `requiredIn` names); a change whose category differs between them
+    reports its most severe one (plan §7).
     """
+    envs = _environments_for(environments, schema_a, schema_b)
     keys_a = set(schema_a.keys())
     keys_b = set(schema_b.keys())
     out_of_scope_a = set(system_a or ()) - keys_a
@@ -136,7 +206,9 @@ def diff_schemas(
     changes: List[ContractChange] = []
 
     for key in sorted(keys_b - keys_a):
-        change = _classify_added(key, schema_b[key])
+        change = _per_environment(
+            {env: _classify_added(key, schema_b[key], env) for env in envs}
+        )
         if key in out_of_scope_a:
             change.description += (
                 " It was already defined in the system schema; this service "
@@ -171,12 +243,14 @@ def diff_schemas(
         )
 
     for key in sorted(keys_a & keys_b):
-        changes.extend(_diff_field(key, schema_a[key], schema_b[key]))
+        changes.extend(_diff_field(key, schema_a[key], schema_b[key], envs))
 
     return ContractDiff(changes=changes)
 
 
-def _requiredness_state(field_schema: Dict[str, Any]) -> str:
+def _requiredness_state(
+    field_schema: Dict[str, Any], env: str = schema_types.LOCAL
+) -> str:
     """
     Four mutually exclusive states, from schema_types.presence_rule (what
     'check' enforces) plus whether a default exists:
@@ -193,7 +267,7 @@ def _requiredness_state(field_schema: Dict[str, Any]) -> str:
     kept apart because gaining or losing a default is still worth
     reporting (it changes what 'setup' and generated code do).
     """
-    rule = schema_types.presence_rule(field_schema)
+    rule = schema_types.presence_rule(field_schema, env)
     if rule == "never":
         return "optional"
     if rule == "conditional":
@@ -201,8 +275,10 @@ def _requiredness_state(field_schema: Dict[str, Any]) -> str:
     return "defaulted" if "defaultValue" in field_schema else "unconditional"
 
 
-def _classify_added(key: str, field_schema: Dict[str, Any]) -> ContractChange:
-    state = _requiredness_state(field_schema)
+def _classify_added(
+    key: str, field_schema: Dict[str, Any], env: str = schema_types.LOCAL
+) -> ContractChange:
+    state = _requiredness_state(field_schema, env)
     if state == "optional":
         return ContractChange(
             variable=key,
@@ -246,26 +322,49 @@ def _classify_added(key: str, field_schema: Dict[str, Any]) -> ContractChange:
     )
 
 
-def _diff_field(key: str, a: Dict[str, Any], b: Dict[str, Any]) -> List[ContractChange]:
+def _diff_field(
+    key: str,
+    a: Dict[str, Any],
+    b: Dict[str, Any],
+    environments: Iterable[str] = (schema_types.LOCAL,),
+) -> List[ContractChange]:
     changes: List[ContractChange] = []
 
-    req_a, req_b = _requiredness_state(a), _requiredness_state(b)
-    if req_a != req_b:
-        changes.append(_classify_requiredness_transition(key, req_a, req_b))
-    elif req_a == "conditional" and a.get("requiredIf") != b.get("requiredIf"):
-        changes.append(
-            ContractChange(
-                variable=key,
-                category="requires_review",
-                description=(
-                    f"'{key}' requiredIf condition changed. Whether this "
-                    "breaks an existing config depends on a value schema-only "
-                    "diff doesn't have."
-                ),
-                detail={"before": a.get("requiredIf"), "after": b.get("requiredIf")},
-            )
-        )
+    requiredness = _per_environment(
+        {env: _requiredness_change(key, a, b, env) for env in environments}
+    )
+    if requiredness is not None:
+        changes.append(requiredness)
+    changes.extend(_value_changes(key, a, b))
+    return changes
 
+
+def _requiredness_change(
+    key: str, a: Dict[str, Any], b: Dict[str, Any], env: str
+) -> Optional[ContractChange]:
+    """`key`'s requiredness change in environment `env`, or None."""
+    req_a, req_b = _requiredness_state(a, env), _requiredness_state(b, env)
+    if req_a != req_b:
+        return _classify_requiredness_transition(key, req_a, req_b)
+    if req_a == "conditional" and a.get("requiredIf") != b.get("requiredIf"):
+        return ContractChange(
+            variable=key,
+            category="requires_review",
+            description=(
+                f"'{key}' requiredIf condition changed. Whether this "
+                "breaks an existing config depends on a value schema-only "
+                "diff doesn't have."
+            ),
+            detail={"before": a.get("requiredIf"), "after": b.get("requiredIf")},
+        )
+    return None
+
+
+def _value_changes(
+    key: str, a: Dict[str, Any], b: Dict[str, Any]
+) -> List[ContractChange]:
+    """Changes to `key`'s type, constraints, default and secrecy."""
+    changes: List[ContractChange] = []
     type_a = schema_types.resolve_field_type(a)
     type_b = schema_types.resolve_field_type(b)
     if type_a != type_b:

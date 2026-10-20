@@ -484,11 +484,39 @@ _GENERATORS = {
 }
 
 
-def generate_config(schema: dict[str, Any], lang: str = "python") -> str:
+def _for_every_environment(
+    schema: dict[str, Any], environments: tuple[str, ...]
+) -> dict[str, Any]:
+    """
+    `schema` as one loader sees it in any environment (plan §7, V4-2): a
+    `requiredIn` that lists every environment is plain required; any other
+    is `required = false`, since the loader can't know where it runs. The
+    other keys are unchanged.
+    """
+    result = {}
+    for key, details in schema.items():
+        if isinstance(details, dict) and "requiredIn" in details:
+            details = {k: v for k, v in details.items() if k != "requiredIn"}
+            listed = set(schema[key]["requiredIn"] or [])
+            if not set(environments) <= listed:
+                details["required"] = False
+        result[key] = details
+    return result
+
+
+def generate_config(
+    schema: dict[str, Any],
+    lang: str = "python",
+    environments: tuple[str, ...] = (schema_types.LOCAL,),
+) -> str:
     """
     Renders `schema` (as loaded from env.schema.toml) into the source of a typed,
     validated config module in the requested language. Secret variables are
     masked by default in the generated code's runtime representation.
+
+    A variable not required in every one of `environments` is generated as
+    optional. A defaultValue stays the loader's fallback: that is
+    application behavior, not something 'check' verified.
     """
     try:
         render = _GENERATORS[lang]
@@ -496,4 +524,4 @@ def generate_config(schema: dict[str, Any], lang: str = "python") -> str:
         raise ValueError(
             f"Unsupported language {lang!r}. Supported: {', '.join(SUPPORTED_LANGUAGES)}"
         )
-    return render(schema)
+    return render(_for_every_environment(schema, environments))

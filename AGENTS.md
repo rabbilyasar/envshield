@@ -948,7 +948,10 @@ decisions in
 (`c5aa9f5`, PR #69): the exit code is the gate on those verdicts, with
 `--accept-unverified`. [#68](https://github.com/rabbilyasar/envshield/issues/68)
 (`BL-199`) closes Phase 1: a Compose value with an embedded reference is
-never judged on its text. Next: V4 (#23, #24). The full
+never judged on its text. V4-1 ([#23](https://github.com/rabbilyasar/envshield/issues/23),
+merged `578af57`) adds environments and `requiredIn`; V4-2
+([#24](https://github.com/rabbilyasar/envshield/issues/24)) makes `schema diff`, `explain` and
+`generate` environment-aware. Next: V5-1 (#25), `check --runtime`. The full
 order is ROADMAP.md's "v5 — in progress". Nothing since `v4.9.1` is released.
 
 **Previous phase (updated 2026-10-15): `v4.9.1` released; v5 V1 next.**

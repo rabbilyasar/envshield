@@ -445,7 +445,13 @@ def test_explain_env(tmp_path):
         and prod["environment"] == "production"
     )
     assert prod["schema"]["requiredIn"] == ["staging", "production"]
-    assert "Yes in production (requiredIn: staging, production)" in human
+    assert prod["schema"]["environments"] == {
+        "required": ["staging", "production"],
+        "optional": ["local"],
+        "conditional": [],
+    }
+    assert "Required in:    staging, production" in human
+    assert "Optional in:    local" in human
 
 
 def test_env_example_names_where_it_is_required(tmp_path):
@@ -459,3 +465,150 @@ def test_env_example_names_where_it_is_required(tmp_path):
         with open(".env.example") as f:
             assert "# required in staging, production" in f.read()
         assert not os.path.exists(".env")
+
+
+# --- V4-2 (#24): schema diff, explain and generate per environment ------------
+
+from envshield.core import contract_diff, generator  # noqa: E402
+
+ALL = ["local", "staging", "production"]
+
+
+def _one(diff):
+    assert len(diff.changes) == 1, [c.to_dict() for c in diff.changes]
+    return diff.changes[0]
+
+
+def test_scenario_6_adding_a_production_only_variable():
+    change = _one(
+        contract_diff.diff_schemas(
+            {}, {"K": {"requiredIn": ["production"]}}, environments=ALL
+        )
+    )
+    assert change.category == "breaking"
+    assert change.detail["environments"] == {
+        "local": "non_breaking",
+        "staging": "non_breaking",
+        "production": "breaking",
+    }
+    assert "This applies in production" in change.description
+
+
+def test_scenario_6_on_an_existing_variable():
+    """Legacy required -> requiredIn production: relaxed in local and staging."""
+    change = _one(
+        contract_diff.diff_schemas(
+            {"K": {}}, {"K": {"requiredIn": ["production"]}}, environments=ALL
+        )
+    )
+    assert change.category == "non_breaking"
+    assert change.detail["environments"] == {
+        "local": "non_breaking",
+        "staging": "non_breaking",
+        "production": "unchanged",
+    }
+
+
+def test_a_requiredin_list_change_is_seen_even_when_local_is_unchanged():
+    change = _one(
+        contract_diff.diff_schemas(
+            {"K": {"requiredIn": ["production"]}},
+            {"K": {"requiredIn": ["staging", "production"]}},
+            environments=ALL,
+        )
+    )
+    assert change.category == "breaking"
+    assert change.detail["environments"]["staging"] == "breaking"
+    assert change.detail["environments"]["local"] == "unchanged"
+
+
+def test_an_environment_only_a_requiredin_names_is_still_compared():
+    """A revision's contract may name one the current config doesn't declare."""
+    change = _one(contract_diff.diff_schemas({}, {"K": {"requiredIn": ["preview"]}}))
+    assert change.detail["environments"] == {
+        "local": "non_breaking",
+        "preview": "breaking",
+    }
+
+
+@pytest.mark.parametrize(
+    "a, b",
+    [
+        ({}, {"K": {}}),
+        ({"K": {}}, {"K": {"required": False}}),
+        ({"K": {"required": False}}, {"K": {"requiredIf": {"var": "F"}}}),
+        ({"K": {"defaultValue": "1"}}, {"K": {}}),
+    ],
+)
+def test_without_requiredin_every_environment_agrees_and_output_is_unchanged(a, b):
+    single = contract_diff.diff_schemas(a, b).to_dict()
+    assert contract_diff.diff_schemas(a, b, environments=ALL).to_dict() == single
+    assert all("environments" not in c["detail"] for c in single["changes"])
+
+
+def test_schema_diff_across_two_revisions(tmp_path):
+    import subprocess
+
+    def git(*args):
+        subprocess.run(["git", *args], check=True, capture_output=True)
+
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        git("init", "-q")
+        git("config", "user.email", "t@t")
+        git("config", "user.name", "t")
+        _write({"envshield.yml": SERVICE + ENVS, "env.schema.toml": "[A]\n"})
+        git("add", ".")
+        git("commit", "-qm", "one")
+        _write(
+            {
+                "env.schema.toml": '[A]\n\n[STRIPE_KEY]\nsecret = true\nrequiredIn = ["production"]\n'
+            }
+        )
+        git("commit", "-qam", "two")
+        result = runner.invoke(app, ["schema", "diff", "HEAD~1", "HEAD", "--json"])
+    change = json.loads(result.stdout)["results"][0]["changes"][0]
+    assert change["variable"] == "STRIPE_KEY"
+    assert change["category"] == "breaking"
+    assert change["detail"]["environments"]["production"] == "breaking"
+    assert change["detail"]["environments"]["local"] == "non_breaking"
+
+
+def test_explain_lists_every_environment_and_never_a_value(tmp_path):
+    files = {
+        "envshield.yml": SERVICE + ENVS,
+        "env.schema.toml": '[PORT]\ntype = "port"\ndefaultValue = "8123"\n\n[TOKEN]\nsecret = true\nrequiredIn = ["production"]\n',
+        ".env": "TOKEN=hunter2-real-value\n",
+    }
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _write(files)
+        legacy = json.loads(runner.invoke(app, ["explain", "PORT", "--json"]).stdout)
+        token = runner.invoke(app, ["explain", "TOKEN", "--json"]).stdout
+        human = runner.invoke(app, ["explain", "TOKEN"], env={"COLUMNS": "200"}).stdout
+    assert legacy["schema"]["environments"]["required"] == ALL
+    assert json.loads(token)["schema"]["environments"]["optional"] == [
+        "local",
+        "staging",
+    ]
+    assert "Required in:    production" in human
+    assert "hunter2" not in token + human
+
+
+@pytest.mark.parametrize("lang", ["python", "typescript"])
+def test_generate_marks_a_variable_not_required_everywhere_optional(lang):
+    schema = {
+        "LEGACY": {"description": "x"},
+        "PROD_ONLY": {"requiredIn": ["production"]},
+        "EVERYWHERE": {"requiredIn": ALL},
+    }
+    legacy_only = generator.generate_config({"LEGACY": schema["LEGACY"]}, lang=lang)
+    out = generator.generate_config(schema, lang=lang, environments=tuple(ALL))
+    if lang == "python":
+        flat = " ".join(out.split())
+        assert "prod_only: Optional[str] = Field( None," in flat
+        assert "everywhere: str = Field( ...," in flat
+        assert "legacy: str = Field( ...," in flat
+        assert "legacy: str = Field( ...," in " ".join(legacy_only.split())
+    else:
+        assert '"PROD_ONLY": z.string().optional()' in out
+        assert '"EVERYWHERE": z.string().min(1)' in out
+        assert '"LEGACY": z.string().min(1)' in out
