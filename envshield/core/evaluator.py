@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from ..config import manager as config_manager
-from ..parsers._base import ValueStates, not_inspected_names
+from ..parsers._base import Concrete, ValueStates, not_inspected_names
 from ..parsers.factory import get_manifest_parser_and_states
 from ..utils import git_utils
 from . import discovery, schema_manager, schema_types, source_files, verdicts
@@ -290,6 +290,8 @@ class ServiceEvaluation:
     error: Optional[str] = None
     explicit_file: bool = False
     process_environment: bool = False
+    # 'check --runtime' (plan §11): the process environment is the only source.
+    runtime: bool = False
     # The environment requiredness is judged for (plan §7).
     env: str = schema_types.LOCAL
     # None: not evaluated (explicit file, or the contract didn't load).
@@ -546,6 +548,46 @@ def evaluate_service(
     return evaluation
 
 
+RUNTIME_SOURCE = "process environment"
+
+
+def evaluate_runtime(
+    service_name: str, environment: Mapping[str, str], env: str
+) -> ServiceEvaluation:
+    """
+    'check --runtime' (plan §11, Q9): `service_name`'s contract judged for
+    `env` against the process environment alone -- no local file, no
+    manifest, no code references. Only the names the contract declares (or
+    names as a requiredIf trigger) are read from `environment` (D-3), and a
+    defaultValue is never evidence.
+    """
+    evaluation = ServiceEvaluation(service=service_name, runtime=True, env=env)
+    try:
+        evaluation.view = config_manager.load_schema_view(service_name)
+    except EnvShieldException as e:
+        evaluation.schema_error = str(e)
+        return evaluation
+    schema = evaluation.view.fields
+    source = SourceEvaluation(
+        kind="process_environment", path=RUNTIME_SOURCE, service=service_name
+    )
+    names = schema_manager.environment_overlay_names(environment, schema)
+    values = ValueStates({name: Concrete(environment[name]) for name in names})
+    source.overlaid = tuple(names)
+    diff = schema_manager.diff_against_schema(schema, values, env)
+    # A requiredIf trigger the contract doesn't declare decides requiredness
+    # only; it isn't an extra variable.
+    diff.extra -= set(names)
+    source.verdicts = verdicts.judge_source(schema, values, env=env)
+    source.needs = {
+        name: verdicts.requirement(details, values, env)
+        for name, details in schema.items()
+    }
+    source.diff = diff
+    evaluation.sources.append(source)
+    return evaluation
+
+
 # --- Report (D-5) ------------------------------------------------------------
 
 
@@ -781,6 +823,8 @@ def _finding(
     fields = evaluation.view.fields if evaluation.view is not None else {}
     field_schema = fields.get(variable or "", {})
     path = file or (source.path if source is not None else None)
+    if evaluation.runtime:
+        path = None  # the process environment isn't a file
     location = None
     if path is not None:
         location = {
@@ -806,6 +850,7 @@ def _finding(
             secret=bool(field_schema.get("secret", False)),
             has_default="defaultValue" in field_schema,
             detail=verdict.detail,
+            runtime_env=evaluation.env if evaluation.runtime else None,
         ),
     }
 

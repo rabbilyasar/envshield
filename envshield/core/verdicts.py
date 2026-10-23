@@ -386,14 +386,19 @@ def next_step(
     secret: bool = False,
     has_default: bool = False,
     detail: Optional[str] = None,
+    runtime_env: Optional[str] = None,
 ) -> Dict[str, str]:
     """
     What to do about one finding: {"by": "agent" | "human", "text": ...}.
     Deterministic, value-free, and never an interactive command. "agent"
     means a coding agent can make the fix from the repository alone;
     "human" means it needs a value, access or a decision only a person has.
+    `runtime_env` names the deploy environment 'check --runtime' judged:
+    the fix is there, never in a local file or 'setup' (plan §11, B3).
     """
     where = f" in {file}" if file else ""
+    if runtime_env is not None:
+        where = f" in the {runtime_env} deploy environment"
     var = variable or ""
 
     def human(text: str) -> Dict[str, str]:
@@ -407,6 +412,11 @@ def next_step(
         if manifest:
             return human(
                 f"{var} is {state}{where}: supply it in this deployment manifest."
+            )
+        if runtime_env is not None:
+            return human(
+                f"{var} is {state}{where}: set it where this deploy supplies "
+                "its environment, before the check runs."
             )
         if has_default and not secret:
             return agent(f"Set {var}{where} to the schema's defaultValue.")

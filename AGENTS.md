@@ -951,7 +951,10 @@ decisions in
 never judged on its text. V4-1 ([#23](https://github.com/rabbilyasar/envshield/issues/23),
 merged `578af57`) adds environments and `requiredIn`; V4-2
 ([#24](https://github.com/rabbilyasar/envshield/issues/24)) makes `schema diff`, `explain` and
-`generate` environment-aware. Next: V5-1 (#25), `check --runtime`. The full
+`generate` environment-aware (merged `6335c13`). V5-1
+([#25](https://github.com/rabbilyasar/envshield/issues/25)) adds
+`check --runtime`, which checks the process environment alone (branch, not
+yet merged). Next: CLI consolidation (#42, #45, #63). The full
 order is ROADMAP.md's "v5 — in progress". Nothing since `v4.9.1` is released.
 
 **Previous phase (updated 2026-10-15): `v4.9.1` released; v5 V1 next.**

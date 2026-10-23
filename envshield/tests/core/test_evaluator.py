@@ -720,3 +720,49 @@ class TestValuesEnvShieldNeverSaw:
         # The union can't verify PORT, so the gate fails (V1-3).
         assert payload["verdict"] == "unverified"
         assert code == 1 and payload["success"] is False
+
+
+class _RecordingEnvironment(dict):
+    """A process environment that records every name looked up in it."""
+
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.accessed = set()
+
+    def __contains__(self, name):
+        self.accessed.add(name)
+        return super().__contains__(name)
+
+    def __getitem__(self, name):
+        self.accessed.add(name)
+        return super().__getitem__(name)
+
+    def get(self, name, default=None):
+        self.accessed.add(name)
+        return super().get(name, default)
+
+    def __iter__(self):
+        raise AssertionError("the runtime check enumerated the environment")
+
+    def keys(self):
+        raise AssertionError("the runtime check enumerated the environment")
+
+    def items(self):
+        raise AssertionError("the runtime check enumerated the environment")
+
+
+def test_runtime_reads_only_projected_names(tmp_path):
+    """V5-1 (#25, D-3): unrelated environment variables are never read."""
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        service_manager.config_manager.add_service("api", "env.schema.toml")
+        with open("env.schema.toml", "w") as f:
+            f.write(
+                '[PORT]\ntype = "port"\n'
+                '[DEBUG_TOOLBAR]\nrequiredIf = {var = "MODE", equals = "dev"}\n'
+            )
+        environment = _RecordingEnvironment(
+            {"PORT": "8000", "MODE": "prod", "AWS_SECRET_ACCESS_KEY": "x", "HOME": "/"}
+        )
+        evaluation = evaluator.evaluate_runtime("api", environment, "local")
+    assert evaluation.verdict().verdict == "valid"
+    assert environment.accessed <= {"PORT", "DEBUG_TOOLBAR", "MODE"}
