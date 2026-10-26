@@ -38,6 +38,8 @@ Free, open source (MIT), and fully local. EnvShield never sends your configurati
 
 Coding agents write code that reads configuration they don't know exists. EnvShield gives them a deterministic check to run in their loop: `envshield check --since HEAD --json` returns one machine-readable, value-free list of findings for a change (invalid or missing values, new undeclared reads, contract changes), each naming the variable, file and line and saying whether an agent or a person must act, and the Git hooks catch what an agent commits. No secret value appears in EnvShield's output, so it's safe to put in front of an agent.
 
+`envshield agent install` (which `init` offers) sets this up: a short EnvShield section in `AGENTS.md` (and `CLAUDE.md`), and a Claude Code and Codex hook that runs `envshield check --since HEAD --code-only` after each file edit and shows the agent what fails. `envshield agent guide` prints the instructions the agent follows, including how to declare a new variable in `env.schema.toml` without ever writing a secret value.
+
 ---
 
 ## Quick Start

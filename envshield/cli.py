@@ -1,6 +1,7 @@
 # envshield/cli.py
 import json
 import os
+import sys
 from typing import Any, Dict, List, Optional, cast
 
 import questionary
@@ -16,6 +17,7 @@ from envshield.core import importer
 
 from .config import manager as config_manager
 from .core import (
+    agent_setup,
     contract_diff,
     dependency_diff,
     dependency_snapshot,
@@ -118,6 +120,12 @@ hook_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(hook_app, name="hook", rich_help_panel=_DEV_AND_DEPLOY)
+agent_app = typer.Typer(
+    name="agent",
+    help="Set up coding agents (Claude Code, Codex) to run EnvShield and keep env.schema.toml current.",
+    no_args_is_help=True,
+)
+app.add_typer(agent_app, name="agent", rich_help_panel=_DEV_AND_DEPLOY)
 
 
 def _seed_schema_from_file(
@@ -454,6 +462,8 @@ def init(
         # Offer to install git hooks
         hm = hooks_manager.HooksManager()
         hm.install_hooks_if_needed(auto=True, force=False)
+
+        _offer_agent_setup()
 
     except EnvShieldException as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
@@ -3206,3 +3216,131 @@ def service_discover(
 
     console.print("\n[bold cyan]Next step:[/bold cyan]")
     console.print("  envshield setup    # Configure your local environment")
+
+
+# --- Agent setup (V6-3, #63) ---
+
+
+_AGENT_STATUS = {
+    "created": "[green]created[/green]",
+    "updated": "[green]updated[/green]",
+    "unchanged": "[dim]already up to date[/dim]",
+    "skipped": "[yellow]skipped[/yellow]",
+}
+
+
+def _install_agent_setup(agents: List[str], yes: bool) -> bool:
+    """Writes the AGENTS.md section and each agent's hook config; reports each file."""
+    root = os.getcwd()
+
+    def confirm(prompt: str) -> bool:
+        if yes:
+            return True
+        if not hooks_manager._is_interactive():
+            return False
+        return bool(questionary.confirm(prompt, default=False).ask())
+
+    ok = True
+    results: List[agent_setup.WriteResult] = []
+    steps: List[Any] = [lambda: agent_setup.install_instructions(root)]
+    for agent in agents:
+        steps.append(
+            lambda agent=agent: [agent_setup.install_hook_config(agent, root, confirm)]
+        )
+    for step in steps:
+        try:
+            results.extend(step())
+        except EnvShieldException as e:
+            ok = False
+            console.print(f"[bold red]Error:[/bold red] {escape(str(e))}")
+    for r in results:
+        line = f"  {escape(os.path.relpath(r.path, root))}: {_AGENT_STATUS[r.status]}"
+        if r.detail:
+            line += f" ({escape(r.detail)})"
+        console.print(line)
+    return ok
+
+
+def _offer_agent_setup() -> None:
+    """'init' offers agent setup on a terminal, and names the command otherwise."""
+    if agent_setup.is_installed(os.getcwd()):
+        return
+    if not hooks_manager._is_interactive():
+        console.print(
+            "To set up coding agents (Claude Code, Codex), run "
+            "'[bold]envshield agent install[/bold]'."
+        )
+        return
+    wanted = questionary.confirm(
+        "Set up coding agents? (an EnvShield section in AGENTS.md, and a "
+        "Claude Code and Codex hook that checks each edit)",
+        default=True,
+    ).ask()
+    if wanted:
+        console.print("Setting up coding agents:")
+        _install_agent_setup(list(agent_setup.AGENT_NAMES), yes=False)
+
+
+@agent_app.command("install")
+def agent_install(
+    agent: Optional[List[str]] = typer.Option(
+        None,
+        "--agent",
+        metavar="NAME",
+        help="Only set up this agent's hook: claude or codex. Repeatable. Default: both.",
+    ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Replace an older EnvShield hook without asking.",
+    ),
+):
+    """Adds EnvShield's section to AGENTS.md (and CLAUDE.md) and a hook that checks each edit.
+
+    The section tells the agent to run 'envshield agent guide' before
+    changing configuration and the post-change check after. The hook (in
+    .claude/settings.json and .codex/hooks.json) runs that check after each
+    file edit and shows the agent what fails. Re-running updates EnvShield's
+    own section and hook only; the rest of each file is kept.
+    """
+    agents = list(dict.fromkeys(a.lower() for a in agent or agent_setup.AGENT_NAMES))
+    for a in agents:
+        if a not in agent_setup.AGENT_NAMES:
+            raise typer.BadParameter(
+                f"'{a}' isn't one of: {', '.join(agent_setup.AGENT_NAMES)}",
+                param_hint="--agent",
+            )
+    if not config_manager.get_services():
+        console.print(
+            "[bold red]Error:[/bold red] This isn't an EnvShield project yet. "
+            "Run 'envshield init' first."
+        )
+        raise typer.Exit(code=1)
+    console.print("Setting up coding agents:")
+    if not _install_agent_setup(agents, yes):
+        raise typer.Exit(code=1)
+    if "codex" in agents:
+        console.print(
+            "[dim]Codex runs a new project hook only after you trust it "
+            "('/hooks' in Codex).[/dim]"
+        )
+
+
+@agent_app.command("guide")
+def agent_guide():
+    """Prints the instructions a coding agent follows to run EnvShield and keep env.schema.toml current."""
+    typer.echo(agent_setup.guide(), nl=False)
+
+
+@agent_app.command("hook", hidden=True)
+def agent_hook():
+    """Run by the Claude Code/Codex PostToolUse hook after a file edit."""
+    # The agent sends the tool call as JSON on stdin; it isn't needed, but
+    # reading it means the agent never writes into a closed pipe.
+    if not sys.stdin.isatty():
+        sys.stdin.read()
+    code, message = agent_setup.run_hook(config_manager.find_project_root())
+    if message:
+        typer.echo(message, err=True, nl=False)
+    raise typer.Exit(code=code)

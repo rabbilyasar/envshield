@@ -996,8 +996,10 @@ whole-project command cover all services unless `--service` narrows, and
 fixes truncated CI output and "breaking" adoption diffs (merged
 `f8106f2`, PR #86; D-14). [#85](https://github.com/rabbilyasar/envshield/issues/85)
 makes `check --since` read only the files changed since REV, so the CI form
-is as fast as `undeclared` was (`BL-205`; branch, not yet merged). Next:
-#63. The full order is
+is as fast as `undeclared` was (`BL-205`; merged `c017110`, PR #87). V6-3
+([#63](https://github.com/rabbilyasar/envshield/issues/63)) adds agent
+setup: `agent install`, `agent guide` and a Claude Code/Codex hook that
+checks each edit (`BL-192`; branch, not yet merged). The full order is
 ROADMAP.md's "v5 — in progress". Nothing since `v4.9.1` is released.
 
 **Previous phase (updated 2026-10-15): `v4.9.1` released; v5 V1 next.**
