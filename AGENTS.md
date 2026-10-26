@@ -12,7 +12,9 @@ findings, limitations, and their reproduction evidence — see
 not*; ROADMAP.md says what's *done*, *in progress*, and *next*; BACKLOG.md
 is the operational record behind both.
 
-Last revised: 2026-10-19: §1 and §2 now state the approved v5 product
+Last revised: 2026-10-27: the Engineering Task Workflow now requires a
+real-repository trial for feature work (#80). No principle changed.
+Previous revision: 2026-10-19: §1 and §2 now state the approved v5 product
 definition (amendment A1), and §19 the current phase, per V0-1 (#14); the
 v5 decisions are recorded in
 [docs/architecture/v5-decisions.md](docs/architecture/v5-decisions.md). No
@@ -360,7 +362,8 @@ is already governed in full by the section named.
    the way — record them instead (§13), unless a fix is directly required
    for the correctness/security of the current change, the relationship is
    clear, and the change is small and safe.
-4. **Test.** Per §15.
+4. **Test.** Per §15. For feature work, this includes the real-repository
+   trial below.
 5. **Self-review.** Per §20's Pass 1 (Engineering Review).
 6. **Finding reconciliation.** Per "Finding and Evidence Management" below,
    including its Required review closeout.
@@ -381,6 +384,33 @@ is already governed in full by the section named.
 For feature work, also run §20's Pass 2 (Product Review) — user value,
 competitive overlap, differentiation, adoption friction — and apply §14's
 rule against building a feature merely because a competitor has it.
+
+### Real-repository trial (feature work)
+
+A feature is not done until it has run on real repositories. The test suite
+misses what real projects expose: the 2026-10-14 trial on nine real
+repositories found a P0 (`BL-182`) and `BL-175`–`BL-188`.
+
+- **Targets.** Fresh throwaway clones, outside this repository, of:
+  - the Kriyonix projects (GitHub org `kriyonix`);
+  - open-source projects that could become EnvShield users: Cal.com,
+    Plane, Twenty, Formbricks, Documenso, Langfuse, Dify, PostHog and n8n.
+    Change this list as prospects change.
+- **Read-only.** Never modify, push to, or open issues or PRs on a target
+  repository without explicit authorization. Contacting a project is the
+  maintainer's decision.
+- **What to run.** The new feature, plus a regression pass: `init`,
+  `check`, `check --json`, `undeclared`, `schema diff`, `scan` and the
+  manifest checks. Record timings for slow commands.
+- **Secret safety.** Compare every output against each repository's real
+  `.env` values. Any value that appears in an output is a P0 (§4).
+- **Record.** Findings go into BACKLOG.md as a dated real-repo trial block
+  (the 2026-10-14 block above `BL-175` is the format). For each
+  open-source repository, also note the specific configuration problem
+  EnvShield found, as evidence for approaching that project.
+
+Bug fixes and documentation-only changes do not need a full trial; re-run
+the affected command on a real repository when the bug was found there.
 
 **Scope discipline.** This loop does not mean "fix every problem
 discovered." It means: discover → classify → record → decide separately. A
