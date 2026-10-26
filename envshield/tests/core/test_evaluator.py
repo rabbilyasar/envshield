@@ -373,13 +373,14 @@ class TestCodeReferences:
     def test_same_file_set_as_scan(self, tmp_path):
         """Migration parity: the undeclared names 'check' finds are exactly
         the ones the pre-commit 'scan' flags, for the same project."""
-        from envshield.cli import app
+        from envshield.core import scanner
 
         with runner.isolated_filesystem(temp_dir=tmp_path):
             self._project(
                 config_extra="secret_scanning:\n  exclude_files:\n    - '**/tests/*'\n"
             )
-            scan = json.loads(runner.invoke(app, ["scan", "--json"]).stdout)
+            # The scanner's undeclared pass, as the pre-commit hook runs it.
+            scan = scanner.scan_result(None, False, None, None, check_undeclared=True)
             evaluation = evaluator.evaluate_service("app", code=True)
 
         scanned = {f["variable_name"] for f in scan["undeclared_variables"]}

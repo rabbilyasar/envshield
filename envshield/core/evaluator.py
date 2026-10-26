@@ -22,6 +22,7 @@ from ..parsers._base import Concrete, ValueStates, not_inspected_names
 from ..parsers.factory import get_manifest_parser_and_states
 from ..utils import git_utils
 from . import discovery, schema_manager, schema_types, source_files, verdicts
+from . import since as since_check
 from .exceptions import EnvShieldException
 from .verdicts import Verdict
 
@@ -296,6 +297,11 @@ class ServiceEvaluation:
     env: str = schema_types.LOCAL
     # None: not evaluated (explicit file, or the contract didn't load).
     code: Optional[CodeReferences] = None
+    # 'check --code-only' (D-13): code references and the contract only; no
+    # local file or manifest is read, so no value is judged.
+    code_only: bool = False
+    # 'check --since REV' (D-13); None without --since.
+    since: Optional[since_check.SinceResult] = None
 
     @property
     def undeclared_references(self) -> Dict[str, List[Any]]:
@@ -361,7 +367,8 @@ class ServiceEvaluation:
         """name -> (its verdict, its verdict in each of self.sources or None)."""
         fields = self.view.fields if self.view is not None else {}
         undeclared = self.undeclared_references
-        names = set(fields) | set(undeclared)
+        # Code-only judges no value, so a declared variable has no verdict.
+        names = set(undeclared) if self.code_only else set(fields) | set(undeclared)
         for source in self.sources:
             names |= set(source.verdicts)
         result = {}
@@ -426,6 +433,28 @@ class ServiceEvaluation:
             [v for v, _ in self.judged().values()]
             + [v for v, _ in self.service_findings()]
         )
+        if found.verdict == verdicts.NOT_REQUIRED:
+            return verdicts.Verdict(verdicts.VALID)
+        return found
+
+    def gate_verdict(self) -> Any:
+        """
+        The verdict the gate judges (D-13): verdict(), except that with
+        --since an undeclared read proven to exist at the revision doesn't
+        count. The reported verdict never changes, as with accepted
+        COULD NOT VERIFY reasons (D-10).
+        """
+        if self.since is None:
+            return self.verdict()
+        old = self.since.read_before
+        undeclared = self.undeclared_references
+        counted = []
+        for name, (overall, per_source) in self.judged().items():
+            if name in undeclared and name in old:
+                # As judged() would without the undeclared read.
+                overall = verdicts.worst(v for v in per_source if v is not None)
+            counted.append(overall)
+        found = verdicts.worst(counted + [v for v, _ in self.service_findings()])
         if found.verdict == verdicts.NOT_REQUIRED:
             return verdicts.Verdict(verdicts.VALID)
         return found
@@ -548,6 +577,26 @@ def evaluate_service(
     return evaluation
 
 
+def evaluate_code_only(service_name: str) -> ServiceEvaluation:
+    """
+    'check --code-only' (D-13): the contract and the service's code
+    references, nothing else. Without a local file (CI), this is what
+    'undeclared' checked. A contract that fails to load is an error, as
+    everywhere else.
+    """
+    evaluation = ServiceEvaluation(service=service_name, code_only=True)
+    try:
+        evaluation.view = config_manager.load_schema_view(service_name)
+    except EnvShieldException as e:
+        evaluation.schema_error = str(e)
+        return evaluation
+    try:
+        evaluation.code = discover_code_references(service_name)
+    except EnvShieldException as e:
+        evaluation.error = str(e)
+    return evaluation
+
+
 RUNTIME_SOURCE = "process environment"
 
 
@@ -655,11 +704,16 @@ def build_report(evaluation: ServiceEvaluation) -> Dict[str, Any]:
     references = code.by_variable() if code is not None else {}
     undeclared = evaluation.undeclared_references
 
-    names = set(fields) | set(references)
-    for source in checked:
-        names |= source.diff.extra
     judged = evaluation.judged()
-    names |= set(judged)
+    if evaluation.code_only:
+        # Only the undeclared reads: no declared variable's value was read,
+        # so none gets a verdict.
+        names = set(judged)
+    else:
+        names = set(fields) | set(references)
+        for source in checked:
+            names |= source.diff.extra
+        names |= set(judged)
 
     variables = []
     unverified: List[str] = []
@@ -771,6 +825,7 @@ def build_report(evaluation: ServiceEvaluation) -> Dict[str, Any]:
         "report_version": REPORT_VERSION,
         "service": evaluation.service,
         "environment": evaluation.env,
+        **({"values": "not_checked"} if evaluation.code_only else {}),
         "sources": sources,
         "variables": variables,
         "union": evaluation.legacy_combined(),
@@ -795,6 +850,7 @@ def build_report(evaluation: ServiceEvaluation) -> Dict[str, Any]:
             "counts": counts,
         },
         "findings": findings,
+        **({"since": _since_entry(evaluation)} if evaluation.since else {}),
         "errors": [f for f in findings if f["verdict"] == verdicts.ERROR],
         "invalid": [f for f in findings if f["verdict"] == verdicts.INVALID],
         "unverified": [f for f in findings if f["verdict"] == verdicts.UNVERIFIED],
@@ -807,6 +863,26 @@ def build_report(evaluation: ServiceEvaluation) -> Dict[str, Any]:
             if code is not None
             else None
         ),
+    }
+
+
+def _since_entry(evaluation: ServiceEvaluation) -> Dict[str, Any]:
+    """The report's 'since' block (D-13)."""
+    result = evaluation.since
+    assert result is not None
+    undeclared = set(evaluation.undeclared_references)
+    if result.contract_introduced:
+        contract = "introduced"
+    elif result.contract is None:
+        contract = "error"
+    else:
+        contract = "compared"
+    return {
+        "revision": result.revision,
+        "new_undeclared": sorted(undeclared - result.read_before),
+        "undeclared_before": sorted(undeclared & result.read_before),
+        "contract": contract,
+        "contract_error": result.contract_error,
     }
 
 
@@ -878,16 +954,17 @@ def _findings(evaluation: ServiceEvaluation, judged) -> List[Dict[str, Any]]:
         overall, per_source = judged[name]
         if name in undeclared:
             usage = undeclared[name][0]
-            findings.append(
-                _finding(
-                    evaluation,
-                    verdicts.UNDECLARED,
-                    "code_reference",
-                    name,
-                    line=usage.line,
-                    file=usage.file_path,
-                )
+            finding = _finding(
+                evaluation,
+                verdicts.UNDECLARED,
+                "code_reference",
+                name,
+                line=usage.line,
+                file=usage.file_path,
             )
+            if evaluation.since is not None:
+                finding["new"] = name not in evaluation.since.read_before
+            findings.append(finding)
         if overall.verdict not in reportable or overall == verdicts.UNDECLARED:
             continue
         pairs = list(zip(per_source, evaluation.sources))
@@ -901,6 +978,15 @@ def _findings(evaluation: ServiceEvaluation, judged) -> List[Dict[str, Any]]:
         for v, src in pairs:
             if v is not None and v.verdict in reportable:
                 findings.append(_finding(evaluation, v, "variable", name, source=src))
+    if evaluation.since is not None and evaluation.view is not None:
+        findings.extend(
+            since_check.contract_findings(
+                evaluation.since,
+                evaluation.service,
+                fields,
+                evaluation.view.schema_path,
+            )
+        )
     return findings
 
 

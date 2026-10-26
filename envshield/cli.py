@@ -35,6 +35,7 @@ from .core import (
     setup_manager,
     verdicts,
 )
+from .core import since as since_check
 from .core.exceptions import (
     EnvShieldException,
     SchemaNotFoundError,
@@ -159,6 +160,38 @@ def init(
         "-f",
         help="Overwrite existing EnvShield configuration files.",
     ),
+    from_file: Optional[str] = typer.Option(
+        None,
+        "--from",
+        metavar="FILE",
+        help=(
+            "Build the schema from this config file (.env, a Python config "
+            "module, or a deployment manifest) instead of detecting one. On a "
+            "project that's already set up, refreshes that service's schema "
+            "from the file (needs --force to rewrite it) and never drops a "
+            "declared variable."
+        ),
+    ),
+    service: Optional[str] = typer.Option(
+        None,
+        "--service",
+        "-s",
+        help="With --from: the service whose schema to build or refresh.",
+    ),
+    interactive: bool = typer.Option(
+        False,
+        "--interactive",
+        help="With --from: classify each variable interactively.",
+    ),
+    as_local_values: bool = typer.Option(
+        False,
+        "--as-local-values",
+        help=(
+            "With --from and a Python config module: import every top-level "
+            "assignment as a declared value, instead of discovering "
+            "os.environ/os.getenv reads."
+        ),
+    ),
 ):
     """Initializes EnvShield -- builds env.schema.toml from your real config if one is found, otherwise a framework-aware template.
 
@@ -168,8 +201,32 @@ def init(
     on an already-existing project, since it detects and imports real
     config the same way 'import' does. For re-deriving a single already-
     registered service's schema only (no project-wide setup), use
-    'envshield import' instead.
+    'envshield init --from FILE' instead.
     """
+    if from_file is None:
+        for flag, given in (
+            ("--service", service is not None),
+            ("--interactive", interactive),
+            ("--as-local-values", as_local_values),
+        ):
+            if given:
+                raise typer.BadParameter("only works with --from", param_hint=flag)
+    elif not os.path.isfile(from_file):
+        console.print(f"[bold red]Error:[/bold red] File not found: '{from_file}'.")
+        raise typer.Exit(code=1)
+
+    if from_file is not None and config_manager.get_services():
+        # Already set up: refresh one service's schema, as 'import' does.
+        _import_schema(
+            from_file,
+            config_manager.SCHEMA_FILE_NAME,
+            force,
+            interactive,
+            service,
+            as_local_values,
+        )
+        return
+
     console.print(
         Panel(
             "[bold cyan]Welcome to EnvShield! Setting up your configuration contract...[/bold cyan]",
@@ -228,7 +285,7 @@ def init(
         # separate "rootless" shape. Growing into a second service later is
         # then just appending another entry to the same `services` map,
         # not a structural migration (see config_manager.add_service).
-        service_name = project_name
+        service_name = service or project_name
 
         # Reuse whichever real file the schema was originally built from,
         # if this is a re-run (--force) and one was recorded, instead of
@@ -237,7 +294,9 @@ def init(
         # exists but has since drifted, missing a variable the actual
         # source file still declares), silently regressing the schema.
         recorded_source = config_manager.get_service_config_source(service_name)
-        reuse_recorded = bool(recorded_source and os.path.exists(recorded_source))
+        reuse_recorded = from_file is None and bool(
+            recorded_source and os.path.exists(recorded_source)
+        )
 
         # The one case worth breaking that stability for: the recorded
         # source has itself since become an EnvShield-generated file (e.g.
@@ -268,7 +327,9 @@ def init(
                     "to be prompted to fix this.[/yellow]"
                 )
 
-        if reuse_recorded:
+        if from_file is not None:
+            config_source = from_file
+        elif reuse_recorded:
             config_source = recorded_source
         else:
             # Prefer building the schema from a real, already-existing
@@ -298,7 +359,10 @@ def init(
                 f"Found [bold yellow]{config_source}[/bold yellow] -- building your schema from its real variables."
             )
             schema_content = importer.generate_schema_from_file(
-                config_source, interactive=False, existing_schema=existing_schema
+                config_source,
+                interactive=interactive,
+                existing_schema=existing_schema,
+                as_local_values=as_local_values,
             )
 
             # A pinned config_source is only ever re-scanned itself, so it
@@ -307,8 +371,11 @@ def init(
             # module gaining a var a stale '.env' never picked up). Check
             # for that drift right here instead of leaving it to a later,
             # separate 'envshield doctor' run to catch.
-            other_sources = service_discovery.find_other_config_sources(
-                ".", config_source
+            # An explicit --from names the one source to use.
+            other_sources = (
+                service_discovery.find_other_config_sources(".", config_source)
+                if from_file is None
+                else []
             )
             if other_sources:
                 schema_dict = toml.loads(schema_content)
@@ -485,8 +552,60 @@ def check(
         metavar="DIR",
         help="With --runtime: the directory holding envshield.yml and the schema.",
     ),
+    since_rev: Optional[str] = typer.Option(
+        None,
+        "--since",
+        metavar="REV",
+        help=(
+            "Also report what changed since this Git revision: which "
+            "undeclared reads are new, and how the contract changed. Only new "
+            "undeclared reads fail the check; contract changes are reported, "
+            "never failed on ('schema diff' gates those)."
+        ),
+    ),
+    code_only: bool = typer.Option(
+        False,
+        "--code-only",
+        help=(
+            "Check only what the code reads (and, with --since, how the "
+            "contract changed): no local file or manifest is read, so it runs "
+            "in CI without a .env. Fails on an undeclared read (with --since, "
+            "only a new one)."
+        ),
+    ),
+    sarif_output: bool = typer.Option(
+        False,
+        "--sarif",
+        help=(
+            "With --since: print a SARIF 2.1.0 log of the new undeclared reads "
+            "instead of a table or JSON (for GitHub Code Scanning). The exit "
+            "code is still the check's."
+        ),
+    ),
 ):
-    """Validates a local environment file against the schema. Also accepts a docker-compose or Kubernetes manifest."""
+    """Validates a local environment file against the schema. Also accepts a docker-compose or Kubernetes manifest. With --since REV, also reports what changed since that revision."""
+    machine = json_output or sarif_output
+    if sarif_output and json_output:
+        raise typer.BadParameter(
+            "pass --json or --sarif, not both", param_hint="--sarif"
+        )
+    if sarif_output and since_rev is None:
+        raise typer.BadParameter("only works with --since", param_hint="--sarif")
+    if since_rev is not None and runtime:
+        raise typer.BadParameter("doesn't work with --runtime", param_hint="--since")
+    if code_only:
+        for flag, given in (
+            ("FILE", file is not None),
+            ("--container", container is not None),
+            ("--process-env", process_env),
+            ("--runtime", runtime),
+            ("--accept-unverified", accept_unverified is not None),
+        ):
+            if given:
+                # Code-only reads no values, so these have nothing to apply to.
+                raise typer.BadParameter(
+                    f"doesn't work with {flag}", param_hint="--code-only"
+                )
     if runtime:
         _runtime_preflight(file, container, process_env, accept_unverified, project)
     elif project is not None:
@@ -511,8 +630,14 @@ def check(
             targets = service_manager.resolve_targets(
                 service, invocation_dir=INVOCATION_DIR
             )
+        if since_rev is not None and not git_utils.revision_exists(since_rev):
+            raise EnvShieldException(
+                f"revision '{since_rev}' does not resolve to a commit."
+            )
     except EnvShieldException as e:
-        if json_output:
+        if sarif_output:
+            _print_dependency_error(str(e), False, True)
+        elif json_output:
             print(json.dumps({"success": False, "error": str(e)}, indent=2))
         else:
             console.print(f"[bold red]Error:[/bold red] {e}")
@@ -521,23 +646,25 @@ def check(
     # An explicit file only makes sense for a single target -- it can't
     # apply to every service's own local file at once.
     if len(targets) > 1 and file:
-        if not json_output:
+        if not machine:
             console.print(
                 "[yellow]Ignoring the explicit file argument -- each service's own local file is checked when validating multiple services.[/yellow]"
             )
         file = None
 
     environment = dict(os.environ) if process_env else None
-    env_name = _resolve_env(env, json_output)
-    if not json_output and env_name != schema_types.LOCAL:
+    env_name = _resolve_env(env, machine)
+    if not machine and env_name != schema_types.LOCAL:
         console.print(f"[bold]Environment:[/bold] {escape(env_name)}")
     evaluations = []
     for target in targets:
-        if not json_output:
+        if not machine:
             _print_service_header(targets, target)
         if runtime:
             # The live mapping, not a copy: only projected names are read (D-3).
             evaluation = evaluator.evaluate_runtime(target, os.environ, env_name)
+        elif code_only:
+            evaluation = evaluator.evaluate_code_only(target)
         else:
             evaluation = evaluator.evaluate_service(
                 target,
@@ -547,18 +674,39 @@ def check(
                 code=True,
                 env=env_name,
             )
+        if since_rev is not None and evaluation.view is not None:
+            evaluation.since = since_check.evaluate(
+                target, since_rev, evaluation.undeclared_references
+            )
         evaluations.append(evaluation)
-        if not json_output:
+        if not machine:
             _render_evaluation(evaluation)
 
     reports = [evaluator.build_report(e) for e in evaluations]
     # The invocation's verdict is the highest-precedence service verdict;
-    # the gate decides the exit code (plan §10).
+    # the gate decides the exit code (plan §10). With --since, the gate
+    # doesn't count undeclared reads that existed at REV (D-13).
     verdict = verdicts.worst(e.verdict() for e in evaluations).verdict
+    gate_verdict = verdicts.worst(e.gate_verdict() for e in evaluations).verdict
     gate = verdicts.gate(
-        verdict, [f for r in reports for f in r["unverified"]], accepted
+        gate_verdict, [f for r in reports for f in r["unverified"]], accepted
     )
-    if json_output:
+    if since_rev is not None:
+        gate["undeclared_before"] = sorted(
+            {
+                n
+                for r in reports
+                if "since" in r
+                for n in r["since"]["undeclared_before"]
+            }
+        )
+    if sarif_output:
+        sarif_reports, sarif_errors = _since_sarif_inputs(evaluations)
+        doc = dependency_diff.to_sarif(
+            sarif_reports, tool_version=__version__, errors=sarif_errors
+        )
+        print(json.dumps(doc, indent=2))
+    elif json_output:
         payload = evaluator.legacy_check_payload(evaluations)
         # Strict: false under accepted unverified values, though the exit is 0.
         payload["success"] = verdict == verdicts.VALID
@@ -569,6 +717,8 @@ def check(
         print(json.dumps(payload, indent=2))
     else:
         _render_gate(verdict, gate, reports)
+        if since_rev is not None:
+            _render_since_gate(verdict, gate, since_rev)
 
     if gate["result"] != "pass":
         raise typer.Exit(code=1)
@@ -765,11 +915,107 @@ def _render_evaluation(evaluation: "evaluator.ServiceEvaluation") -> None:
             + "[/dim]"
         )
     _render_code_references(evaluation)
+    _render_contract_changes(evaluation)
     _render_service_summary(evaluator.build_report(evaluation))
+
+
+def _since_sarif_inputs(evaluations: List["evaluator.ServiceEvaluation"]):
+    """'check --since --sarif': each service's new undeclared reads, as the
+    reports dependency_diff.to_sarif renders (one result per read)."""
+    reports, errors = [], []
+    for evaluation in evaluations:
+        failure = evaluation.error or evaluation.schema_error
+        if failure is not None:
+            errors.append((evaluation.service, failure))
+            continue
+        old = evaluation.since.read_before if evaluation.since else set()
+        system = evaluation.view.system if evaluation.view is not None else {}
+        changes = [
+            dependency_diff.DependencyChange(
+                variable=name,
+                file_path=u.file_path,
+                line=u.line,
+                language=u.language,
+                access_type=u.access_type,
+                category="missing_declaration",
+                scope="out_of_scope" if name in system else None,
+            )
+            for name, usages in sorted(evaluation.undeclared_references.items())
+            if name not in old
+            for u in usages
+        ]
+        reports.append(
+            (evaluation.service, dependency_diff.DependencyChangeReport(changes))
+        )
+    return reports, errors
+
+
+def _render_since_gate(verdict: str, gate: Dict[str, Any], revision: str) -> None:
+    """The closing line when --since kept old undeclared reads out of the gate."""
+    before = gate.get("undeclared_before") or []
+    if gate["result"] == "pass" and verdict != verdicts.VALID and before:
+        console.print(
+            f"\n[bold yellow]PASSED:[/bold yellow] the only undeclared reads were "
+            f"already there at {escape(revision)} ({escape(', '.join(before))}). "
+            "'envshield check' without --since still fails on them."
+        )
+
+
+def _render_contract_changes(evaluation: "evaluator.ServiceEvaluation") -> None:
+    """--since: how the contract changed. Reported only, never failed on."""
+    result = evaluation.since
+    if result is None:
+        return
+    revision = escape(result.revision)
+    if result.contract_introduced:
+        console.print(
+            f"\n[dim]No contract existed for '{escape(evaluation.service)}' at "
+            f"{revision}: this change introduces it.[/dim]"
+        )
+        return
+    if result.contract_error is not None:
+        console.print(
+            f"\n[yellow]Contract changes since {revision} couldn't be compared: "
+            f"{escape(result.contract_error)}[/yellow]"
+        )
+        return
+    if result.contract is None or not result.contract.changes:
+        console.print(f"\n[dim]Contract unchanged since {revision}.[/dim]")
+        return
+    console.print(
+        f"\n[bold]Contract changes since {revision}[/bold] [dim](reported, not "
+        "failed on)[/dim]"
+    )
+    table = Table(show_header=True, header_style="bold blue")
+    table.add_column("Variable", style="white", overflow="fold")
+    table.add_column("Category", style="cyan")
+    table.add_column("Change", style="white", overflow="fold")
+    for change in result.contract.changes:
+        table.add_row(
+            escape(change.variable),
+            change.category.replace("_", " "),
+            escape(since_check.change_detail(change)),
+        )
+    console.print(table)
 
 
 def _render_service_summary(report: Dict[str, Any]) -> None:
     """'INVALID: 1 invalid, 2 could not be verified, 1 valid.'"""
+    if report.get("values") == "not_checked":
+        # --code-only: no value was read, so no value counts.
+        n = len(report["code_references"].get("undeclared", []))
+        verdict = report["summary"]["verdict"]
+        color = "green" if verdict in ("valid", "not_required") else "red"
+        found = (
+            f"{n} undeclared read" + ("s" if n != 1 else "")
+            if n
+            else "no undeclared reads"
+        )
+        console.print(
+            f"\n[bold {color}]{_VERDICT_WORD[verdict]}:[/bold {color}] {found}; "
+            "no local file or manifest read (--code-only)."
+        )
+        return
     counts = report["summary"]["counts"]
     verdict = report["summary"]["verdict"]
     parts = []
@@ -827,12 +1073,19 @@ def _render_code_references(evaluation: "evaluator.ServiceEvaluation") -> None:
         table.add_column("Status", style="cyan")
         table.add_column("Variable Name", style="white")
         table.add_column("Referenced At", style="white")
+        old = evaluation.since.read_before if evaluation.since else None
         for name, usages in sorted(undeclared.items()):
             status = (
                 "[red]Out of Scope[/red]"
                 if name in evaluation.view.system
                 else "[red]Not Declared[/red]"
             )
+            if old is not None:
+                status += (
+                    f" [dim](before {escape(evaluation.since.revision)})[/dim]"
+                    if name in old
+                    else " (new)"
+                )
             table.add_row(status, name, _where(usages))
         console.print(table)
         console.print(
@@ -1470,7 +1723,7 @@ def _print_dependency_error(
         console.print(f"[bold red]Error:[/bold red] {message}")
 
 
-@app.command(name="undeclared", rich_help_panel=_DEV_AND_DEPLOY)
+@app.command(name="undeclared", hidden=True)
 def undeclared(
     rev_a: Optional[str] = typer.Argument(
         None,
@@ -1507,7 +1760,10 @@ def undeclared(
     HEAD against your current working tree (uncommitted and untracked
     files included) -- catching a newly introduced dependency before you
     commit it.
+
+    Deprecated (v5): use 'envshield check --since REV'.
     """
+    _warn_deprecated("undeclared", f"check --since {rev_a or 'HEAD'}")
     if json_output and sarif_output:
         console.print("[bold red]Error:[/bold red] pass --json or --sarif, not both.")
         raise typer.Exit(code=1)
@@ -2081,7 +2337,16 @@ def scan(
         "Intended for Git hooks - distinguishes commit enforcement from normal scanning.",
     ),
 ):
-    """Scans files for hardcoded secrets and reports every currently-undeclared environment-variable read."""
+    """Scans files for hardcoded secrets. With --staged (the pre-commit hook), also blocks newly added undeclared environment-variable reads; otherwise 'check' reports those."""
+    if not staged:
+        # v5 only (V0-2b, #42): a CI job that used 'scan' to catch undeclared
+        # reads would otherwise start passing without a word.
+        typer.echo(
+            "Note: 'envshield scan' no longer reports undeclared environment-"
+            "variable reads (except with --staged). Use 'envshield check', or "
+            "'envshield check --code-only' where there's no .env (CI).",
+            err=True,
+        )
     try:
         if service:
             # Validate eagerly for a consistent "Available: ..." error --
@@ -2104,6 +2369,7 @@ def scan(
                 config_path=config,
                 exclude_patterns=exclude,
                 service_name=service,
+                check_undeclared=staged,
             )
             print(json.dumps(result, indent=2))
             # Incomplete coverage is fatal here unconditionally -- '--json'
@@ -2121,6 +2387,7 @@ def scan(
                 exclude_patterns=exclude,
                 service_name=service,
                 enforce_mode=enforce,
+                check_undeclared=staged,
             )
     except EnvShieldException as e:
         if json_output:
@@ -2385,7 +2652,7 @@ def uninstall(
     _remove_hooks_and_report(missing_repo_ok=True)
 
 
-@app.command(name="import", rich_help_panel=_SUPPORTING)
+@app.command(name="import", hidden=True)
 def import_command(
     file: str = typer.Argument(
         ...,
@@ -2435,7 +2702,23 @@ def import_command(
     'envshield.yml' doesn't exist yet for this project at all, use
     'envshield init' instead -- it does the whole-project setup 'import'
     intentionally skips.
+
+    Deprecated (v5): use 'envshield init --from FILE'.
     """
+    _warn_deprecated("import", f"init --from {file}")
+    _import_schema(file, output, force, interactive, service, as_local_values)
+
+
+def _import_schema(
+    file: str,
+    output: str,
+    force: bool,
+    interactive: bool,
+    service: Optional[str],
+    as_local_values: bool,
+) -> None:
+    """(Re)writes one schema from one config file: 'import', and 'init --from'
+    on a project that's already set up."""
     try:
         if service:
             service_manager.resolve_service(service, invocation_dir=INVOCATION_DIR)
