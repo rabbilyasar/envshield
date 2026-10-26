@@ -2027,12 +2027,13 @@ A third real-repository trial on 2026-10-27, for V6-3 (#63, branch `rabbilyasar/
 
 ### BL-206 — Claude Code asks before running `envshield agent guide` or the check, so an unattended agent skips them
 
-Type: `AI_AGENT` · Evidence: `CONFIRMED` (live Claude Code run, 2026-10-27, see `BL-192`) · Priority: **P3** · Status: **open, proposed**
+Type: `AI_AGENT` · Evidence: `CONFIRMED` (live Claude Code run, 2026-10-27, see `BL-192`) · Priority: **P3** · Status: **open, proposed ([#89](https://github.com/rabbilyasar/envshield/issues/89))**
 Component: `core/agent_setup.py::install_hook_config` (`.claude/settings.json`)
 
 - **Current behavior:** `agent install` adds the `PostToolUse` hook but no permission rule. The `AGENTS.md` section tells the agent to run `envshield agent guide` and `envshield check --since HEAD --code-only --json`; in a headless or approval-required session Claude Code needs approval for each, so the agent skips them and relies on the hook alone. In the live run it then declared the variable without a `type` and didn't run `schema sync`, which the guide asks for.
 - **Expected behavior (proposal):** `agent install` also adds read-only allow rules to `.claude/settings.json` `permissions.allow`, such as `Bash(envshield agent guide)` and `Bash(envshield check:*)`, kept and re-run the same way as the hook. Needs a decision: it widens what the agent may run without asking (both commands only read, but `check` takes paths), and Codex's equivalent (`sandbox`/approval policy) is per user, not per project.
 - **Relationships:** `BL-192`, #63.
+- **Issue:** [#89](https://github.com/rabbilyasar/envshield/issues/89).
 
 ---
 
