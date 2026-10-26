@@ -35,6 +35,11 @@ def find_nearest_git_boundary(start: str) -> str | None:
         current = parent
 
 
+class GitError(Exception):
+    """A git command a caller can't safely treat as "no output" failed
+    (the `strict` mode of the listing helpers below)."""
+
+
 def get_git_root() -> str | None:
     """
     Finds the root directory of the current Git repository.
@@ -240,7 +245,9 @@ def revision_exists(revision: str) -> bool:
         return False
 
 
-def list_changed_files(revision_a: str | None, revision_b: str | None) -> list[str]:
+def list_changed_files(
+    revision_a: str | None, revision_b: str | None, strict: bool = False
+) -> list[str]:
     """
     Lists paths that differ between `revision_a` and `revision_b` via
     'git diff --no-renames --name-only'. Either side may be None to mean
@@ -257,10 +264,15 @@ def list_changed_files(revision_a: str | None, revision_b: str | None) -> list[s
 
     Returns absolute paths (like get_staged_files), an empty list outside a
     Git repository, if git itself isn't available, or if a given revision
-    doesn't resolve.
+    doesn't resolve. With `strict`, each of those failures raises GitError
+    instead: for a caller that would read an empty list as "nothing
+    changed, so nothing to check" (check --since, D-13), a silent [] is a
+    false pass.
     """
     git_root = get_git_root()
     if not git_root:
+        if strict:
+            raise GitError("not inside a Git repository")
         return []
     if revision_a is None and revision_b is None:
         return []
@@ -274,14 +286,16 @@ def list_changed_files(revision_a: str | None, revision_b: str | None) -> list[s
             text=True,
             check=True,
         )
-    except (subprocess.CalledProcessError, FileNotFoundError):
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        if strict:
+            raise GitError(f"'git diff' failed: {e}") from e
         return []
 
     relative_paths = [line for line in result.stdout.splitlines() if line]
     return [os.path.join(git_root, path) for path in relative_paths]
 
 
-def list_untracked_files() -> list[str]:
+def list_untracked_files(strict: bool = False) -> list[str]:
     """
     Lists files present on disk but not tracked by Git and not ignored, via
     'git ls-files --others --exclude-standard'.
@@ -292,10 +306,13 @@ def list_untracked_files() -> list[str]:
     separately to see a brand-new, not-yet-'git add'-ed file.
 
     Returns absolute paths (like get_staged_files), or an empty list
-    outside a Git repository or if git isn't available.
+    outside a Git repository or if git isn't available; with `strict`,
+    those raise GitError instead (see list_changed_files).
     """
     git_root = get_git_root()
     if not git_root:
+        if strict:
+            raise GitError("not inside a Git repository")
         return []
 
     try:
@@ -306,7 +323,9 @@ def list_untracked_files() -> list[str]:
             text=True,
             check=True,
         )
-    except (subprocess.CalledProcessError, FileNotFoundError):
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        if strict:
+            raise GitError(f"'git ls-files' failed: {e}") from e
         return []
 
     relative_paths = [line for line in result.stdout.splitlines() if line]

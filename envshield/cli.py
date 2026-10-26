@@ -624,10 +624,14 @@ def check(
             # Every service unless --service narrows: the same answer in a
             # terminal and in CI (#45).
             targets = service_manager.resolve_all_targets(service)
-        if since_rev is not None and not git_utils.revision_exists(since_rev):
-            raise EnvShieldException(
-                f"revision '{since_rev}' does not resolve to a commit."
-            )
+        changed: Optional[List[str]] = None
+        if since_rev is not None:
+            if not git_utils.revision_exists(since_rev):
+                raise EnvShieldException(
+                    f"revision '{since_rev}' does not resolve to a commit."
+                )
+            # Only these files' code is read with --since (D-13, #85).
+            changed = since_check.changed_files(since_rev)
     except EnvShieldException as e:
         if sarif_output:
             _print_dependency_error(str(e), False, True)
@@ -658,7 +662,7 @@ def check(
             # The live mapping, not a copy: only projected names are read (D-3).
             evaluation = evaluator.evaluate_runtime(target, os.environ, env_name)
         elif code_only:
-            evaluation = evaluator.evaluate_code_only(target)
+            evaluation = evaluator.evaluate_code_only(target, changed)
         else:
             evaluation = evaluator.evaluate_service(
                 target,
@@ -667,10 +671,15 @@ def check(
                 environment=environment,
                 code=True,
                 env=env_name,
+                code_files=changed,
             )
-        if since_rev is not None and evaluation.view is not None:
+        if (
+            changed is not None
+            and since_rev is not None
+            and evaluation.view is not None
+        ):
             evaluation.since = since_check.evaluate(
-                target, since_rev, evaluation.undeclared_references
+                target, since_rev, evaluation.undeclared_references, changed
             )
         evaluations.append(evaluation)
         if not machine:
@@ -1059,9 +1068,13 @@ def _render_code_references(evaluation: "evaluator.ServiceEvaluation") -> None:
         more = f" (+{len(usages) - 1} more)" if len(usages) > 1 else ""
         return f"{first.file_path}:{first.line}{more}"
 
-    console.print(
-        f"\n[bold]Code references[/bold] [dim]({code.files_scanned} file(s) scanned)[/dim]"
+    scanned = (
+        f"{code.files_scanned} file(s) changed since "
+        f"{escape(evaluation.since.revision)} scanned"
+        if evaluation.since is not None
+        else f"{code.files_scanned} file(s) scanned"
     )
+    console.print(f"\n[bold]Code references[/bold] [dim]({scanned})[/dim]")
     if undeclared:
         table = Table(show_header=True, header_style="bold blue")
         table.add_column("Status", style="cyan", overflow="fold")

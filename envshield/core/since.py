@@ -3,11 +3,14 @@
 What changed since a revision, for 'check --since REV' (V0-2b, #42; D-13
 in evaluator-decisions.md).
 
-Two answers, both relative to REV and the live working tree:
+Three answers, all relative to REV and the live working tree:
 
-- which of a service's undeclared reads were already there at REV. Only
-  proven ones count: the gate ignores an old read, so guessing "old" would
-  let a new one through. Anything not proven is new.
+- which files changed (changed_files): the only ones 'check --since' reads
+  code references from, so a large repository isn't walked for a small
+  change (BL-205, #85). A git failure is an error, never "no changes".
+- which of a service's undeclared reads in those files were already there
+  at REV. Only proven ones count: the gate ignores an old read, so
+  guessing "old" would let a new one through. Anything not proven is new.
 - how the service's contract changed (contract_diff), reported only.
 
 Source text and schema metadata only -- never a configuration value.
@@ -18,12 +21,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
 from envshield.config import manager as config_manager
-from envshield.core import (
-    contract_diff,
-    dependency_snapshot,
-    schema_snapshot,
-    source_files,
-)
+from envshield.core import contract_diff, discovery, schema_snapshot, source_files
 from envshield.core.exceptions import EnvShieldException, SchemaNotFoundError
 from envshield.utils import git_utils
 
@@ -42,47 +40,56 @@ class SinceResult:
     contract_error: Optional[str] = None
 
 
-def _unchanged_since(path: str, revision: str) -> bool:
-    """Whether `path` on disk has exactly the content it had at `revision`.
-    Any doubt (unreadable, absent there, git failing) is False."""
+def changed_files(revision: str) -> List[str]:
+    """
+    Every path changed between `revision` and the working tree, plus every
+    untracked (not ignored) file: absolute, deduplicated. Deleted paths are
+    included, since their content at `revision` can prove a read old (a
+    moved read). Raises when git can't answer: an empty list would read as
+    "nothing changed", a false pass.
+    """
     try:
-        with source_files.open_nofollow(path) as f:  # never through a symlink
-            current = f.read()
-    except OSError:
-        return False
-    before = git_utils.get_file_content_at_revision(os.path.abspath(path), revision)
-    return before is not None and before == current
+        changed = git_utils.list_changed_files(revision, None, strict=True)
+        untracked = git_utils.list_untracked_files(strict=True)
+    except git_utils.GitError as e:
+        raise EnvShieldException(
+            f"Couldn't list the files changed since '{revision}': {e}"
+        ) from e
+    return list(dict.fromkeys(changed + untracked))
 
 
 def read_before(
-    service_name: str, revision: str, undeclared: Dict[str, List[Any]]
+    service_name: str,
+    revision: str,
+    undeclared: Dict[str, List[Any]],
+    changed: List[str],
 ) -> Set[str]:
     """
-    The names in `undeclared` (name -> current high-confidence usages)
-    proven to be read at `revision`: 'undeclared's own comparison finds
-    them there (same identity, the variable name; renames included), or one
-    of their current reads is in a file unchanged since `revision`.
+    The names in `undeclared` (name -> current high-confidence usages) that
+    one of the `changed` files belonging to the service read at `revision`,
+    found by check's own discovery (BaseSettings fields included). Identity
+    is the variable name, so a read moved to another file is old. A file
+    git can't show at `revision` (new, or a git failure) proves nothing.
     """
     if not undeclared:
         return set()
-    try:
-        usages_a, _ = dependency_snapshot.discover_usages_for_service(
-            service_name, revision, dependency_snapshot.DEFAULT_REVISION_B, quiet=True
-        )
-    except EnvShieldException:
-        usages_a = []
-    proven = {u.variable for u in usages_a} & set(undeclared)
-    unchanged: Dict[str, bool] = {}
-    for name, usages in undeclared.items():
-        if name in proven:
+    from envshield.core import evaluator  # evaluator imports this module
+
+    belongs = evaluator.service_source_filter(service_name)
+    wanted = set(undeclared)
+    proven: Set[str] = set()
+    for path in changed:
+        rel = os.path.normpath(os.path.relpath(path) if os.path.isabs(path) else path)
+        if not belongs(rel):
             continue
-        for usage in usages:
-            path = usage.file_path
-            if path not in unchanged:
-                unchanged[path] = _unchanged_since(path, revision)
-            if unchanged[path]:
-                proven.add(name)
-                break
+        content = git_utils.get_file_content_at_revision(os.path.abspath(rel), revision)
+        # Same cap as the current side; a skipped file proves nothing.
+        if content is None or len(content) > source_files.MAX_SCANNABLE_SIZE_BYTES:
+            continue
+        usages, _dynamic = discovery.discover_references(content, rel)
+        proven |= {u.variable for u in usages if u.confidence == "high"} & wanted
+        if proven == wanted:
+            break
     return proven
 
 
@@ -109,10 +116,13 @@ def contract_changes(service_name: str, revision: str) -> SinceResult:
 
 
 def evaluate(
-    service_name: str, revision: str, undeclared: Dict[str, List[Any]]
+    service_name: str,
+    revision: str,
+    undeclared: Dict[str, List[Any]],
+    changed: List[str],
 ) -> SinceResult:
     result = contract_changes(service_name, revision)
-    result.read_before = read_before(service_name, revision, undeclared)
+    result.read_before = read_before(service_name, revision, undeclared, changed)
     return result
 
 

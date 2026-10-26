@@ -529,12 +529,24 @@ maintainer on #42 (2026-10-27):
   accepted COULD NOT VERIFY reasons (D-10): `success` stays `false` while
   the exit is 0, and `gate.undeclared_before` lists the names that didn't
   count. Plain `check` still fails on every undeclared read.
-- **Old means proven old.** A name is old only if `undeclared`'s own
-  comparison finds it at REV (name identity, so a moved read is old), or
-  one of its current reads is in a file whose content at REV is identical
-  to the disk copy. Anything else is new, including a read `undeclared`'s
-  discovery can't see (a `BaseSettings` field) and every read when git
-  fails: the gate fails closed (`since.read_before`).
+- **Only changed files are read** (#85, maintainer decision 2026-10-27,
+  option 1). With `--since`, code references come from the files changed
+  or untracked since REV (`since.changed_files`), filtered by the same
+  per-file rules as the full walk (`evaluator.service_source_filter`:
+  ownership, `additional_source_roots`, default-excluded directories,
+  `exclude_files`, git-ignored files, symlinks). The whole tree is never
+  walked. An undeclared read in a file untouched since REV is therefore not
+  listed in this mode; plain `check` still lists and fails on it. The
+  report says so: `since.code_scope: "changed_files"`, and
+  `code_references.files_scanned` counts the changed files read. If git
+  can't list the changes, the command fails (exit 1), never "nothing
+  changed".
+- **Old means proven old.** A read in a changed file is old only if one of
+  the changed files (deleted ones included) read the same name at REV,
+  found by `check`'s own discovery, `BaseSettings` fields included
+  (`since.read_before`). Identity is the name, so a moved read is old.
+  Anything else is new, including every read when git can't show the
+  file at REV: the gate fails closed.
 - **Contract changes are reported, never gated.** Each change `schema
   diff` would report becomes a finding: `kind: "contract_change"`,
   `verdict: null`, `reason_code` the category, `blocking` as `schema diff
@@ -598,8 +610,12 @@ maintainer on #42 (2026-10-27):
   checks), so a new read in an excluded file (`init` writes `**/tests/*`)
   isn't reported; `undeclared` never applied exclusions. Plane's
   `TEST_REDIS_URL` was the one case across 13 repositories.
-- `check --since` walks the whole service, `undeclared` only changed
-  files, so it's 40–110× slower on large repositories (`BL-205`).
+- Before #85, `check --since` walked the whole service and was 40–110×
+  slower than `undeclared` on large repositories (`BL-205`). It now reads
+  only the changed files, like `undeclared`.
+- A name newly read in a changed file, but also read in an unchanged one,
+  counts as new (as in `undeclared`): unchanged files aren't read, so
+  their reads can't prove it old.
 
 ## D-14. Every service by default, readable CI output, honest text (V6-2, #45)
 

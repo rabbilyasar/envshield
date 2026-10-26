@@ -993,9 +993,11 @@ and makes plain `scan` secrets-only (merged `227b368`, PR #84; D-13 in
 evaluator-decisions.md). V6-2
 ([#45](https://github.com/rabbilyasar/envshield/issues/45)) makes every
 whole-project command cover all services unless `--service` narrows, and
-fixes truncated CI output and "breaking" adoption diffs (branch, not yet
-merged; D-14). [#85](https://github.com/rabbilyasar/envshield/issues/85)
-(`BL-205`, slow `check --since --code-only`) is open. Next: #63. The full order is
+fixes truncated CI output and "breaking" adoption diffs (merged
+`f8106f2`, PR #86; D-14). [#85](https://github.com/rabbilyasar/envshield/issues/85)
+makes `check --since` read only the files changed since REV, so the CI form
+is as fast as `undeclared` was (`BL-205`; branch, not yet merged). Next:
+#63. The full order is
 ROADMAP.md's "v5 — in progress". Nothing since `v4.9.1` is released.
 
 **Previous phase (updated 2026-10-15): `v4.9.1` released; v5 V1 next.**

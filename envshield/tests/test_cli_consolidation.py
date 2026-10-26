@@ -61,6 +61,13 @@ def _plain(text):
     return " ".join(_ANSI.sub("", text).replace("│", " ").split())
 
 
+def _touch(path):
+    """Change a committed file without touching its reads: with --since only
+    changed files are read (#85)."""
+    with open(path, "a") as f:
+        f.write("\n# edited\n")
+
+
 def _json(result):
     return json.loads(result.stdout)
 
@@ -290,6 +297,7 @@ def test_a_new_undeclared_read_fails(project):
 def test_an_old_undeclared_read_is_listed_but_does_not_fail(project):
     _write("app.py", 'import os\nPORT = os.environ["PORT"]\nos.getenv("OLD_FLAG")\n')
     _commit("old read")
+    _touch("app.py")
 
     result = runner.invoke(app, ["check", "--since", "HEAD", "--json"])
 
@@ -318,6 +326,7 @@ def test_plain_check_still_fails_on_an_old_read(project):
 def test_old_reads_pass_but_a_new_one_still_fails(project):
     _write("app.py", 'import os\nPORT = os.environ["PORT"]\nos.getenv("OLD_FLAG")\n')
     _commit("old read")
+    _touch("app.py")
     _write("new.py", 'import os\nos.getenv("NEW_FLAG")\n')
 
     result = runner.invoke(app, ["check", "--since", "HEAD", "--json"])
@@ -364,9 +373,30 @@ def test_a_new_read_undeclared_cannot_see_is_still_new(project):
     assert _report(_json(result))["since"]["new_undeclared"] == ["NEW_FIELD"]
 
 
-def test_an_old_read_in_an_unchanged_file_is_proven_old(project):
+def test_an_old_read_in_an_unchanged_file_is_not_read(project):
+    """Option 1 (#85): with --since only changed files are read, so a read
+    in a file untouched since REV is neither listed nor failed on. Plain
+    'check' still reports it."""
     _write("settings.py", SETTINGS)
     _commit("settings")
+
+    result = runner.invoke(app, ["check", "--since", "HEAD", "--json"])
+
+    assert result.exit_code == 0, result.stdout
+    report = _report(_json(result))
+    assert report["since"]["code_scope"] == "changed_files"
+    assert report["since"]["undeclared_before"] == []
+    assert report["since"]["new_undeclared"] == []
+    assert report["code_references"]["files_scanned"] == 0
+    assert runner.invoke(app, ["check", "--json"]).exit_code == 1
+
+
+def test_an_old_basesettings_read_in_a_changed_file_is_old(project):
+    """REV's side uses check's discovery, so a BaseSettings field that was
+    there at REV is proven old ('undeclared's discovery couldn't see it)."""
+    _write("settings.py", SETTINGS)
+    _commit("settings")
+    _touch("settings.py")
 
     result = runner.invoke(app, ["check", "--since", "HEAD", "--json"])
 
@@ -377,19 +407,36 @@ def test_an_old_read_in_an_unchanged_file_is_proven_old(project):
 def test_read_before_fails_closed_when_git_gives_nothing(project, monkeypatch):
     _write("settings.py", SETTINGS)
     _commit("settings")
-    from envshield.core import dependency_snapshot, evaluator
-    from envshield.core.exceptions import EnvShieldException
+    _touch("settings.py")
+    from envshield.core import evaluator
+    from envshield.utils import git_utils
+
+    monkeypatch.setattr(git_utils, "get_file_content_at_revision", lambda *a: None)
+    changed = since.changed_files("HEAD")
+    undeclared = evaluator.evaluate_service(
+        "api", code=True, code_files=changed
+    ).undeclared_references
+
+    assert set(undeclared) == {"NEW_FIELD"}
+    assert since.read_before("api", "HEAD", undeclared, changed) == set()
+
+
+def test_a_git_failure_listing_changes_is_an_error_not_a_pass(project, monkeypatch):
+    """An empty change list would mean "nothing to check": a false pass."""
     from envshield.utils import git_utils
 
     def broken(*args, **kwargs):
-        raise EnvShieldException("git failed")
+        raise git_utils.GitError("'git diff' failed")
 
-    monkeypatch.setattr(dependency_snapshot, "discover_usages_for_service", broken)
-    monkeypatch.setattr(git_utils, "get_file_content_at_revision", lambda *a: None)
-    undeclared = evaluator.evaluate_service("api", code=True).undeclared_references
+    _write("new.py", 'import os\nos.getenv("NEW_FLAG")\n')
+    monkeypatch.setattr(git_utils, "list_changed_files", broken)
 
-    assert set(undeclared) == {"NEW_FIELD"}
-    assert since.read_before("api", "HEAD", undeclared) == set()
+    result = runner.invoke(app, ["check", "--since", "HEAD", "--code-only", "--json"])
+
+    assert result.exit_code == 1
+    payload = _json(result)
+    assert payload["success"] is False
+    assert "Couldn't list the files changed since 'HEAD'" in payload["error"]
 
 
 def test_a_bad_revision_is_an_error(project):
@@ -405,6 +452,7 @@ def test_a_bad_revision_is_an_error(project):
 def test_since_human_output_marks_new_and_old_reads(project):
     _write("app.py", 'import os\nPORT = os.environ["PORT"]\nos.getenv("OLD_FLAG")\n')
     _commit("old read")
+    _touch("app.py")
 
     passing = runner.invoke(app, ["check", "--since", "HEAD"])
     assert passing.exit_code == 0
@@ -578,6 +626,7 @@ def test_code_only_passes_a_clean_change_without_a_local_file(ci_project):
 def test_code_only_fails_on_a_new_read_only(ci_project):
     _write("app.py", 'import os\nPORT = os.environ["PORT"]\nos.getenv("OLD_FLAG")\n')
     _commit("old read")
+    _touch("app.py")
     _write("new.py", 'import os\nos.getenv("NEW_FLAG")\n')
 
     result = runner.invoke(app, ["check", "--since", "HEAD", "--code-only", "--json"])
@@ -650,3 +699,67 @@ def test_code_only_refuses_value_options(project, args, flag):
 
     assert result.exit_code == 2
     assert f"doesn't work with {flag}" in _plain(result.output)
+
+
+# --- #85: --since reads only changed files -----------------------------------
+
+
+def test_since_never_walks_the_tree(project, monkeypatch):
+    """The whole-tree walk is what made --since slow on large repositories
+    (BL-205). With --since, only the changed files are read."""
+    from envshield.core import evaluator
+
+    def no_walk(*args, **kwargs):
+        raise AssertionError("walked the whole tree")
+
+    _write("new.py", 'import os\nos.getenv("NEW_FLAG")\n')
+    monkeypatch.setattr(evaluator, "_walk_service_files", no_walk)
+
+    for args in (["--since", "HEAD", "--code-only"], ["--since", "HEAD"]):
+        result = runner.invoke(app, ["check", *args, "--json"])
+        assert result.exit_code == 1, result.output
+        report = _report(_json(result))
+        assert report["since"]["new_undeclared"] == ["NEW_FLAG"]
+        assert report["code_references"]["files_scanned"] == 1
+
+    # Plain check still covers every file.
+    with pytest.raises(AssertionError, match="walked"):
+        evaluator.evaluate_service("api", code=True)
+
+
+def test_a_changed_file_counts_only_for_the_service_that_owns_it(tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _repo()
+        _write(
+            "envshield.yml",
+            "services:\n  api:\n    schema: env.schema.toml\n"
+            "  web:\n    schema: web/env.schema.toml\n    local_file: web/.env\n",
+        )
+        _write("web/env.schema.toml", '[W]\ndescription = "w"\n')
+        _write("web/.env", "W=1\n")
+        _commit("services")
+        _write("web/src/app.ts", "const x = process.env.WEB_ONLY;\n")
+
+        result = runner.invoke(
+            app, ["check", "--since", "HEAD", "--code-only", "--json"]
+        )
+
+        news = {
+            r["service"]: r["since"]["new_undeclared"] for r in _json(result)["reports"]
+        }
+        assert news == {"api": [], "web": ["WEB_ONLY"]}
+
+
+def test_exclude_files_still_applies_to_changed_files(project):
+    _write(
+        "envshield.yml",
+        "services:\n  api:\n    schema: env.schema.toml\n"
+        "secret_scanning:\n  exclude_files:\n    - '**/tests/*'\n",
+    )
+    _commit("exclusions")
+    _write("pkg/tests/test_x.py", 'import os\nos.getenv("TEST_ONLY")\n')
+
+    result = runner.invoke(app, ["check", "--since", "HEAD", "--code-only", "--json"])
+
+    assert result.exit_code == 0, result.stdout
+    assert _report(_json(result))["since"]["new_undeclared"] == []
