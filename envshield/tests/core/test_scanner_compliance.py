@@ -14,6 +14,10 @@ from envshield.core import scanner
 
 runner = CliRunner()
 
+# These tests cover the scanner's undeclared-read detection, which 'scan'
+# runs only with --staged since V0-2b (#42); see the fixture's docstring.
+pytestmark = pytest.mark.usefixtures("scan_reports_undeclared")
+
 
 def test_scan_with_undeclared_variable(mocker, tmp_path):
     """

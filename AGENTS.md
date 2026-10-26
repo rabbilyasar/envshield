@@ -934,7 +934,7 @@ backlog (revision-aware service-directory resolution for the explicit
 two-revision form, discovered-file size cap, `DEFAULT_EXCLUDED_DIRS`-style
 pruning) — none are blockers, and none require another Phase 2C milestone.
 
-**Current phase (updated 2026-10-19): v5 Phase 1, trustworthy verdicts.**
+**Current phase (updated 2026-10-27): v5 CLI consolidation.**
 V1-1 ([#15](https://github.com/rabbilyasar/envshield/issues/15)) is merged
 (`b30e793`, PR #65): parsers report typed value states, and every output is
 unchanged except two recorded fixes (`BL-193`, `BL-194`). V0-1
@@ -953,9 +953,15 @@ merged `578af57`) adds environments and `requiredIn`; V4-2
 ([#24](https://github.com/rabbilyasar/envshield/issues/24)) makes `schema diff`, `explain` and
 `generate` environment-aware (merged `6335c13`). V5-1
 ([#25](https://github.com/rabbilyasar/envshield/issues/25)) adds
-`check --runtime`, which checks the process environment alone (branch, not
-yet merged). Next: CLI consolidation (#42, #45, #63). The full
-order is ROADMAP.md's "v5 — in progress". Nothing since `v4.9.1` is released.
+`check --runtime`, which checks the process environment alone (merged
+`0e6f7bf`, PR #75). Agent setup ships in v5.0.0 (decision recorded by PR
+#76, `372db16`). [#77](https://github.com/rabbilyasar/envshield/issues/77)
+fixes `BL-095` (merged `e4986b7`, PR #78). V0-2b
+([#42](https://github.com/rabbilyasar/envshield/issues/42)) folds
+`undeclared` into `check --since REV` and `import` into `init --from FILE`,
+and makes plain `scan` secrets-only (branch, not yet merged; D-13 in
+evaluator-decisions.md). Next: #45, then #63. The full order is
+ROADMAP.md's "v5 — in progress". Nothing since `v4.9.1` is released.
 
 **Previous phase (updated 2026-10-15): `v4.9.1` released; v5 V1 next.**
 `v4.9.1` is the current released version: release commit `da53321`

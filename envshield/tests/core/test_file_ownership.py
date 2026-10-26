@@ -195,6 +195,7 @@ def jossjobs_repo(tmp_path, monkeypatch):
     return tmp_path
 
 
+@pytest.mark.usefixtures("scan_reports_undeclared")  # see conftest
 class TestConsumersAgreeOnJossJobsShape:
     def test_scan_attributes_the_nested_file_to_the_nested_service(self, jossjobs_repo):
         _write(
@@ -300,6 +301,7 @@ class TestConsumersAgreeOnJossJobsShape:
 # -- to check the file against) *after* ownership is resolved, never before.
 
 
+@pytest.mark.usefixtures("scan_reports_undeclared")  # see conftest
 class TestScannerSeparatesOwnershipFromSchemaEligibility:
     def test_ownership_is_correct_even_when_the_owners_schema_is_broken(
         self, tmp_path, monkeypatch
@@ -438,6 +440,7 @@ def nested_parent_repo(tmp_path, monkeypatch):
     return tmp_path
 
 
+@pytest.mark.usefixtures("scan_reports_undeclared")  # see conftest
 class TestScanServiceScopesByOwnership:
     def test_parent_service_scan_excludes_the_nested_services_files(
         self, nested_parent_repo

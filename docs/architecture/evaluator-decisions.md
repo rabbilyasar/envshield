@@ -510,3 +510,84 @@ non-breaking addition, and `requiredIn = ["production"]` →
 reference from `secrets:`). Provider support is back in planning under
 amendment A2, so there is no `secrets:` to read; `explain` never shows a
 value either way.
+
+## D-13. `check --since REV` (V0-2b, #42)
+
+**Before.** One edit needed three commands, each with its own JSON shape
+and exit code: `check` (values, manifests, every undeclared read),
+`undeclared` (reads new since a revision) and `schema diff` (contract
+changes). The same undeclared read was reported by `check`, `undeclared`
+and `scan` (BL-191, BL-192).
+
+**Now.** `check --since REV` runs the normal check and adds, per service,
+what changed between REV and the working tree. Decisions approved by the
+maintainer on #42 (2026-10-27):
+
+- **Old undeclared reads are listed but not gated.** Each `code_reference`
+  finding gets `new: true | false`. Only new ones fail the gate. The
+  reported verdict is unchanged (still INVALID for an old read), as with
+  accepted COULD NOT VERIFY reasons (D-10): `success` stays `false` while
+  the exit is 0, and `gate.undeclared_before` lists the names that didn't
+  count. Plain `check` still fails on every undeclared read.
+- **Old means proven old.** A name is old only if `undeclared`'s own
+  comparison finds it at REV (name identity, so a moved read is old), or
+  one of its current reads is in a file whose content at REV is identical
+  to the disk copy. Anything else is new, including a read `undeclared`'s
+  discovery can't see (a `BaseSettings` field) and every read when git
+  fails: the gate fails closed (`since.read_before`).
+- **Contract changes are reported, never gated.** Each change `schema
+  diff` would report becomes a finding: `kind: "contract_change"`,
+  `verdict: null`, `reason_code` the category, `blocking` as `schema diff
+  --fail-on`'s default would decide, `location` the schema file, and a
+  `next_step` (`human` to review a blocking change, `agent` "none needed"
+  otherwise). They're in `findings` but not in `errors`/`invalid`/
+  `unverified`. A `default_changed` detail names the change, not the two
+  defaults. `schema diff` stays the gate for contract changes.
+- **A revision with no contract** for the service reports `since.contract:
+  "introduced"` and no contract findings (not one "added" per variable).
+- **JSON (additive, only with `--since`):** each report's `since: {revision,
+  new_undeclared, undeclared_before, contract: "compared" | "introduced" |
+  "error", contract_error}`, `code_reference` findings' `new`, the
+  `contract_change` findings, and `gate.undeclared_before`. Without
+  `--since` or `--code-only` the report is byte-for-byte what it was. `report_version`
+  stays 2.
+- **`--sarif`** (with `--since` only) prints a SARIF 2.1.0 log of the new
+  undeclared reads, in `undeclared --sarif`'s format (one result per read,
+  from `check`'s discovery); the exit code is still the check's.
+- `--since` with `--runtime` is a usage error (no code is read at
+  runtime), and a revision that doesn't resolve exits 1. A service whose
+  contract fails to load gets no `since` block: it's ERROR, and the run
+  fails on that.
+- **`--code-only`** (maintainer decision, 2026-10-27, after implementation
+  showed the gap): CI has no `.env`, so a plain `check --since` fails there
+  on every required variable (`file_not_found`) and couldn't replace
+  `undeclared "$BASE" HEAD`. `check --code-only` reads no local file or
+  manifest (`evaluator.evaluate_code_only`): it loads the contract and the
+  code references only. The report says `values: "not_checked"`, has no
+  sources, and lists only the undeclared reads, since no declared
+  variable's value was read. It fails on an undeclared read, with `--since`
+  only a new one; a contract that fails to load is ERROR. Without `--since`
+  it replaces the repository-wide undeclared check CI used to get from
+  plain `scan`. A file argument, `--container`, `--process-env`,
+  `--runtime` and `--accept-unverified` are usage errors with it.
+
+**The rest of #42's mapping:**
+
+- `undeclared` → `check --since REV`, and `import` → `init --from FILE`:
+  hidden, same output and exit code, plus one stderr line naming the
+  replacement. The two-revision `undeclared A B` has no `check` form; in CI
+  the working tree is the head, so `check --since A --code-only` covers it.
+- `init --from FILE` builds a new project's schema from that file only (no
+  other config file is merged in). On a project that's set up it does what
+  `import` does: refreshes one service's schema, needs `--force` to rewrite
+  it, and never drops a declared variable. `--service`, `--interactive` and
+  `--as-local-values` work only with `--from`.
+- `scan` reports undeclared reads only with `--staged`, which the
+  pre-commit hook runs, so a commit adding one is still blocked. Plain
+  `scan` is secrets only: `undeclared_variables` stays in its JSON, empty,
+  and for v5 it prints one stderr line pointing at `check`. Because it no
+  longer loads schemas, plain `scan` no longer fails on a broken service
+  topology; `check` and the hook still do. The scanner itself keeps the
+  undeclared pass (`check_undeclared=True` by default).
+- `doctor`, `scan`, `schema diff` and `explain` keep their JSON (N2);
+  `check --since` is the single finding list.
