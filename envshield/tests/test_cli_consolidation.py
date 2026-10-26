@@ -52,6 +52,15 @@ def _repo(schema='[PORT]\ndescription = "p"\n', env="PORT=8000\n"):
     _commit("base")
 
 
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _plain(text):
+    """Rich output without color codes or its box border, on one line.
+    Rich colors output when it detects CI (GITHUB_ACTIONS)."""
+    return " ".join(_ANSI.sub("", text).replace("│", " ").split())
+
+
 def _json(result):
     return json.loads(result.stdout)
 
@@ -78,7 +87,7 @@ def project(tmp_path):
 
 
 def test_help_hides_the_folded_commands():
-    out = runner.invoke(app, ["--help"]).stdout
+    out = _ANSI.sub("", runner.invoke(app, ["--help"]).stdout)
     listed = set(re.findall(r"^│ (\w[\w-]*) ", out, re.MULTILINE))
     assert {"init", "setup", "check", "hook", "scan"} <= listed
     assert not listed & {"undeclared", "import", "install-hook", "uninstall"}
@@ -187,7 +196,7 @@ def test_init_flags_that_need_from_are_refused_without_it(project, flag):
     result = runner.invoke(app, ["init", flag])
 
     assert result.exit_code == 2
-    assert "only works with --from" in result.output
+    assert "only works with --from" in _plain(result.output)
 
 
 def test_init_from_a_missing_file_is_an_error(project):
@@ -537,7 +546,7 @@ def test_option_combinations_that_are_refused(project, args, message):
     result = runner.invoke(app, ["check", *args])
 
     assert result.exit_code == 2
-    assert message in " ".join(result.output.split())
+    assert message in _plain(result.output)
 
 
 # --- check --code-only (CI, no .env) ----------------------------------------
@@ -640,4 +649,4 @@ def test_code_only_refuses_value_options(project, args, flag):
     result = runner.invoke(app, ["check", "--code-only", *args])
 
     assert result.exit_code == 2
-    assert f"doesn't work with {flag}" in " ".join(result.output.split())
+    assert f"doesn't work with {flag}" in _plain(result.output)
