@@ -1002,6 +1002,8 @@ setup: `agent install`, `agent guide` and a Claude Code/Codex hook that
 checks each edit (`BL-192`; merged `2474744`, PR #88).
 [#89](https://github.com/rabbilyasar/envshield/issues/89) lets Claude Code
 run those commands without asking once the folder is trusted (`BL-206`;
+merged `cefca6c`, PR #91). [#90](https://github.com/rabbilyasar/envshield/issues/90)
+adds deployment and onboarding sections to `agent guide` (`BL-207`;
 branch, not yet merged). The full order is
 ROADMAP.md's "v5 — in progress". Nothing since `v4.9.1` is released.
 

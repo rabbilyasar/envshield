@@ -92,7 +92,11 @@ it's a secret, and in which environments it's required. EnvShield checks
 the code, local files and deployment manifests against it. Its output
 never contains a configuration value.
 
-## After every change
+EnvShield covers three stages. Development applies to every code change;
+deployment when a change affects what an environment needs or how the app
+is deployed; onboarding when someone sets the project up on their machine.
+
+## Development: after every change
 
 Run:
 
@@ -111,10 +115,10 @@ This also checks local values and manifests.
 
 Exit code 0 means pass. Exit code 1 means act on the findings. The JSON has
 `reports[].findings[]`, one per problem: `variable`, `service`,
-`location` (file, line), `verdict`, `reason_code`, `detail`, and
-`next_step` with `by` ("agent" or "human") and `text`. An `"error"` key
-instead means the check couldn't run: fix that first (often a TOML mistake
-in `env.schema.toml`).
+`location` (file, line, container), `verdict`, `reason_code`, `detail`,
+and `next_step` with `by` ("agent" or "human") and `text`. An `"error"`
+key instead means the check couldn't run: fix that first (often a TOML
+mistake in `env.schema.toml`).
 
 ## Keeping env.schema.toml current
 
@@ -139,6 +143,59 @@ When you stop reading a variable, leave its declaration unless you're sure
 no other code, service or deployment uses it; `envshield explain NAME`
 shows where it is read and which manifests set it.
 
+## Deployment
+
+Environments other than `local` are declared under `environments:` in
+`envshield.yml`. Deployment manifests (Docker Compose, Kubernetes) are
+registered under `manifests:` there; a manifest tagged with
+`environment: production` is checked against what production requires.
+
+When your change makes a variable required in an environment (a new
+`requiredIn` entry, or a new variable required there):
+
+1. Run `envshield check --env NAME --json` for that environment.
+2. A manifest that doesn't supply the variable is reported with a
+   `next_step` for a person ("supply it in this deployment manifest").
+   Tell the user which manifest and container need it, and whether it is
+   a secret. Don't add it to the manifest yourself: where the value comes
+   from (a Kubernetes Secret, the deploy host, the platform) is their
+   decision.
+3. A value the manifest takes from outside (`${{NAME}}` in Compose, a
+   Kubernetes `secretKeyRef`) is reported as COULD NOT VERIFY: a static
+   check can't see it. That is expected. Tell the user to confirm the
+   deploy host sets it; never inline a value to make the check pass, and
+   don't add `--accept-unverified` (that's the team's decision).
+4. Making an existing variable required, or removing one, is a contract
+   change: `envshield schema diff` marks it breaking. Tell the user.
+
+`envshield check --runtime --env NAME` checks the environment it runs in,
+so it belongs in the deploy itself, as the last step before the app
+starts (a container entrypoint just before `exec`, a platform release
+command, or a Kubernetes init container). Don't run it on a developer
+machine to judge production: it would report everything as missing. If
+you change how the app starts and the project already runs it, keep it
+last: nothing may change the environment between the check and the app.
+
+## Onboarding: setting up a machine
+
+When the user wants to run the project locally or set up its
+configuration:
+
+1. Run `{FULL_CHECK}`.
+2. List what is missing or invalid locally: each variable's name, its
+   `description` from `env.schema.toml`, and whether it is a secret.
+3. A finding whose `next_step.by` is "agent" (for example "Set PORT in
+   .env to the schema's defaultValue") you may do: add or change only
+   that one line, with exactly the schema's `defaultValue`. Don't read,
+   reorder or rewrite the rest of the file: it may hold secrets.
+4. For everything else, ask the user to run `envshield setup` in their own
+   terminal. It writes the local file and asks them for each value; you
+   can't run it (it needs a terminal), and you never write a value the
+   schema doesn't give as a default.
+5. Run the check again afterwards and report what is still missing. A
+   value the user can't get (for example a production secret) stays
+   missing; say who can provide it if the schema's description says.
+
 ## What not to do
 
 - Never invent, guess or generate a value for a configuration variable,
@@ -157,8 +214,9 @@ def _instructions_section() -> str:
 ## Configuration (EnvShield)
 
 Environment variables in this project are governed by `env.schema.toml`.
-Before adding, removing or changing configuration, run `envshield agent guide`
-and follow it. After each change, run
+Before changing configuration, deployment manifests or how the app starts,
+or helping someone set the project up, run `envshield agent guide` and
+follow it. After each change, run
 `{POST_CHANGE_CHECK}` and act on its findings. Never
 invent a configuration value; report steps marked for a human to the user.
 {SECTION_END}

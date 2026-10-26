@@ -566,3 +566,104 @@ def test_install_names_the_flag_for_unattended_claude_runs(tmp_path):
         for rule in agent_setup.CLAUDE_ALLOW:
             assert f'"{rule}"' in flag
         assert "allowedTools" not in _install("--agent", "codex").stdout
+
+
+# --- Guide stages (#90, BL-207) ----------------------------------------------
+
+
+def _section(guide, heading):
+    start = guide.index(heading)
+    nxt = guide.find("\n## ", start + 1)
+    # Wrapping-independent: one space between words.
+    return " ".join(guide[start : nxt if nxt != -1 else None].split())
+
+
+def test_guide_covers_all_three_stages():
+    guide = agent_setup.guide()
+    dev = _section(guide, "## Development")
+    assert agent_setup.POST_CHANGE_CHECK in dev
+    deploy = _section(guide, "## Deployment")
+    for text in (
+        "envshield check --env NAME --json",
+        "envshield check --runtime --env NAME",
+        "last step before the app",
+        "COULD NOT VERIFY",
+        "never inline a value",
+        "envshield schema diff",
+        "Don't run it on a developer",
+    ):
+        assert text in deploy, text
+    onboarding = _section(guide, "## Onboarding")
+    for text in (
+        agent_setup.FULL_CHECK,
+        "envshield setup",
+        "their own terminal",
+        "exactly the schema's `defaultValue`",
+    ):
+        assert text in onboarding, text
+
+
+def test_guide_contains_nothing_that_looks_like_a_secret_value():
+    import re
+
+    guide = agent_setup.guide()
+    assert not re.search(r"\b(sk|pk|rk)_(live|test)_|ghp_|xox[abp]-|AKIA", guide)
+    # No NAME=value assignment with a value.
+    assert not re.search(r"\b[A-Z][A-Z0-9_]+=\S", guide)
+
+
+def test_guide_deployment_advice_matches_check_output(tmp_path):
+    # What the guide says a manifest finding looks like is what check says.
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _git("init", "-q")
+        _write(
+            "envshield.yml",
+            "environments:\n  - production\nservices:\n  api:\n"
+            "    schema: env.schema.toml\nmanifests:\n"
+            "  - file: compose.prod.yml\n    environment: production\n"
+            "    containers:\n      api: api\n",
+        )
+        _write(
+            "env.schema.toml",
+            '[STRIPE_KEY]\ndescription = "s"\nsecret = true\n'
+            'requiredIn = ["production"]\n\n'
+            '[SENTRY_DSN]\ndescription = "d"\nrequiredIn = ["production"]\n',
+        )
+        _write(
+            "compose.prod.yml",
+            "services:\n  api:\n    image: x\n    environment:\n"
+            "      STRIPE_KEY: ${STRIPE_KEY}\n",
+        )
+        result = runner.invoke(app, ["check", "--env", "production", "--json"])
+        findings = {
+            f["variable"]: f
+            for r in json.loads(result.stdout)["reports"]
+            for f in r["findings"]
+        }
+        assert findings["SENTRY_DSN"]["next_step"]["by"] == "human"
+        assert (
+            "supply it in this deployment manifest"
+            in (findings["SENTRY_DSN"]["next_step"]["text"])
+        )
+        assert findings["STRIPE_KEY"]["verdict"] == "unverified"
+        deploy = _section(agent_setup.guide(), "## Deployment")
+        assert "supply it in this deployment manifest" in deploy
+
+
+def test_guide_onboarding_matches_checks_agent_step(tmp_path):
+    # check gives a missing non-secret with a default to the agent; the
+    # guide must allow exactly that step, not contradict it.
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _git("init", "-q")
+        _write("envshield.yml", "services:\n  api:\n    schema: env.schema.toml\n")
+        _write(
+            "env.schema.toml",
+            '[PORT]\ndescription = "p"\ntype = "port"\ndefaultValue = "8000"\n',
+        )
+        _write(".env", "")
+        result = runner.invoke(app, ["check", "--json"])
+        step = json.loads(result.stdout)["reports"][0]["findings"][0]["next_step"]
+        assert step["by"] == "agent"
+        assert "defaultValue" in step["text"]
+        onboarding = _section(agent_setup.guide(), "## Onboarding")
+        assert "may do" in onboarding and "defaultValue" in onboarding
