@@ -591,3 +591,12 @@ maintainer on #42 (2026-10-27):
   undeclared pass (`check_undeclared=True` by default).
 - `doctor`, `scan`, `schema diff` and `explain` keep their JSON (N2);
   `check --since` is the single finding list.
+
+**Known differences from `undeclared`** (real-repo trial, 2026-10-27):
+
+- `check` honors `secret_scanning.exclude_files` (D-7: the files `scan`
+  checks), so a new read in an excluded file (`init` writes `**/tests/*`)
+  isn't reported; `undeclared` never applied exclusions. Plane's
+  `TEST_REDIS_URL` was the one case across 13 repositories.
+- `check --since` walks the whole service, `undeclared` only changed
+  files, so it's 40–110× slower on large repositories (`BL-205`).
