@@ -321,6 +321,7 @@ Component: `AGENTS.md`
 - **Dependencies:** None.
 - **Decision:** **Fixed 2026-08-26.** `AGENTS.md` brought back to full content parity with `CLAUDE.md` — the "Last revised" pointer, the §2 external secret-provider-references subsection, and the entire §19 current-phase block (including the BL-001–BL-004 correction below) were synced. Re-diffed after the fix: the only remaining differences are the intentional `Codex`/`Claude` tool-naming substitutions throughout §18/§22/§23, which should stay divergent.
 - **Target:** Done. Kept here, not deleted, as the record of what was found and fixed.
+- **Follow-up (2026-10-27, [#82](https://github.com/rabbilyasar/envshield/issues/82)):** the separate CLAUDE.md was never tracked in git and later disappeared from the working tree. The new, tracked CLAUDE.md imports AGENTS.md (`@AGENTS.md`) and holds only Claude-specific notes, so there is one charter and this drift cannot recur.
 
 ### BL-091 — Charter's `v4.6.0` "Release status" note misstates the actual tag date and commit count
 Type: `DOCUMENTATION` · Evidence: `CONFIRMED` · Priority: **P3**
