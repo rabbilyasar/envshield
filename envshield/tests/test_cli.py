@@ -2862,3 +2862,214 @@ class TestGate:
         code, _, output = self._check(tmp_path, f"--accept-unverified={value}")
         assert code == 2
         assert "--accept-unverified" in output
+
+
+class TestCheckRuntime:
+    """
+    V5-1 (#25, plan §11): 'check --runtime --env E' judges the process
+    environment alone, against E's requirements.
+    """
+
+    SCHEMA = (
+        '[RT_PORT]\ntype = "port"\ndefaultValue = "8000"\n'
+        '[RT_STRIPE_KEY]\nsecret = true\nrequiredIn = ["production"]\n'
+        '[RT_LOG_LEVEL]\nrequired = false\nenum = ["info", "debug"]\n'
+    )
+    UNSET = {"RT_PORT": None, "RT_STRIPE_KEY": None, "RT_LOG_LEVEL": None}
+
+    def _project(self, services=("api",)):
+        with open(CONFIG_FILE_NAME, "w") as f:
+            f.write("project_name: rt\nenvironments: [staging, production]\n")
+        for i, name in enumerate(services):
+            # One schema and directory each: a shared schema has its own rules.
+            schema, where = (
+                (SCHEMA_FILE_NAME, None)
+                if i == 0
+                else (f"{name}/env.schema.toml", name)
+            )
+            if where:
+                os.mkdir(where)
+            config_manager.add_service(name, schema, service_dir=where)
+            with open(schema, "w") as f:
+                f.write(self.SCHEMA)
+
+    def _run(self, args, env=None):
+        result = runner.invoke(
+            app, ["check", "--runtime"] + args, env={**self.UNSET, **(env or {})}
+        )
+        return result
+
+    def _json(self, tmp_path, args, env=None, services=("api",)):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._project(services)
+            result = self._run(args + ["--json"], env)
+        return result, json.loads(result.stdout)
+
+    def test_all_required_set_and_no_local_file_is_valid(self, tmp_path):
+        """Scenario 3: no .env exists, and none is needed."""
+        result, payload = self._json(
+            tmp_path,
+            ["--env", "production"],
+            {"RT_PORT": "8000", "RT_STRIPE_KEY": "sk_live_x"},
+        )
+        assert result.exit_code == 0, result.stdout
+        assert payload["verdict"] == "valid"
+        assert payload["reports"][0]["sources"] == [
+            {
+                "kind": "process_environment",
+                "path": "process environment",
+                "status": "checked",
+            }
+        ]
+        assert "sk_live_x" not in result.stdout
+
+    def test_one_required_variable_missing_is_invalid(self, tmp_path):
+        """Scenario 4."""
+        result, payload = self._json(
+            tmp_path, ["--env", "production"], {"RT_PORT": "8000"}
+        )
+        assert result.exit_code == 1
+        assert payload["verdict"] == "invalid"
+        [finding] = payload["reports"][0]["invalid"]
+        assert (finding["variable"], finding["reason_code"]) == (
+            "RT_STRIPE_KEY",
+            "missing",
+        )
+        assert finding["location"] is None
+
+    def test_a_default_is_never_evidence_and_requiredIn_decides(self, tmp_path):
+        """Scenario 11 (runtime)."""
+        result, payload = self._json(tmp_path, ["--env", "staging"])
+        assert result.exit_code == 1
+        verdict = {
+            v["name"]: (v["verdict"], v["reason_code"])
+            for v in payload["reports"][0]["variables"]
+        }
+        assert verdict == {
+            "RT_PORT": ("invalid", "missing"),
+            "RT_STRIPE_KEY": ("not_required", None),
+            "RT_LOG_LEVEL": ("not_required", None),
+        }
+
+    def test_empty_and_invalid_values(self, tmp_path):
+        result, payload = self._json(
+            tmp_path,
+            ["--env", "staging"],
+            {"RT_PORT": "", "RT_LOG_LEVEL": "loud"},
+        )
+        assert result.exit_code == 1
+        reasons = {
+            f["variable"]: f["reason_code"] for f in payload["reports"][0]["invalid"]
+        }
+        assert reasons == {"RT_PORT": "blank", "RT_LOG_LEVEL": "invalid_value"}
+        assert "loud" not in result.stdout
+
+    @pytest.mark.parametrize(
+        "extra",
+        [
+            ["--accept-unverified=host_forward"],
+            ["--process-env"],
+            [".env"],
+            ["--container", "web"],
+        ],
+    )
+    def test_options_that_contradict_runtime_are_usage_errors(self, tmp_path, extra):
+        """Scenario 15."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._project()
+            result = self._run(extra)
+        assert result.exit_code == 2, result.stdout
+
+    def test_project_must_be_used_with_runtime(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._project()
+            result = runner.invoke(app, ["check", "--project", "."])
+        assert result.exit_code == 2
+
+    def test_project_points_at_another_directory(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            os.mkdir("app")
+            os.chdir("app")
+            self._project()
+            os.chdir("..")
+            result = self._run(
+                ["--project", "app", "--env", "staging", "--json"], {"RT_PORT": "1"}
+            )
+            missing = self._run(["--project", "nowhere"])
+        assert result.exit_code == 0, result.stdout
+        assert missing.exit_code == 2
+
+    def test_remediation_names_the_deploy_never_setup(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._project()
+            human = self._run(["--env", "production"])
+            result = self._run(["--env", "production", "--json"])
+        assert human.exit_code == result.exit_code == 1
+        assert "setup" not in human.stdout
+        for finding in json.loads(result.stdout)["reports"][0]["findings"]:
+            assert "setup" not in finding["next_step"]["text"]
+            assert "production deploy environment" in finding["next_step"]["text"]
+
+    def test_service_selection(self, tmp_path):
+        env = {"RT_PORT": "1"}
+        by_flag, payload = self._json(
+            tmp_path, ["--service", "web"], env, services=("api", "web")
+        )
+        assert by_flag.exit_code == 0 and payload["reports"][0]["service"] == "web"
+        by_env, payload = self._json(
+            tmp_path, [], {**env, "ENVSHIELD_SERVICE": "web"}, services=("api", "web")
+        )
+        assert by_env.exit_code == 0 and payload["reports"][0]["service"] == "web"
+        only, payload = self._json(tmp_path, [], env)
+        assert only.exit_code == 0 and payload["reports"][0]["service"] == "api"
+        ambiguous, payload = self._json(tmp_path, [], env, services=("api", "web"))
+        assert ambiguous.exit_code == 1
+        assert "ENVSHIELD_SERVICE" in payload["error"]
+
+    def test_runtime_never_infers_the_service_from_the_directory(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._project(services=("api", "web"))
+            os.chdir("web")
+            result = self._run(["--json"], {"RT_PORT": "1"})
+        assert result.exit_code == 1
+        assert "Several services" in json.loads(result.stdout)["error"]
+
+    def test_plain_check_ignores_ENVSHIELD_SERVICE(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._project()
+            with open(".env", "w") as f:
+                f.write("RT_PORT=1\n")
+            result = runner.invoke(
+                app, ["check", "--json"], env={"ENVSHIELD_SERVICE": "nope"}
+            )
+        assert result.exit_code == 0, result.stdout
+
+    def test_a_wrapper_that_exports_before_the_check_is_seen(self, tmp_path):
+        """
+        The plan's valid placement, in a real shell: a substitution made
+        before the check is what it judges, and so is what the app inherits.
+        """
+        import subprocess
+        import sys
+
+        os.chdir(tmp_path)
+        self._project()
+        envshield = f'"{sys.executable}" -c "from envshield.cli import app; app()"'
+        env = {k: v for k, v in os.environ.items() if k not in self.UNSET}
+        script = (
+            'export RT_PORT="${RT_PORT:-8000}"\n'
+            f"{envshield} check --runtime --env staging && echo LAUNCHED\n"
+        )
+        ran = subprocess.run(
+            ["bash", "-c", script], env=env, capture_output=True, text=True
+        )
+        assert ran.returncode == 0, ran.stdout + ran.stderr
+        assert "LAUNCHED" in ran.stdout
+        unwrapped = subprocess.run(
+            ["bash", "-c", script.split("\n", 1)[1]],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        assert unwrapped.returncode == 1
+        assert "LAUNCHED" not in unwrapped.stdout

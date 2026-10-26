@@ -410,6 +410,7 @@ def init(
 
 @app.command(rich_help_panel=_DEV_AND_DEPLOY)
 def check(
+    ctx: typer.Context,
     file: Optional[str] = typer.Argument(
         None,
         metavar="FILE",
@@ -419,7 +420,13 @@ def check(
         None,
         "--service",
         "-s",
-        help="If set, validate against this service's schema (for multi-service projects).",
+        envvar="ENVSHIELD_SERVICE",
+        show_envvar=False,
+        help=(
+            "If set, validate against this service's schema (for multi-service "
+            "projects). With --runtime, ENVSHIELD_SERVICE is used when this "
+            "isn't given."
+        ),
     ),
     container: Optional[str] = typer.Option(
         None,
@@ -462,8 +469,32 @@ def check(
             "'environments:' in envshield.yml). Default: local."
         ),
     ),
+    runtime: bool = typer.Option(
+        False,
+        "--runtime",
+        help=(
+            "Check the environment this command runs in, and nothing else: no "
+            "local file or manifest is read. Run it as the last step before the "
+            "application starts. Needs --service or ENVSHIELD_SERVICE when "
+            "several services are configured."
+        ),
+    ),
+    project: Optional[str] = typer.Option(
+        None,
+        "--project",
+        metavar="DIR",
+        help="With --runtime: the directory holding envshield.yml and the schema.",
+    ),
 ):
     """Validates a local environment file against the schema. Also accepts a docker-compose or Kubernetes manifest."""
+    if runtime:
+        _runtime_preflight(file, container, process_env, accept_unverified, project)
+    elif project is not None:
+        raise typer.BadParameter("only works with --runtime", param_hint="--project")
+    elif getattr(ctx.get_parameter_source("service"), "name", "") == "ENVIRONMENT":
+        # ENVSHIELD_SERVICE selects a service for --runtime only. By name:
+        # newer Typer vendors its own click, so the enum isn't importable.
+        service = None
     accepted: List[str] = []
     if accept_unverified is not None:
         try:
@@ -471,12 +502,15 @@ def check(
         except ValueError as e:
             raise typer.BadParameter(str(e), param_hint="--accept-unverified")
     try:
-        # resolve_targets already never blocks on the interactive "Which
-        # service?" picker without a TTY to answer it (CI/scripting,
-        # --json included) -- it runs every configured service instead.
-        targets = service_manager.resolve_targets(
-            service, invocation_dir=INVOCATION_DIR
-        )
+        if runtime:
+            targets = [_runtime_service(service)]
+        else:
+            # resolve_targets already never blocks on the interactive "Which
+            # service?" picker without a TTY to answer it (CI/scripting,
+            # --json included) -- it runs every configured service instead.
+            targets = service_manager.resolve_targets(
+                service, invocation_dir=INVOCATION_DIR
+            )
     except EnvShieldException as e:
         if json_output:
             print(json.dumps({"success": False, "error": str(e)}, indent=2))
@@ -501,14 +535,18 @@ def check(
     for target in targets:
         if not json_output:
             _print_service_header(targets, target)
-        evaluation = evaluator.evaluate_service(
-            target,
-            file=file,
-            container=container,
-            environment=environment,
-            code=True,
-            env=env_name,
-        )
+        if runtime:
+            # The live mapping, not a copy: only projected names are read (D-3).
+            evaluation = evaluator.evaluate_runtime(target, os.environ, env_name)
+        else:
+            evaluation = evaluator.evaluate_service(
+                target,
+                file=file,
+                container=container,
+                environment=environment,
+                code=True,
+                env=env_name,
+            )
         evaluations.append(evaluation)
         if not json_output:
             _render_evaluation(evaluation)
@@ -534,6 +572,53 @@ def check(
 
     if gate["result"] != "pass":
         raise typer.Exit(code=1)
+
+
+def _runtime_preflight(
+    file: Optional[str],
+    container: Optional[str],
+    process_env: bool,
+    accept_unverified: Optional[List[str]],
+    project: Optional[str],
+) -> None:
+    """
+    --runtime's option rules (plan §11, Q9), as usage errors (exit 2): it
+    reads the process environment only, and everything it reads is visible,
+    so nothing can be accepted as unverified. Then --project, if given.
+    """
+    for given, name in (
+        (file, "FILE"),
+        (container, "--container"),
+        (process_env, "--process-env"),
+        (accept_unverified is not None, "--accept-unverified"),
+    ):
+        if given:
+            raise typer.BadParameter(
+                f"{name} can't be used with --runtime, which checks only the "
+                "process environment.",
+                param_hint="--runtime",
+            )
+    if project is not None:
+        root = os.path.join(INVOCATION_DIR or os.getcwd(), project)
+        if not os.path.isfile(os.path.join(root, config_manager.CONFIG_FILE_NAME)):
+            raise typer.BadParameter(
+                f"no {config_manager.CONFIG_FILE_NAME} in '{project}'",
+                param_hint="--project",
+            )
+        os.chdir(root)
+
+
+def _runtime_service(service: Optional[str]) -> str:
+    """--service (or ENVSHIELD_SERVICE), then the only service; never
+    inferred from the directory (plan §11, Q9)."""
+    if not service:
+        available = service_manager.get_available_services()
+        if len(available) > 1:
+            raise EnvShieldException(
+                "Several services are configured; name one with --service or "
+                f"ENVSHIELD_SERVICE. Available: {', '.join(available)}"
+            )
+    return service_manager.resolve_service(service)
 
 
 def _resolve_env(env: Optional[str], json_output: bool) -> str:
@@ -597,7 +682,9 @@ _VERDICT_WORD = {
 }
 
 
-def _render_verdict_lines(lines: List[tuple], errors: List[str]) -> None:
+def _render_verdict_lines(
+    lines: List[tuple], errors: List[str], setup_hint: bool = True
+) -> None:
     """
     One block of verdict lines (name, verdict, reason_code, detail) in v5's
     order: Errors, Invalid, Could not verify, then valid and not-required.
@@ -617,7 +704,7 @@ def _render_verdict_lines(lines: List[tuple], errors: List[str]) -> None:
     if invalid:
         console.print("[bold red]Invalid[/bold red]")
         for name, _, reason, detail in invalid:
-            if detail == verdicts.HAS_DEFAULT:
+            if detail == verdicts.HAS_DEFAULT and setup_hint:
                 detail += ", run 'envshield setup'"  # plan §7's hint, human only
             line("[red]✗[/red]", name, f"{reason.replace('_', ' ')} ({detail})")
     if unverified:
@@ -666,7 +753,8 @@ def _render_evaluation(evaluation: "evaluator.ServiceEvaluation") -> None:
                 if per[i] is not None and per[i].verdict != "error"
             ]
             errors = [v.detail for v, src in failures if src is source]
-            _render_verdict_lines(lines, errors)
+            # At runtime the fix is in the deploy, never 'setup' (B3).
+            _render_verdict_lines(lines, errors, setup_hint=not evaluation.runtime)
         if service_errors:
             _render_verdict_lines([], service_errors)
     if evaluation.process_environment:

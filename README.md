@@ -190,6 +190,33 @@ requiredIn = ["staging", "production"]
 
 Plain `envshield check` judges your local file (and untagged manifests) by `local`'s requirements, so `GIT_SHA` isn't needed there. `envshield explain GIT_SHA` lists where it's required, `schema diff` says which environment a requiredness change affects (a variable added with `requiredIn = ["production"]` is breaking for production only), and `generate` makes it optional in the generated loader, since that loader runs in every environment. `envshield check --env production` (or `ENVSHIELD_ENV=production`) checks the manifests tagged `production` against production's requirements. `envshield check deploy/production.env --env production` checks one env file the same way. A variable sets at most one of `required`, `requiredIn` or `requiredIf`.
 
+**Deploy-time check.** `envshield check --runtime --env production` checks the environment it runs in, and nothing else: no `.env` or manifest is read or needed, only the names the service's schema declares are read, and values are never printed. A `defaultValue` is never evidence: a required variable that's absent is invalid. It exits 0 only when every variable required in `production` is set and valid, and 1 otherwise. It reads `envshield.yml` and the schema from the working directory (or `--project DIR`). With several services, name one with `--service` or `ENVSHIELD_SERVICE`; it never guesses from the directory. `--process-env`, `--accept-unverified`, a file argument and `--container` can't be combined with it.
+
+Where you put it decides what it proves. It checks *its own* environment, so it must run after every step that changes the environment, immediately before the application starts:
+
+```bash
+# Covered: the check sees exactly what the app inherits
+export PORT="${PORT:-8000}"                      # wrapper substitutions first
+envshield check --runtime --env production && exec app
+
+# Not covered: the environment changes after the check
+envshield check --runtime --env production
+export PORT="${PORT:-8000}"                      # changed after the check
+exec app
+```
+
+- **Container entrypoint**, as the last step before `exec`, as above. An inline `VAR=… app` prefix, or a wrapper that changes variables after the check, isn't covered.
+- **Platform release command** (Railway, Heroku `release:` in a `Procfile`, Fly `release_command`): `envshield check --runtime --env production`. It fails the release before traffic moves. The release phase runs in its own process; this holds only if the platform gives the release and the app the same configuration.
+- **Kubernetes init container** using the app's image and the same `env`/`envFrom` as the app container. The check sees the init container's environment, so it proves nothing about the app container if the two differ.
+
+Not guaranteed: that the step runs at all, that a later process gets the same environment, or that a valid value is the right one (a valid URL to the wrong database). EnvShield doesn't read launch scripts or systemd units, and doesn't start your application. It needs Python and EnvShield in the deploy environment.
+
+If the application loads its own env file instead (Next.js and many Node apps read `.env` at startup; a systemd unit may set only `NODE_ENV`), the process environment doesn't hold the configuration, so check the file the application reads instead. In a deploy script, once the release's `.env` is in place and before traffic switches:
+
+```bash
+(cd "$REL" && envshield check .env --env production) || die "configuration incomplete for production"
+```
+
 **`envshield setup`** — interactive onboarding: fills in whatever's missing, blank, or now-invalid in your local file, prompting with each variable's description.
 
 **`envshield doctor`** — a full health check on your project's EnvShield setup at once (config files present, schema/template in sync, deployment manifest registered and valid, and more). `--fix` offers to fix what it can.
