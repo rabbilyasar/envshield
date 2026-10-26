@@ -1159,11 +1159,13 @@ Component: `--json` output of `check`, `doctor`, `scan`, `undeclared`, `schema d
 
 ### BL-192 — No documented way to run EnvShield from a coding agent after each change
 
-Type: `AI_AGENT` / `DOCUMENTATION` · Evidence: `CONFIRMED` (2026-10-19, agent-style evaluation, see `BL-040`) · Priority: **P2** · Status: **open, proposed for v5**
-Component: `README.md` ("For AI coding agents"), docs, website
+Type: `AI_AGENT` / `DOCUMENTATION` · Evidence: `CONFIRMED` (2026-10-19, agent-style evaluation, see `BL-040`) · Priority: **P2** · Status: **open, scheduled for v5.0.0** (#63; scope widened 2026-10-26)
+Component: `README.md` ("For AI coding agents"), `init`, docs, website
 
 - **Current behavior:** the README says agents can run `check --json`, but nothing shows how to wire it in: no Claude Code hook (`PostToolUse` on edits, or `Stop`), no Codex equivalent, no `AGENTS.md`/`CLAUDE.md` snippet telling an agent when to run it and how to act on the result. Covering one edit takes three commands (`check` for values and manifests, `undeclared` for new reads, `schema diff` for contract changes), each with its own JSON shape (`BL-191`). The only automatic guard today is the git pre-commit hook, which fires at commit time, not after the edit.
-- **Expected behavior:** one command an agent runs after a change, with one exit code and one finding list, and a documented, tested recipe (agent hook config plus an instructions snippet) that a user copies in.
+- **Expected behavior:** one command an agent runs after a change, with one exit code and one finding list. The agent learns this without a person copying anything in: `init` (or `agent install`) writes a short marked `AGENTS.md`/`CLAUDE.md` section and the agent hook config, and `envshield agent guide` prints instructions matched to the installed version.
+- **Missing beyond running the check (added 2026-10-26):** nothing tells an agent how to *maintain* the contract. An agent that adds `os.environ["X"]` has no guidance to declare `X` with a type, `secret` and `requiredIn`, to never give a secret a value, or to report a `by: "human"` step rather than invent a value. Without that the schema drifts from the code after `init`, and every check run then just reports the drift.
+- **Decision (2026-10-26, maintainer):** ships in v5.0.0 as part of V6-3 (#63), with the widened scope above. A pasted snippet was rejected as the main mechanism because it goes stale when v5 renames commands; the `AGENTS.md` section points at `agent guide` instead. Still no MCP server (`BL-040`). Varlock ships `init --agent` (`BL-080`), so this is expected of a tool in this category rather than something that sets EnvShield apart.
 - **Relationships:** `BL-040`, `BL-191`, V0-2b (#42, one command), V6-2 (#45, output).
 - **Issue:** [#63](https://github.com/rabbilyasar/envshield/issues/63) (V6-3), after #42.
 

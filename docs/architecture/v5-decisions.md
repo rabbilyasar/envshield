@@ -70,7 +70,7 @@ from the amendment as approved:
 - **A2 · V3-3 redesign.** Provider support is redesigned before implementation: validate or reference what the provider supplies (for example a 1Password Environment or `op://` references) against the schema, instead of copying secret values into a plaintext `.env`. #22 returns to planning; see the comment there.
 - **A3 · Sequence.** V1 (verdicts, gate) → V4 (environments) → V5 (`--runtime`) → V2 (one contract) → V3 (setup) → V6 → V7. Positioning (V0-3, #43) happens now.
 - **A4 · CLI consolidation in v5.0.0.** V0-2 (#42): commands grouped by stage, overlapping ones deprecated (kept working through v5).
-- **AI agents (positioning, no new feature in v5.0.0):** EnvShield is presented as the deterministic configuration check in an agent's loop (hooks, `--json`). No MCP server in v5. BL-040's questions still apply.
+- **AI agents (amended 2026-10-26, maintainer decision):** EnvShield is the deterministic configuration check in an agent's loop, and v5.0.0 ships agent setup (V6-3, #63): `init`/`agent install` writes a short `AGENTS.md`/`CLAUDE.md` section and the Claude Code/Codex hook config, and `agent guide` prints version-matched instructions for running the check *and* maintaining the schema (declare new variables, `secret`, `requiredIn`, never a secret value; `by: "human"` steps are reported, never invented). This replaces the earlier "no new feature in v5.0.0" line. No MCP server in v5; BL-040's questions still apply. Evidence: BL-192, BL-201.
 
 Where the plan text below mentions provider references, `secrets:`, `op://` or
 1Password, A2 applies: that design is back in planning.
