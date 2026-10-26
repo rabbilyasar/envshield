@@ -1207,6 +1207,7 @@ def _scan_files(
     config_path: Optional[str],
     exclude_patterns: Optional[List[str]],
     service_name: Optional[str] = None,
+    check_undeclared: bool = True,
 ):
     """
     Does the actual file collection and scanning, returning the raw
@@ -1226,6 +1227,11 @@ def _scan_files(
     If `service_name` is provided, scans for variables against that service's schema.
     Otherwise, on a multi-service project, each file is checked against
     whichever service's schema its directory belongs to.
+
+    `check_undeclared=False` skips undeclared-variable detection entirely
+    (secrets only): no schema is loaded and no undeclared finding is
+    produced. The 'scan' command passes it outside --staged (V0-2b, #42),
+    where 'check' owns undeclared reads.
     """
     all_exclusions = []
     try:
@@ -1238,7 +1244,9 @@ def _scan_files(
     if exclude_patterns:
         all_exclusions.extend(exclude_patterns)
 
-    schema_resolver = _build_undeclared_var_resolver(service_name)
+    schema_resolver = (
+        _build_undeclared_var_resolver(service_name) if check_undeclared else None
+    )
 
     # An explicit --service checks every file it's given against that one
     # schema (see _build_undeclared_var_resolver above) -- correct when the
@@ -1320,7 +1328,7 @@ def _scan_files(
             resolved_vars = (
                 schema_resolver(file_path) if schema_resolver else (set(), set())
             )
-            skip_undeclared = resolved_vars is None
+            skip_undeclared = not check_undeclared or resolved_vars is None
             schema_vars, system_vars = (
                 resolved_vars if resolved_vars is not None else (set(), set())
             )
@@ -1416,6 +1424,7 @@ def run_scan(
     exclude_patterns: Optional[List[str]],
     service_name: Optional[str] = None,
     enforce_mode: bool = False,
+    check_undeclared: bool = True,
 ):
     """
     The main function to orchestrate the scanning process.
@@ -1429,7 +1438,12 @@ def run_scan(
     findings). Normal scan mode (enforce_mode=False) preserves existing behavior.
     """
     all_secret_findings, all_undeclared_findings, skipped, _ = _scan_files(
-        paths, staged_only, config_path, exclude_patterns, service_name
+        paths,
+        staged_only,
+        config_path,
+        exclude_patterns,
+        service_name,
+        check_undeclared=check_undeclared,
     )
 
     for reason, label in _SKIP_REASON_LABELS.items():
@@ -1593,6 +1607,7 @@ def scan_result(
     config_path: Optional[str],
     exclude_patterns: Optional[List[str]],
     service_name: Optional[str] = None,
+    check_undeclared: bool = True,
 ) -> Dict[str, Any]:
     """
     Same scan as run_scan, but silences every Rich print/progress-bar (so
@@ -1603,7 +1618,12 @@ def scan_result(
     console.quiet = True
     try:
         secrets, undeclared, skipped, skipped_symlinks = _scan_files(
-            paths, staged_only, config_path, exclude_patterns, service_name
+            paths,
+            staged_only,
+            config_path,
+            exclude_patterns,
+            service_name,
+            check_undeclared=check_undeclared,
         )
     finally:
         console.quiet = was_quiet

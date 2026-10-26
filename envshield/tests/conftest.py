@@ -31,3 +31,29 @@ def _isolated_filesystem(
 
 
 CliRunner.isolated_filesystem = _isolated_filesystem
+
+
+import pytest  # noqa: E402
+
+
+@pytest.fixture
+def scan_reports_undeclared(monkeypatch):
+    """
+    'scan' with its undeclared-read pass on, outside --staged too. The
+    command enables it only with --staged since V0-2b (#42); the scanner
+    itself still runs it by default, and the pre-commit hook depends on it.
+    Tests of that detection logic (ownership, scope, confidence, fail-closed)
+    drive it through the CLI with this fixture.
+    """
+    from envshield.core import scanner
+
+    real_run, real_result = scanner.run_scan, scanner.scan_result
+
+    def run_scan(*args, check_undeclared=True, **kwargs):
+        return real_run(*args, check_undeclared=True, **kwargs)
+
+    def scan_result(*args, check_undeclared=True, **kwargs):
+        return real_result(*args, check_undeclared=True, **kwargs)
+
+    monkeypatch.setattr(scanner, "run_scan", run_scan)
+    monkeypatch.setattr(scanner, "scan_result", scan_result)

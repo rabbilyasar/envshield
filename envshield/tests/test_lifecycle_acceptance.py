@@ -85,11 +85,24 @@ def hook_bytes():
     return [read(path) for path in HOOKS]
 
 
-def undeclared(scan):
-    return {
-        (f["file_path"], f["variable_name"]): f.get("scope")
-        for f in scan["undeclared_variables"]
-    }
+def undeclared():
+    """Every service's undeclared reads, from 'check' (which owns them since
+    V0-2b, #42): {(file, variable): "out_of_scope" or None}. One run per
+    service: from the root, a bare 'check' infers the root service only
+    (BL-203)."""
+    found = {}
+    for name in config_manager.get_services():
+        payload = json.loads(
+            cli("check", "--service", name, "--json", code=None).stdout
+        )
+        for report in payload["reports"]:
+            for v in report["variables"]:
+                if v.get("undeclared_reference"):
+                    key = (v["references"][0]["file"], v["name"])
+                    found[key] = (
+                        "out_of_scope" if v["scope"] == "out_of_scope" else None
+                    )
+    return found
 
 
 @pytest.fixture
@@ -200,8 +213,7 @@ class TestZeusModel:
             checks = cli_json("doctor", "--service", name, code=None)["results"][0]
             failing = [c["name"] for c in checks["checks"] if not c["passed"]]
             assert failing == ["Git Hooks"], checks
-        scan = cli_json("scan", ".")
-        assert scan["undeclared_variables"] == []
+        assert undeclared() == {}
 
         before = install_hooks()
         assert commit("baseline").returncode == 0
@@ -305,7 +317,7 @@ class TestKemonChiloModel:
             ],
         }
         # Both processes' reads are judged by the one service's schema.
-        assert cli_json("scan", ".")["undeclared_variables"] == []
+        assert undeclared() == {}
 
         before = install_hooks()
         assert commit("baseline").returncode == 0
@@ -341,12 +353,11 @@ class TestKemonChiloModel:
             "  kemonchilo:\n    schema: env.schema.toml\n    dir: .\n"
             "  worker:\n    schema: env.schema.toml\n    dir: .\n",
         )
-        assert cli("scan", ".", code=1)
         assert cli("check", "--service", "worker", code=None).exit_code != 0
         blocked = commit("same dir")
         assert blocked.returncode != 0 and "one logical service" in blocked.output
         write("envshield.yml", good_yml)
-        assert cli_json("scan", ".")["undeclared_variables"] == []
+        assert undeclared() == {}
 
 
 # -- 3. JossJobs: two services, separate schemas, nested directories, --------
@@ -396,14 +407,14 @@ class TestJossJobsModel:
             assert cli_json("check", "--service", name)["success"]
         assert read("frontend/.env.local.example").count("=") == 1
         assert "BACKEND_ORIGIN" not in read(".env.example")
-        assert cli_json("scan", ".")["undeclared_variables"] == []
+        assert undeclared() == {}
         write(
             "frontend/src/api.ts",
             read("frontend/src/api.ts") + "const f = process.env.FRONTEND_ORIGIN;\n",
         )
         # Separate schemas: the backend's variable is undefined for the
         # frontend, not out of scope.
-        found = undeclared(cli_json("scan", ".", code=1))
+        found = undeclared()
         assert found == {("frontend/src/api.ts", "FRONTEND_ORIGIN"): None}
         assert commit("cross read").returncode != 0
 
@@ -517,7 +528,7 @@ class TestPortfolioModel:
         # A11: every lifecycle step works on the legacy shape as-is.
         assert config_manager.get_service_dir("rabbil-portfolio") == "."
         cli("schema", "sync", "--service", "rabbil-portfolio")
-        assert cli_json("scan", ".")["undeclared_variables"] == []
+        assert undeclared() == {}
         status = flat(cli("hook", "status").stdout)
         assert "env.schema.toml → rabbil-portfolio" in status
         before = install_hooks()
@@ -622,12 +633,12 @@ class TestSharedSchemaFixture:
         assert explain["granted_to"] == ["worker"]
 
         # A8: out of scope and undefined stay distinct, and both fail.
-        assert cli_json("scan", ".")["undeclared_variables"] == []
+        assert undeclared() == {}
         write(
             "api/main.py",
             read("api/main.py") + 'os.getenv("QUEUE_URL")\nos.getenv("NOPE")\n',
         )
-        assert undeclared(cli_json("scan", ".", code=1)) == {
+        assert undeclared() == {
             ("api/main.py", "QUEUE_URL"): "out_of_scope",
             ("api/main.py", "NOPE"): None,
         }
@@ -676,7 +687,7 @@ class TestSharedSchemaFixture:
         write("envshield.yml", good_yml.replace("dir: jobs", "dir: worker"))
         blocked = commit("same dir")
         assert blocked.returncode != 0 and "one logical service" in blocked.output
-        assert cli("scan", ".", code=1)
+        assert cli("check", code=None).exit_code != 0
         write("envshield.yml", good_yml)
 
         # A9: post-merge warns for every affected user and never blocks.

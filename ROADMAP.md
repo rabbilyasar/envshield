@@ -105,7 +105,8 @@ issue.
    that step instead of at startup.
    ([#25](https://github.com/rabbilyasar/envshield/issues/25))
 6. **A smaller, consistent CLI** — overlapping commands folded into
-   `check` (`undeclared` becomes `check --since`; `scan` keeps only secret
+   `check` (`undeclared` becomes `check --since`, `import` becomes
+   `init --from`; outside the pre-commit hook `scan` keeps only secret
    detection), with the old forms kept working through v5; the same answer
    in a terminal and in CI; output that stays readable in CI logs; the
    pull request that adopts EnvShield doesn't fail its own check. One

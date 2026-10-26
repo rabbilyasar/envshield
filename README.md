@@ -18,7 +18,7 @@ Free, open source (MIT), and fully local. EnvShield never sends your configurati
 
 **While you develop**
 
-- **A variable the code reads but nobody declared.** `envshield undeclared` compares your working tree (or a pull request) with a Git revision and names each new read by file and line. Python discovery is AST-based; JavaScript/TypeScript is pattern-based.
+- **A variable the code reads but nobody declared.** `envshield check` names every such read by file and line, and `envshield check --since REV` says which ones are new since a Git revision (your working tree, or a pull request). Python discovery is AST-based; JavaScript/TypeScript is pattern-based.
 - **A local setup that no longer matches.** `envshield check` validates your `.env` against the contract: missing, blank, wrongly typed or extra variables, and code that reads something the contract doesn't declare.
 - **A contract change in review.** `envshield schema diff` classifies each change between two revisions as breaking, security-relevant or informational, so a configuration change is reviewed like any other code change.
 - **What a pull just changed.** After a pull that touches a service's configuration, the post-merge hook runs `doctor` for it, which names any variable your local file is now missing.
@@ -36,7 +36,7 @@ Free, open source (MIT), and fully local. EnvShield never sends your configurati
 
 ### For AI coding agents
 
-Coding agents write code that reads configuration they don't know exists. EnvShield gives them a deterministic check to run in their loop: `envshield undeclared --json` and `envshield check --json` return machine-readable, value-free findings that name the variable, file and line, and the Git hooks catch what an agent commits. No secret value appears in EnvShield's output, so it's safe to put in front of an agent.
+Coding agents write code that reads configuration they don't know exists. EnvShield gives them a deterministic check to run in their loop: `envshield check --since HEAD --json` returns one machine-readable, value-free list of findings for a change (invalid or missing values, new undeclared reads, contract changes), each naming the variable, file and line and saying whether an agent or a person must act, and the Git hooks catch what an agent commits. No secret value appears in EnvShield's output, so it's safe to put in front of an agent.
 
 ---
 
@@ -147,11 +147,11 @@ secret = true
 
 ## Commands
 
-`envshield --help` groups commands by stage: **Onboarding** (`init`, `setup`), **Development & deployment** (`check`, `undeclared`, `hook`) and **Supporting** (everything else). This section walks through them in the order you'd use them: define the contract, validate against it, discover what code depends on, and review how the contract changes.
+`envshield --help` groups commands by stage: **Onboarding** (`init`, `setup`), **Development & deployment** (`check`, `hook`) and **Supporting** (everything else). This section walks through them in the order you'd use them: define the contract, validate against it, discover what code depends on, and review how the contract changes.
 
 ### Define
 
-`env.schema.toml` (see [The Schema](#the-schema) above) is what you define. `envshield init`/`envshield import <file>` build it from your real, existing configuration — see [Existing projects](#existing-projects).
+`env.schema.toml` (see [The Schema](#the-schema) above) is what you define. `envshield init` (or `envshield init --from <file>`) builds it from your real, existing configuration — see [Existing projects](#existing-projects).
 
 ### Validate
 
@@ -225,16 +225,24 @@ Want typed, validated config code instead of raw `os.getenv()` calls? **`envshie
 
 ### Discover
 
-**`envshield undeclared`** — catch a new environment-variable read that isn't in the schema yet, before you commit it. Compares source code between two git revisions (or your working tree against `HEAD` by default):
+**`envshield check --since REV`** — catch a new environment-variable read that isn't in the schema yet, before you commit it. It runs the normal check and also compares your working tree with a Git revision: which undeclared reads are new, and how the contract changed.
 
 ```bash
-$ envshield undeclared
-┌────────────────┬─────────────┬──────┬───────────┬──────────────────────┐
-│ Variable       │ File        │ Line │ Access    │ Contract status      │
-├────────────────┼─────────────┼──────┼───────────┼──────────────────────┤
-│ ANALYTICS_KEY  │ app/main.py │ 42   │ os.getenv │ missing declaration  │
-└────────────────┴─────────────┴──────┴───────────┴──────────────────────┘
+$ envshield check --since HEAD
+...
+Code references (1 file(s) scanned)
+┏━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━┓
+┃ Status             ┃ Variable Name ┃ Referenced At ┃
+┡━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━┩
+│ Not Declared (new) │ ANALYTICS_KEY │ app/main.py:5 │
+└────────────────────┴───────────────┴───────────────┘
+...
+Contract unchanged since HEAD.
+
+INVALID: 1 invalid, 1 valid.
 ```
+
+Only a *new* undeclared read fails it: one that was already there at `REV` is listed as `(before REV)` and doesn't, so an older project can block new ones without fixing every old one first (plain `check` still fails on all of them). Contract changes are listed but never fail it; `schema diff` is the gate for those. With no `.env` (CI), add `--code-only`: it reads no local file or manifest, only the code and the contract. `envshield undeclared` still works through v5 and prints the `check --since` form to use instead.
 
 **`envshield explain VARIABLE`** — everything EnvShield knows about one variable: its contract, where it's declared, what source code reads it, and which deployment manifests reference it.
 
@@ -275,7 +283,7 @@ This is where the schema stops being documentation and starts being enforcement.
 **A new environment variable used in code but missing from the schema:**
 
 ```bash
-envshield undeclared origin/main HEAD --service api
+envshield check --since origin/main --code-only --service api
 ```
 
 **A schema contract change:**
@@ -307,26 +315,26 @@ jobs:
       - run: |
           BASE=$(git merge-base "origin/${{ github.base_ref }}" HEAD)
           envshield schema diff "$BASE" HEAD
-          envshield undeclared "$BASE" HEAD
+          envshield check --since "$BASE" --code-only
 ```
 
-Both commands exit non-zero on a real finding, and also on an error that prevented evaluation (a bad revision, a schema that failed to parse) — never a silent "clean" for something it couldn't actually check. Add `--json` if you want to post a custom summary instead.
+Both commands exit non-zero on a real finding (for `check --since`, a new undeclared read), and also on an error that prevented evaluation (a bad revision, a schema that failed to parse) — never a silent "clean" for something it couldn't actually check. Add `--json` if you want to post a custom summary instead.
 
-### SARIF output (`undeclared --sarif`)
+### SARIF output (`check --since --sarif`)
 
-`envshield undeclared` also supports `--sarif` — a standard [SARIF 2.1.0](https://docs.oasis-open.org/sarif/sarif/v2.1.0/) log, for GitHub Code Scanning or any other SARIF-consuming CI tool, so a missing declaration is annotated on its exact file and line rather than only appearing in a CI log:
+`envshield check --since` also supports `--sarif` — a standard [SARIF 2.1.0](https://docs.oasis-open.org/sarif/sarif/v2.1.0/) log, for GitHub Code Scanning or any other SARIF-consuming CI tool, so a missing declaration is annotated on its exact file and line rather than only appearing in a CI log:
 
 ```yaml
       - run: |
           BASE=$(git merge-base "origin/${{ github.base_ref }}" HEAD)
-          envshield undeclared "$BASE" HEAD --sarif > envshield.sarif
+          envshield check --since "$BASE" --code-only --sarif > envshield.sarif
         continue-on-error: true   # upload the report even when it found something
       - uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: envshield.sarif
 ```
 
-`--sarif` only exists for `undeclared`, deliberately: each finding there has a real file and line to point at. `schema diff` findings describe the *contract* (a variable added, removed, or changed) rather than a source location, so forcing them into SARIF would mean inventing a line number that isn't real — use its `--json`/exit-code output instead, or annotate it yourself (e.g. a `jq` step over the JSON, emitting `::error::` workflow commands).
+`--sarif` lists only the new undeclared reads, deliberately: each one has a real file and line to point at. `schema diff` findings describe the *contract* (a variable added, removed, or changed) rather than a source location, so forcing them into SARIF would mean inventing a line number that isn't real — use its `--json`/exit-code output instead, or annotate it yourself (e.g. a `jq` step over the JSON, emitting `::error::` workflow commands).
 
 An error that prevents evaluating a service (a bad revision, a schema that fails to parse) is never turned into a fabricated SARIF result — it's reported as a SARIF `invocation` with `executionSuccessful: false`, so a consumer can't mistake "couldn't check" for "checked and clean."
 
@@ -339,18 +347,17 @@ Adopting EnvShield into a project that already has configuration doesn't require
 ```
 .env (existing)
     ↓
-envshield import .env
+envshield init --from .env
     ↓
 review env.schema.toml       (fix classifications, add descriptions)
     ↓
-envshield check               (confirm your local file already satisfies it)
+envshield check              (your local file satisfies it, and the code
+                              reads nothing it doesn't declare)
     ↓
-envshield undeclared          (confirm nothing's silently missing)
-    ↓
-CI: schema diff + undeclared  (governance from here on)
+CI: schema diff + check --since --code-only   (governance from here on)
 ```
 
-`import` reads your real values and does most of the schema-writing for you — it always leaves a `"TODO: Add description."` marker as a nudge to review, and any automatic secret/type classification is a starting point, not a final answer. Not using a `.env` file? `envshield import config/settings.py` reads a Python config module's assignments via its AST (never executes the file).
+`init --from` reads your real values and does most of the schema-writing for you — it always leaves a `"TODO: Add description."` marker as a nudge to review, and any automatic secret/type classification is a starting point, not a final answer. Not using a `.env` file? `envshield init --from config/settings.py` reads a Python config module's assignments via its AST (never executes the file).
 
 ---
 
@@ -410,7 +417,7 @@ Every command is service-aware. `--service` is optional with exactly one service
 
 ### Discovering reads in a shared library (`additional_source_roots`)
 
-`undeclared` and `explain` only walk a service's own directory by default. If part of a service's real configuration is read from a shared internal library that lives outside that directory — a common-utilities package imported by several services, say — those reads are invisible to both commands, for every service that imports the library.
+`check`'s code references and `explain` only walk a service's own directory by default. If part of a service's real configuration is read from a shared internal library that lives outside that directory — a common-utilities package imported by several services, say — those reads are invisible to both commands, for every service that imports the library.
 
 `additional_source_roots` widens a service's discovery scope to cover extra directories:
 
@@ -422,7 +429,7 @@ services:
       - libs/shared
 ```
 
-`undeclared --service api` and `explain --service api` now also look inside `libs/shared` — a variable read there counts toward `api`'s own discovery results exactly as if it lived in `services/api/` itself. The same directory can be listed by more than one service; each one independently sees the reads it contains. A path that doesn't exist yet contributes nothing (no error); a path resolving outside the project is refused, the same protection every other path in `envshield.yml` already has. `scan` is unaffected — it's already repository-wide.
+`check --service api` and `explain --service api` now also look inside `libs/shared` — a variable read there counts toward `api`'s own discovery results exactly as if it lived in `services/api/` itself. The same directory can be listed by more than one service; each one independently sees the reads it contains. A path that doesn't exist yet contributes nothing (no error); a path resolving outside the project is refused, the same protection every other path in `envshield.yml` already has. The pre-commit `scan --staged` is unaffected: it already checks every staged file.
 
 ---
 
@@ -493,9 +500,9 @@ This is Compose-specific merge behavior for the fields EnvShield already underst
 
 ## Supported languages / discovery
 
-Source-code discovery (what powers `undeclared` and `explain`'s "used in source" section) is AST-based for **Python** (`os.environ.get`, `os.getenv`, `os.environ[...]`) and pattern-based for **JavaScript/TypeScript** (`process.env.X`, `process.env["X"]`, `import.meta.env.X`, including single-level destructuring). No other language is discovered yet — the schema and validation commands work with any stack, but `undeclared`/`explain` can only see what's read from these two.
+Source-code discovery (what powers `check`'s code references and `explain`'s "used in source" section) is AST-based for **Python** (`os.environ.get`, `os.getenv`, `os.environ[...]`) and pattern-based for **JavaScript/TypeScript** (`process.env.X`, `process.env["X"]`, `import.meta.env.X`, including single-level destructuring). No other language is discovered yet — the schema and validation commands work with any stack, but `check` and `explain` can only see what's read from these two.
 
-`explain` additionally recognizes Flask's `current_app.config[...]`/`.get(...)` in Python — including the common `from flask import current_app as <alias>` import form — and reports it at **medium confidence**, shown inline as `(medium confidence)`: it's one level of indirection through a config object whose contents could come from anywhere, not a direct environment read. This recognition is deliberately `explain`-only — it never affects `undeclared`'s or `scan`'s pass/fail signal, so a Flask-config read can never quietly satisfy (or break) a completeness check the way a direct `os.environ`/`os.getenv` read does.
+`explain` additionally recognizes Flask's `current_app.config[...]`/`.get(...)` in Python — including the common `from flask import current_app as <alias>` import form — and reports it at **medium confidence**, shown inline as `(medium confidence)`: it's one level of indirection through a config object whose contents could come from anywhere, not a direct environment read. This recognition is deliberately `explain`-only — it never affects `check`'s or `scan`'s pass/fail signal, so a Flask-config read can never quietly satisfy (or break) a completeness check the way a direct `os.environ`/`os.getenv` read does.
 
 ---
 
@@ -505,7 +512,7 @@ A supporting check alongside the contract, not the product itself. `secret = tru
 
 ### Secret scanning
 
-**`envshield scan`** looks for hardcoded secrets by pattern (Stripe, AWS, GitHub tokens, and more), and for env-var reads the schema doesn't declare, in one pass. Values are always redacted in output — a Stripe *publishable* key (`pk_...`) is never flagged, since detection matches the secret-key pattern (`sk_...`) by shape, not the variable's name.
+**`envshield scan`** looks for hardcoded secrets by pattern (Stripe, AWS, GitHub tokens, and more). With `--staged` (what the pre-commit hook runs) it also blocks a commit that adds an env-var read the schema doesn't declare; outside the hook, `check` reports those. Values are always redacted in output — a Stripe *publishable* key (`pk_...`) is never flagged, since detection matches the secret-key pattern (`sk_...`) by shape, not the variable's name.
 
 ### Context-aware classification
 
