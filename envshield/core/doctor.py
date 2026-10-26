@@ -386,7 +386,7 @@ def _check_config_source_drift(service_name: str):
         if extra:
             messages.append(
                 f"'{source}' defines {', '.join(extra)}, not declared in the schema "
-                f"(built from '{config_source}'). Run 'envshield import {source}' to add them."
+                f"(built from '{config_source}'). Run 'envshield init --from {source} --force' to add them, then review the schema's diff."
             )
 
     if messages:

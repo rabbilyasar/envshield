@@ -184,7 +184,7 @@ def run_setup(service_name: str, output_file: Optional[str] = None) -> SetupResu
     if not schema and not seed_values:
         if is_python_target:
             raise EnvShieldException(
-                f"'{local_file}' not found, and no schema exists to generate one from. Run 'envshield import' or 'envshield schema sync' first."
+                f"'{local_file}' not found, and no schema exists to generate one from. Run 'envshield init --from <file>' or 'envshield schema sync' first."
             )
         raise EnvShieldException(
             f"'{example_file}' not found. Please run 'envshield schema sync' first to generate it."

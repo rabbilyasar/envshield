@@ -1488,9 +1488,11 @@ def run_scan(
                 undeclared_table = Table(
                     title="Undeclared Variable Usage", border_style="yellow"
                 )
-                undeclared_table.add_column("File", style="cyan")
-                undeclared_table.add_column("Line", style="yellow")
-                undeclared_table.add_column("Variable Name", style="white")
+                undeclared_table.add_column("File", style="cyan", overflow="fold")
+                undeclared_table.add_column("Line", style="yellow", overflow="fold")
+                undeclared_table.add_column(
+                    "Variable Name", style="white", overflow="fold"
+                )
                 for finding in all_undeclared_findings:
                     undeclared_table.add_row(
                         finding["file_path"],
@@ -1518,10 +1520,10 @@ def run_scan(
             f"\n[bold red]🚨 DANGER: Found {len(all_secret_findings)} potential secret(s)![/bold red]"
         )
         table = Table(title="Secret Scan Results", border_style="red")
-        table.add_column("File", style="cyan")
-        table.add_column("Line", style="yellow")
-        table.add_column("Secret Type", style="magenta")
-        table.add_column("Preview", style="white")
+        table.add_column("File", style="cyan", overflow="fold")
+        table.add_column("Line", style="yellow", overflow="fold")
+        table.add_column("Secret Type", style="magenta", overflow="fold")
+        table.add_column("Preview", style="white", overflow="fold")
         for finding in all_secret_findings:
             table.add_row(
                 finding["file_path"],
@@ -1544,9 +1546,9 @@ def run_scan(
         undeclared_table = Table(
             title="Undeclared Variable Usage", border_style="yellow"
         )
-        undeclared_table.add_column("File", style="cyan")
-        undeclared_table.add_column("Line", style="yellow")
-        undeclared_table.add_column("Variable Name", style="white")
+        undeclared_table.add_column("File", style="cyan", overflow="fold")
+        undeclared_table.add_column("Line", style="yellow", overflow="fold")
+        undeclared_table.add_column("Variable Name", style="white", overflow="fold")
         for finding in all_undeclared_findings:
             undeclared_table.add_row(
                 finding["file_path"],
@@ -1588,9 +1590,12 @@ def run_scan(
                 "\n[bold yellow]⚠ Scan finished, but coverage was incomplete -- see the skipped file(s) above.[/bold yellow]"
             )
         else:
-            console.print(
-                "\n[bold green]✓ No issues found. Your configuration is secure and compliant![/bold green]"
+            found_nothing = (
+                "No secrets or undeclared reads found"
+                if check_undeclared
+                else "No secrets found"
             )
+            console.print(f"\n[bold green]✓ {found_nothing}.[/bold green]")
         return
 
     if staged_only:

@@ -38,7 +38,7 @@ def test_check_schema_in_sync(mocker, tmp_path):
 
         assert is_in_sync is True
         mock_console.print.assert_any_call(
-            "[bold green]✓ Your configuration is perfectly in sync with the schema![/bold green]"
+            "[bold green]✓ In sync with the schema.[/bold green]"
         )
 
 

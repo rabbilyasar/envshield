@@ -122,7 +122,7 @@ def test_scan_with_only_declared_variables(mocker, tmp_path):
         result = runner.invoke(app, ["scan"])
 
         assert result.exit_code == 0, "Scan should pass when code is compliant"
-        assert "No issues found" in result.stdout
+        assert "✓ No secrets" in result.stdout
 
 
 def test_scan_with_both_secret_and_undeclared_variable(mocker, tmp_path):
@@ -173,7 +173,7 @@ def test_scan_ignores_dependency_and_vcs_dirs_by_default(tmp_path):
         result = runner.invoke(app, ["scan"])
 
         assert result.exit_code == 0
-        assert "No issues found" in result.stdout
+        assert "✓ No secrets" in result.stdout
 
 
 class TestVendorPathExclusion:
@@ -195,7 +195,7 @@ class TestVendorPathExclusion:
             result = runner.invoke(app, ["scan"])
 
             assert result.exit_code == 0, result.stdout
-            assert "No issues found" in result.stdout
+            assert "✓ No secrets" in result.stdout
 
     def test_nested_vendor_dir_is_skipped(self, tmp_path):
         with runner.isolated_filesystem(temp_dir=tmp_path):
@@ -206,7 +206,7 @@ class TestVendorPathExclusion:
             result = runner.invoke(app, ["scan"])
 
             assert result.exit_code == 0, result.stdout
-            assert "No issues found" in result.stdout
+            assert "✓ No secrets" in result.stdout
 
     def test_same_secret_material_outside_vendor_is_still_scanned(self, tmp_path):
         """Confirms exclusion is path-based, not content-based."""
@@ -257,7 +257,7 @@ class TestVendorPathExclusion:
             result = runner.invoke(app, ["scan", "legacy"])
 
             assert result.exit_code == 0, result.stdout
-            assert "No issues found" in result.stdout
+            assert "✓ No secrets" in result.stdout
 
     def test_generic_api_key_and_provider_patterns_unaffected_outside_vendor(self):
         """Direct pattern-level check: nothing about SECRET_PATTERNS itself changed."""
@@ -285,7 +285,7 @@ def test_scan_skips_a_gitignored_env_file(tmp_path):
         result = runner.invoke(app, ["scan"])
 
         assert result.exit_code == 0, result.stdout
-        assert "No issues found" in result.stdout
+        assert "✓ No secrets" in result.stdout
         assert "Skipping" in result.stdout
         assert ".env" in result.stdout
 
@@ -364,7 +364,7 @@ def test_scan_staged_does_not_flag_secret_removed_before_staging(tmp_path):
         result = runner.invoke(app, ["scan", "--staged"])
 
         assert result.exit_code == 0
-        assert "No issues found" in result.stdout
+        assert "✓ No secrets" in result.stdout
 
 
 def test_scan_staged_enforce_undeclared_gives_a_concrete_next_step(tmp_path):
@@ -472,7 +472,7 @@ def test_scan_without_service_skips_a_broken_schema_instead_of_crashing_entirely
 
         assert result.exit_code == 0, result.stdout
         assert "Could not load schema for service 'alpha'" in result.stdout
-        assert "No issues found" in result.stdout
+        assert "✓ No secrets" in result.stdout
 
 
 def test_scan_with_explicit_service_still_checks_a_single_schema_for_every_file(
@@ -533,7 +533,7 @@ def test_scan_with_service_and_no_path_defaults_to_that_services_own_directory(
         result = runner.invoke(app, ["scan", "--service", "alpha"])
 
         assert result.exit_code == 0, result.stdout
-        assert "No issues found" in result.stdout
+        assert "✓ No secrets" in result.stdout
         assert "BETA_VAR" not in result.stdout
 
 
@@ -983,7 +983,7 @@ def test_scan_rejects_a_nonexistent_path_instead_of_reporting_clean(tmp_path):
 
         assert result.exit_code == 1
         assert "not found" in result.stdout.lower()
-        assert "No issues found" not in result.stdout
+        assert "✓ No secrets" not in result.stdout
 
 
 def test_scan_json_rejects_a_nonexistent_path_instead_of_reporting_clean(tmp_path):
@@ -1058,7 +1058,7 @@ class TestEverySkipIsReported:
             # A bare interactive scan keeps exit 0 on incomplete coverage,
             # as for an oversized file (BL-004), but never claims "no issues".
             assert result.exit_code == 0
-            assert "No issues found" not in result.stdout
+            assert "✓ No secrets" not in result.stdout
             assert "couldn't be read" in result.stdout
             assert "locked.env" in result.stdout
             assert "coverage was incomplete" in result.stdout
@@ -1187,7 +1187,7 @@ class TestSymlinkNeverFollowed:
             result = runner.invoke(app, ["scan", "project"])
 
             assert result.exit_code == 0, result.stdout
-            assert "No issues found" in result.stdout
+            assert "✓ No secrets" in result.stdout
             assert self.OUTSIDE_SECRET not in result.stdout
             assert "Skipping 1 symlink" in result.stdout
             assert "subdir" in result.stdout
@@ -1202,7 +1202,7 @@ class TestSymlinkNeverFollowed:
             result = runner.invoke(app, ["scan", "linked_dir"])
 
             assert result.exit_code == 0, result.stdout
-            assert "No issues found" in result.stdout
+            assert "✓ No secrets" in result.stdout
             assert self.OUTSIDE_SECRET not in result.stdout
             assert "Skipping 1 symlink" in result.stdout
 
@@ -1214,7 +1214,7 @@ class TestSymlinkNeverFollowed:
             result = runner.invoke(app, ["scan", "linked.env"])
 
             assert result.exit_code == 0, result.stdout
-            assert "No issues found" in result.stdout
+            assert "✓ No secrets" in result.stdout
             assert self.OUTSIDE_SECRET not in result.stdout
             assert "Skipping 1 symlink" in result.stdout
 
@@ -1256,7 +1256,7 @@ class TestSymlinkNeverFollowed:
             result = runner.invoke(app, ["scan", "--staged"])
 
             assert result.exit_code == 0, result.stdout
-            assert "No issues found" in result.stdout
+            assert "✓ No secrets" in result.stdout
             assert self.OUTSIDE_SECRET not in result.stdout
 
 

@@ -47,6 +47,10 @@ FIELD_KEYS = frozenset(
 _REQUIREDIF_KEYS = frozenset({"var", "equals"})
 # The built-in environment; others are declared in envshield.yml (plan §7).
 LOCAL = "local"
+
+# What 'init'/'import' write as a variable's description until a person
+# writes one. Never copied into a generated template (#45, BL-177).
+PLACEHOLDER_DESCRIPTION = "TODO: Add description."
 ENVIRONMENT_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]*$")
 _REQUIREDNESS_KEYS = ("required", "requiredIn", "requiredIf")
 # Near-misses worth naming in the error -- `default` in particular, since

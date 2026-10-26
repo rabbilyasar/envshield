@@ -777,23 +777,19 @@ def render_source(source: Any, schema: Dict[str, Any]) -> None:
             f"{', '.join(unchecked)}[/yellow]"
         )
     elif diff.is_clean:
-        console.print(
-            "[bold green]✓ Your configuration is perfectly in sync with the schema![/bold green]"
-        )
+        console.print("[bold green]✓ In sync with the schema.[/bold green]")
     else:
         # If there are issues, build and display a report table
         table = Table(show_header=True, header_style="bold blue")
-        table.add_column("Status", style="cyan")
-        table.add_column("Variable Name", style="white")
-        table.add_column("Source", style="white")
+        table.add_column("Status", style="cyan", overflow="fold")
+        table.add_column("Variable Name", style="white", overflow="fold")
+        table.add_column("Source", style="white", overflow="fold")
 
         for var in sorted(diff.missing):
-            table.add_row(
-                "[red]Missing in Local[/red]", var, _source_label(var, schema)
-            )
+            table.add_row("[red]Missing[/red]", var, _source_label(var, schema))
 
         for var in sorted(diff.blank):
-            table.add_row("[red]Blank in Local[/red]", var, _source_label(var, schema))
+            table.add_row("[red]Blank[/red]", var, _source_label(var, schema))
 
         for var, reason in sorted(diff.invalid.items()):
             table.add_row("[red]Invalid Value[/red]", var, reason)
@@ -802,7 +798,7 @@ def render_source(source: Any, schema: Dict[str, Any]) -> None:
             status = (
                 "[yellow]Out of Scope[/yellow]"
                 if var in diff.out_of_scope
-                else "[yellow]Extra in Local[/yellow]"
+                else "[yellow]Not in Schema[/yellow]"
             )
             table.add_row(status, var, file_path)
 
@@ -958,7 +954,7 @@ def sync_schema(service_name: str) -> bool:
             )
 
         description = details.get("description")
-        if description:
+        if description and description != schema_types.PLACEHOLDER_DESCRIPTION:
             safe_description = description.replace("\r", "\\r").replace("\n", "\\n")
             body += f"# {safe_description}\n"
 
@@ -1092,7 +1088,7 @@ def _sync_python_local_file(
                 )
 
             description = details.get("description")
-            if description:
+            if description and description != schema_types.PLACEHOLDER_DESCRIPTION:
                 safe_description = description.replace("\r", "\\r").replace("\n", "\\n")
                 lines.append(f"# {safe_description}\n")
             lines.append(f"{key} = {str(details.get('defaultValue', ''))!r}\n\n")

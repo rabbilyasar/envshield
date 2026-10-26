@@ -998,7 +998,7 @@ Component: `init`, `envshield.yml` generation
 
 ### BL-177 — First-run and generated text is off-message or wrong
 
-Type: `UX` / `DOCUMENTATION` · Evidence: `CONFIRMED` (first-run trial, 2026-10-14) · Priority: **P3** · Status: **open**
+Type: `UX` / `DOCUMENTATION` · Evidence: `CONFIRMED` (first-run trial, 2026-10-14) · Priority: **P3** · Status: **fixed by V6-2 ([#45](https://github.com/rabbilyasar/envshield/issues/45), branch `rabbilyasar/v6-2-consistent-defaults`, unmerged; D-14)**
 Component: `init` output, generated `envshield.yml`, `env.schema.toml`, `.env.example`; `check` on a manifest
 
 - `init` ends with "Your project is now protected." Nothing has been validated at that point.
@@ -1078,7 +1078,7 @@ Component: Python discovery (`ast.parse` of user files)
 
 ### BL-183 — Tables truncate file paths at 80 columns, the CI default
 
-Type: `UX` · Evidence: `CONFIRMED` (real-repo trial, 2026-10-14; output captured through a pipe, as in CI) · Priority: **P2** · Status: **open**
+Type: `UX` · Evidence: `CONFIRMED` (real-repo trial, 2026-10-14; output captured through a pipe, as in CI) · Priority: **P2** · Status: **fixed by V6-2 ([#45](https://github.com/rabbilyasar/envshield/issues/45), branch `rabbilyasar/v6-2-consistent-defaults`, unmerged; D-14)**
 Component: Rich table output (`undeclared`, and others using fixed tables)
 
 - **Current behavior:** `undeclared` prints `frontend/lib/b…`, `src/domain/reco…` and `RECOVERY_TIMING_…`. In CI, where output isn't a TTY, Rich falls back to 80 columns, so the file and line, the whole point of the finding, are unreadable.
@@ -1088,7 +1088,7 @@ Component: Rich table output (`undeclared`, and others using fixed tables)
 
 ### BL-184 — `schema diff` classifies introducing EnvShield as BREAKING
 
-Type: `UX` / `PRODUCT` · Evidence: `CONFIRMED` (real-repo trial, 2026-10-14) · Priority: **P2** · Status: **open**
+Type: `UX` / `PRODUCT` · Evidence: `CONFIRMED` (real-repo trial, 2026-10-14) · Priority: **P2** · Status: **fixed by V6-2 ([#45](https://github.com/rabbilyasar/envshield/issues/45), branch `rabbilyasar/v6-2-consistent-defaults`, unmerged; D-14)**
 Component: `schema diff` classification when the base revision has no contract
 
 - **Current behavior:** on jossjobs, with a base revision before the schema existed, `schema diff` says "No EnvShield contract existed … implicit empty starting contract" and then lists all 7 variables as BREAKING and exits 1. A CI step running `schema diff --fail-on breaking` therefore blocks the pull request that adopts EnvShield.
@@ -1107,7 +1107,7 @@ Component: `doctor` template check, `init`'s `.gitignore` handling
 
 ### BL-186 — Flask `config` "may be read" notes flood `check` output
 
-Type: `UX` · Evidence: `CONFIRMED` (real-repo trial, 2026-10-14) · Priority: **P3** · Status: **open**
+Type: `UX` · Evidence: `CONFIRMED` (real-repo trial, 2026-10-14) · Priority: **P3** · Status: **fixed by V6-2 ([#45](https://github.com/rabbilyasar/envshield/issues/45), branch `rabbilyasar/v6-2-consistent-defaults`, unmerged; D-14)**
 Component: `check` code-references output (`dynamic_references` / framework-aware discovery)
 
 - **Current behavior:** phineas's `check` prints 56 lines of "X may be read from configuration at … (not an environment read EnvShield can confirm; informational)". Many are a vendored library's own config keys (`phineas/spectree/config.py`).
@@ -1117,7 +1117,7 @@ Component: `check` code-references output (`dynamic_references` / framework-awar
 
 ### BL-188 — In a terminal, multi-service `check`/`undeclared` ask which service and default to the first; CI checks all
 
-Type: `UX` · Evidence: `CONFIRMED` (demo project, 2026-10-14) · Priority: **P2** · Status: **open**
+Type: `UX` · Evidence: `CONFIRMED` (demo project, 2026-10-14) · Priority: **P2** · Status: **fixed by V6-2 ([#45](https://github.com/rabbilyasar/envshield/issues/45), branch `rabbilyasar/v6-2-consistent-defaults`, unmerged; D-14)**
 Component: service selection (`resolve_targets` and its interactive picker)
 
 - **Current behavior:** on a two-service project, `envshield check` with a TTY opens "Which service? (Use arrow keys)" with `api` preselected and "All services" last. Without a TTY (CI, pipes) the same command checks every service. There is no `--all` flag, so a terminal user can't ask for the CI behavior non-interactively. (Found because the demo recording hung on the picker.)
@@ -1966,7 +1966,7 @@ Source: found while fixing `BL-095` (#77), checking the same `--staged` loop for
 
 ### BL-203 — From the project root, a bare `check` checks only the root service and skips nested services, in CI too
 
-Type: `UX` / `COVERAGE` · Evidence: `CONFIRMED` (live, 2026-10-27, while implementing #42) · Priority: **P2** · Status: **open; fix scheduled in V6-2 ([#45](https://github.com/rabbilyasar/envshield/issues/45), scope 1: all services by default)**
+Type: `UX` / `COVERAGE` · Evidence: `CONFIRMED` (live, 2026-10-27, while implementing #42) · Priority: **P2** · Status: **fixed by V6-2 ([#45](https://github.com/rabbilyasar/envshield/issues/45), branch `rabbilyasar/v6-2-consistent-defaults`, unmerged; D-14)**
 Component: `core/service_manager.py` (`_infer_from_invocation_dir`, reached through `resolve_targets`)
 Source: found while moving undeclared-read reporting from plain `scan` to `check` (V0-2b, #42).
 
@@ -2004,6 +2004,15 @@ Component: `core/evaluator.py::discover_code_references` (walks the whole servic
 - **Why:** `undeclared` reads only the files changed between the two revisions. `check` discovers every read in the service to report undeclared ones, then `--since` classifies them, so it pays for the whole tree even when only a few files changed.
 - **Expected behavior:** the CI form costs about what `undeclared` did. One option, to be decided: with `--since`, discover only changed and untracked files (plus the REV side) for the gate, and report old reads by count. That changes what the report lists, so it's a design decision, not a tuning fix.
 - **Relationships:** `BL-050` (scan/undeclared benchmark), V0-2b (#42), D-13.
+- **Issue:** [#85](https://github.com/rabbilyasar/envshield/issues/85).
+
+A second real-repository trial on 2026-10-27, for V6-2 (#45, branch `rabbilyasar/v6-2-consistent-defaults`): the same 13 repositories, recloned from the first trial's clones at each repository's original upstream commit (before that trial's local `init` commit), under `~/envshield-trials/2026-10-27-v6-2`, with output piped at `COLUMNS=80` as in CI. Each ran `service list`, `check --json`, `check --since HEAD~10 --code-only --json`, `doctor --json`, `schema diff HEAD~1 HEAD` (human and `--json`, the adoption diff for the ten fresh `init`s), `scan`, the human `check`, `undeclared`, `schema diff` and `check --since --code-only` at 80 columns, and `check` on up to two Compose files.
+- **Secret safety:** same method as the first trial (kemonchilo's real `.env`; canaries elsewhere). No canary and no real value in any output; every raw match was the same kind of coincidence (repository and service names such as `formbricks`, `documenso`, `plane-redis`; `password`/`database` inside file and service names). No traceback.
+- **Nothing truncated at 80 columns:** zero `…` in any human output on all 13 repositories. The first trial, at 120 columns, had 321 truncated cells in PostHog's `check`, 257 in Dify's, 240 in n8n's, 82 in Twenty's, 39 in Langfuse's and 35 in cal.com's (`BL-183`).
+- **Adoption isn't breaking:** on all ten fresh `init`s, `schema diff HEAD~1 HEAD` exited 0 with `contract_introduced: true` (it exited 1 with every variable BREAKING before, `BL-184`); the three configured repositories reported `contract_introduced: false`.
+- **Every service by default, on real code:** no target registers more than one service, so Langfuse's clone got two more (`service add web web`, `service add worker worker`, empty schemas). Pre-#45 `main` (`227b368`, run from a worktree) checked only the root service from the root, hiding 37 undeclared reads in `web/` and 48 in `worker/`; from inside `web/` it checked all three (`BL-148`'s ambiguity fallback). With #45, both report all three, and `--service web` reports `web` alone (`BL-203`).
+- **Text:** every fresh `envshield.yml` starts "EnvShield project configuration", every schema built from a config file starts "Generated by EnvShield from your existing configuration" (repositories with no config file still get the framework template's own header, `BL-180`), no `.env.example` contains `TODO`, and `scan` ends "No secrets found." where it found none.
+- **Found and fixed in the same pass:** `service add` (and `doctor`, `setup` and the schema-not-found error) still told users to run the deprecated `envshield import`; they now name `init --from`. `doctor`'s advice was also wrong before #42: `import <source>` without `--force` refuses when the schema exists.
 
 ---
 

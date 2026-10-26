@@ -989,8 +989,13 @@ merged `578af57`) adds environments and `requiredIn`; V4-2
 fixes `BL-095` (merged `e4986b7`, PR #78). V0-2b
 ([#42](https://github.com/rabbilyasar/envshield/issues/42)) folds
 `undeclared` into `check --since REV` and `import` into `init --from FILE`,
-and makes plain `scan` secrets-only (branch, not yet merged; D-13 in
-evaluator-decisions.md). Next: #45, then #63. The full order is
+and makes plain `scan` secrets-only (merged `227b368`, PR #84; D-13 in
+evaluator-decisions.md). V6-2
+([#45](https://github.com/rabbilyasar/envshield/issues/45)) makes every
+whole-project command cover all services unless `--service` narrows, and
+fixes truncated CI output and "breaking" adoption diffs (branch, not yet
+merged; D-14). [#85](https://github.com/rabbilyasar/envshield/issues/85)
+(`BL-205`, slow `check --since --code-only`) is open. Next: #63. The full order is
 ROADMAP.md's "v5 — in progress". Nothing since `v4.9.1` is released.
 
 **Previous phase (updated 2026-10-15): `v4.9.1` released; v5 V1 next.**

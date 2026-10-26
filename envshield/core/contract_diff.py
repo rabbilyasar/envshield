@@ -177,6 +177,29 @@ def _per_environment(
     )
 
 
+def contract_introduced(schema_b: Dict[str, Any]) -> ContractDiff:
+    """
+    The comparison when the older side has no contract at all: the change
+    introduces EnvShield (#45, BL-184). Every variable is reported, as
+    informational: nothing that ran before can break because a contract now
+    describes it. Breaking classification applies from the first committed
+    contract on.
+    """
+    return ContractDiff(
+        changes=[
+            ContractChange(
+                variable=key,
+                category="informational",
+                description=(
+                    f"'{key}' is declared by the contract this change introduces."
+                ),
+                detail={"introduced": True},
+            )
+            for key in sorted(schema_b)
+        ]
+    )
+
+
 def diff_schemas(
     schema_a: Dict[str, Any],
     schema_b: Dict[str, Any],

@@ -239,9 +239,9 @@ class TestSchemaDiffAdoptionBoundary:
 
             result = runner.invoke(app, ["schema", "diff", "HEAD~2", "HEAD~1"])
 
-            assert (
-                result.exit_code == 1
-            )  # DATABASE_URL added with no default -> breaking
+            # Introducing the contract is never breaking (#45, BL-184).
+            assert result.exit_code == 0
+            assert "Contract introduced" in result.stdout
             assert "does not exist at revision" not in result.stdout
             assert "DATABASE_URL" in result.stdout
             assert "PORT" in result.stdout
