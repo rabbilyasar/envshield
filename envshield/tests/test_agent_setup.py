@@ -210,7 +210,7 @@ def test_install_keeps_existing_settings_and_hooks(tmp_path):
         _write(".claude/settings.json", json.dumps(existing))
         _install("--agent", "claude")
         data = json.loads(_read(".claude/settings.json"))
-        assert data["permissions"] == existing["permissions"]
+        assert data["permissions"]["allow"] == ["Bash(ls)", *agent_setup.CLAUDE_ALLOW]
         assert data["hooks"]["Stop"] == existing["hooks"]["Stop"]
         assert data["hooks"]["PostToolUse"][0] == existing["hooks"]["PostToolUse"][0]
         assert len(_hook_entries(".claude/settings.json")) == 1
@@ -236,7 +236,10 @@ def test_changed_envshield_hook_is_replaced_only_when_confirmed(tmp_path):
         result = _install("--agent", "claude")  # no terminal, no --yes
         assert result.exit_code == 0
         assert "kept the existing EnvShield hook" in result.stdout
-        assert json.loads(_read(".claude/settings.json")) == old
+        # The old hook is kept; the allow rules are still added (#89).
+        data = json.loads(_read(".claude/settings.json"))
+        assert data["hooks"] == old["hooks"]
+        assert data["permissions"]["allow"] == list(agent_setup.CLAUDE_ALLOW)
         result = _install("--agent", "claude", "--yes")
         groups = json.loads(_read(".claude/settings.json"))["hooks"]["PostToolUse"]
         assert len(groups) == 1
@@ -475,3 +478,91 @@ def test_non_utf8_file_is_reported_and_left_unchanged(tmp_path):
         assert "isn't UTF-8 text" in result.stdout
         with open("AGENTS.md", "rb") as f:
             assert f.read() == b"\xff\xfe rules\n"
+
+
+# --- Claude Code allow rules (#89, BL-206) -----------------------------------
+
+
+def test_allow_rules_are_exactly_the_commands_the_instructions_name():
+    # The AGENTS.md section names 'agent guide'; the guide names the rest.
+    guide = agent_setup.guide() + agent_setup._instructions_section()
+    assert len(agent_setup.CLAUDE_ALLOW) == 4
+    for rule in agent_setup.CLAUDE_ALLOW:
+        assert rule.startswith("Bash(") and rule.endswith(")")
+        command = rule[len("Bash(") : -1]
+        # Exact commands, never a prefix rule.
+        assert ":*" not in command and "*" not in command
+        assert command in guide, command
+
+
+def test_install_adds_allow_rules_once_and_keeps_users_permissions(tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _project()
+        existing = {
+            "permissions": {
+                "allow": ["Bash(npm test)", "Bash(envshield check --json)"],
+                "deny": ["Bash(envshield agent guide)"],
+                "ask": ["Bash(git push)"],
+                "defaultMode": "acceptEdits",
+            }
+        }
+        _write(".claude/settings.json", json.dumps(existing))
+        assert _install("--agent", "claude").exit_code == 0
+        perms = json.loads(_read(".claude/settings.json"))["permissions"]
+        assert perms["deny"] == existing["permissions"]["deny"]
+        assert perms["ask"] == existing["permissions"]["ask"]
+        assert perms["defaultMode"] == "acceptEdits"
+        assert perms["allow"][:2] == existing["permissions"]["allow"]
+        for rule in agent_setup.CLAUDE_ALLOW:
+            assert perms["allow"].count(rule) == 1
+        before = _read(".claude/settings.json")
+        result = _install("--agent", "claude")
+        assert "already up to date" in result.stdout
+        assert _read(".claude/settings.json") == before
+
+
+def test_allow_rules_added_to_an_install_that_predates_them(tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _project()
+        _install("--agent", "claude")
+        data = json.loads(_read(".claude/settings.json"))
+        del data["permissions"]
+        _write(".claude/settings.json", json.dumps(data))
+        result = _install("--agent", "claude")
+        assert ".claude/settings.json: updated" in result.stdout
+        perms = json.loads(_read(".claude/settings.json"))["permissions"]
+        assert perms["allow"] == list(agent_setup.CLAUDE_ALLOW)
+
+
+def test_codex_config_gets_no_permissions(tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _project()
+        _install("--agent", "codex")
+        assert "permissions" not in json.loads(_read(".codex/hooks.json"))
+        assert not os.path.exists(".claude")
+
+
+@pytest.mark.parametrize(
+    "settings",
+    ['{"permissions": []}', '{"permissions": {"allow": "Bash(ls)"}}'],
+)
+def test_malformed_permissions_leave_settings_unchanged(tmp_path, settings):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _project()
+        _write(".claude/settings.json", settings)
+        result = _install("--agent", "claude")
+        assert result.exit_code == 1
+        assert "left unchanged" in " ".join(result.stdout.split())
+        assert _read(".claude/settings.json") == settings
+
+
+def test_install_names_the_flag_for_unattended_claude_runs(tmp_path):
+    # Project allow rules need folder trust, which 'claude -p' never gives.
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _project()
+        out = _install("--agent", "claude").stdout
+        flag = agent_setup.claude_allowed_tools_args()
+        assert flag in out
+        for rule in agent_setup.CLAUDE_ALLOW:
+            assert f'"{rule}"' in flag
+        assert "allowedTools" not in _install("--agent", "codex").stdout

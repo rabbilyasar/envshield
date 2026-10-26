@@ -12,7 +12,8 @@ reading EnvShield's docs.
   leaving the rest of the file alone.
 - install_hook_config(): adds a PostToolUse hook that runs
   'envshield agent hook' after file edits, to Claude Code's
-  .claude/settings.json or Codex's .codex/hooks.json. Other hooks and
+  .claude/settings.json or Codex's .codex/hooks.json, and for Claude Code
+  allow rules for the commands the guide names (#89). Other hooks and
   settings are kept.
 - run_hook(): what that hook runs. Silent when the check passes; otherwise
   a short summary on stderr and exit code 2, which both Claude Code and
@@ -46,6 +47,16 @@ HOOK_COMMAND = "envshield agent hook"
 # every edit (maintainer decision on #63).
 POST_CHANGE_CHECK = "envshield check --since HEAD --code-only --json"
 FULL_CHECK = "envshield check --json"
+GUIDE_COMMAND = "envshield agent guide"
+SCHEMA_SYNC = "envshield schema sync"
+# Claude Code may run these without asking (#89, maintainer decision): the
+# exact commands the guide names, never a prefix. Without them an agent
+# that needs approval for Bash (headless, CI) skips the guide and the
+# check and relies on the hook alone (BL-206). Codex's approval policy is
+# per user, so nothing is set for it.
+CLAUDE_ALLOW = tuple(
+    f"Bash({c})" for c in (GUIDE_COMMAND, POST_CHANGE_CHECK, FULL_CHECK, SCHEMA_SYNC)
+)
 
 # Tool names each agent uses for file edits. Codex reports every edit as
 # apply_patch; Edit and Write are accepted aliases.
@@ -59,6 +70,15 @@ _AGENTS: Dict[str, Tuple[str, str]] = {
 AGENT_NAMES = tuple(_AGENTS)
 
 _HOOK_TIMEOUT_SECONDS = 60
+
+
+def claude_allowed_tools_args() -> str:
+    """
+    The same allow rules as a command-line flag. Claude Code applies a
+    project's allow rules only after someone trusts the folder, which a
+    'claude -p' run (CI, scripts) never does (#89); the flag needs no trust.
+    """
+    return "--allowedTools " + " ".join(f'"{r}"' for r in CLAUDE_ALLOW)
 
 
 def guide() -> str:
@@ -359,23 +379,45 @@ def install_hook_config(
         raise EnvShieldException(
             f"'hooks.PostToolUse' in '{rel_path}' isn't a list; left unchanged."
         )
+    allow: Optional[List[Any]] = None
+    if agent == "claude":
+        permissions = data.setdefault("permissions", {})
+        if not isinstance(permissions, dict):
+            raise EnvShieldException(
+                f"'permissions' in '{rel_path}' isn't a JSON object; left unchanged."
+            )
+        allow = permissions.setdefault("allow", [])
+        if not isinstance(allow, list):
+            raise EnvShieldException(
+                f"'permissions.allow' in '{rel_path}' isn't a list; left unchanged."
+            )
+    changed = False
+    detail = ""
     wanted = _hook_entry(matcher)
     ours = [i for i, g in enumerate(groups) if _is_ours(g)]
-    if ours:
-        if len(ours) == 1 and groups[ours[0]] == wanted:
-            return WriteResult(path, "unchanged")
-        if not confirm(
+    if not ours:
+        groups.append(wanted)
+        changed = True
+    elif not (len(ours) == 1 and groups[ours[0]] == wanted):
+        if confirm(
             f"'{rel_path}' already has an EnvShield hook that differs from "
             "this version's. Replace it?"
         ):
-            return WriteResult(path, "skipped", "kept the existing EnvShield hook")
-        groups[ours[0]] = wanted
-        for i in reversed(ours[1:]):
-            del groups[i]
-    else:
-        groups.append(wanted)
+            groups[ours[0]] = wanted
+            for i in reversed(ours[1:]):
+                del groups[i]
+            changed = True
+        else:
+            detail = "kept the existing EnvShield hook"
+    if allow is not None:
+        for rule in CLAUDE_ALLOW:
+            if rule not in allow:
+                allow.append(rule)
+                changed = True
+    if not changed:
+        return WriteResult(path, "skipped" if detail else "unchanged", detail)
     _write_text(path, root, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
-    return WriteResult(path, "created" if text is None else "updated")
+    return WriteResult(path, "created" if text is None else "updated", detail)
 
 
 def _rel(path: str, root: str) -> str:

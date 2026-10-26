@@ -3261,6 +3261,23 @@ def _install_agent_setup(agents: List[str], yes: bool) -> bool:
     return ok
 
 
+def _print_agent_notes(agents: List[str]) -> None:
+    """What each agent still needs from a person before the setup takes effect."""
+    if "claude" in agents:
+        console.print(
+            "[dim]Claude Code runs EnvShield's commands without asking once you "
+            "trust this folder. For an unattended run (claude -p, CI), pass:[/dim]"
+        )
+        console.print(
+            "  " + escape(agent_setup.claude_allowed_tools_args()), soft_wrap=True
+        )
+    if "codex" in agents:
+        console.print(
+            "[dim]Codex runs a new project hook only after you trust it "
+            "('/hooks' in Codex).[/dim]"
+        )
+
+
 def _offer_agent_setup() -> None:
     """'init' offers agent setup on a terminal, and names the command otherwise."""
     if agent_setup.is_installed(os.getcwd()):
@@ -3279,6 +3296,7 @@ def _offer_agent_setup() -> None:
     if wanted:
         console.print("Setting up coding agents:")
         _install_agent_setup(list(agent_setup.AGENT_NAMES), yes=False)
+        _print_agent_notes(list(agent_setup.AGENT_NAMES))
 
 
 @agent_app.command("install")
@@ -3318,13 +3336,10 @@ def agent_install(
         )
         raise typer.Exit(code=1)
     console.print("Setting up coding agents:")
-    if not _install_agent_setup(agents, yes):
+    ok = _install_agent_setup(agents, yes)
+    _print_agent_notes(agents)
+    if not ok:
         raise typer.Exit(code=1)
-    if "codex" in agents:
-        console.print(
-            "[dim]Codex runs a new project hook only after you trust it "
-            "('/hooks' in Codex).[/dim]"
-        )
 
 
 @agent_app.command("guide")

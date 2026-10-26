@@ -1163,7 +1163,7 @@ Component: `--json` output of `check`, `doctor`, `scan`, `undeclared`, `schema d
 
 ### BL-192 — No documented way to run EnvShield from a coding agent after each change
 
-Type: `AI_AGENT` / `DOCUMENTATION` · Evidence: `CONFIRMED` (2026-10-19, agent-style evaluation, see `BL-040`) · Priority: **P2** · Status: **fixed by V6-3 ([#63](https://github.com/rabbilyasar/envshield/issues/63)), branch `rabbilyasar/v6-3-agent-setup`, unmerged**
+Type: `AI_AGENT` / `DOCUMENTATION` · Evidence: `CONFIRMED` (2026-10-19, agent-style evaluation, see `BL-040`) · Priority: **P2** · Status: **fixed by V6-3 ([#63](https://github.com/rabbilyasar/envshield/issues/63)), merged `2474744` (PR #88), unreleased**
 Component: `README.md` ("For AI coding agents"), `init`, docs, website
 
 - **Current behavior:** the README says agents can run `check --json`, but nothing shows how to wire it in: no Claude Code hook (`PostToolUse` on edits, or `Stop`), no Codex equivalent, no `AGENTS.md`/`CLAUDE.md` snippet telling an agent when to run it and how to act on the result. Covering one edit takes three commands (`check` for values and manifests, `undeclared` for new reads, `schema diff` for contract changes), each with its own JSON shape (`BL-191`). The only automatic guard today is the git pre-commit hook, which fires at commit time, not after the edit.
@@ -2027,13 +2027,16 @@ A third real-repository trial on 2026-10-27, for V6-3 (#63, branch `rabbilyasar/
 
 ### BL-206 — Claude Code asks before running `envshield agent guide` or the check, so an unattended agent skips them
 
-Type: `AI_AGENT` · Evidence: `CONFIRMED` (live Claude Code run, 2026-10-27, see `BL-192`) · Priority: **P3** · Status: **open, proposed ([#89](https://github.com/rabbilyasar/envshield/issues/89))**
+Type: `AI_AGENT` · Evidence: `CONFIRMED` (live Claude Code run, 2026-10-27, see `BL-192`) · Priority: **P3** · Status: **fixed by [#89](https://github.com/rabbilyasar/envshield/issues/89), branch `rabbilyasar/bl-206-agent-permissions`, unmerged**
 Component: `core/agent_setup.py::install_hook_config` (`.claude/settings.json`)
 
 - **Current behavior:** `agent install` adds the `PostToolUse` hook but no permission rule. The `AGENTS.md` section tells the agent to run `envshield agent guide` and `envshield check --since HEAD --code-only --json`; in a headless or approval-required session Claude Code needs approval for each, so the agent skips them and relies on the hook alone. In the live run it then declared the variable without a `type` and didn't run `schema sync`, which the guide asks for.
 - **Expected behavior (proposal):** `agent install` also adds read-only allow rules to `.claude/settings.json` `permissions.allow`, such as `Bash(envshield agent guide)` and `Bash(envshield check:*)`, kept and re-run the same way as the hook. Needs a decision: it widens what the agent may run without asking (both commands only read, but `check` takes paths), and Codex's equivalent (`sandbox`/approval policy) is per user, not per project.
 - **Relationships:** `BL-192`, #63.
 - **Issue:** [#89](https://github.com/rabbilyasar/envshield/issues/89).
+- **Fix (#89, 2026-10-27, maintainer decision):** `agent install` adds four exact allow rules to `.claude/settings.json` `permissions.allow` (`agent_setup.CLAUDE_ALLOW`): `Bash(envshield agent guide)`, `Bash(envshield check --since HEAD --code-only --json)`, `Bash(envshield check --json)`, `Bash(envshield schema sync)`. They are added once; other `permissions` keys and rules are kept, and a user's `deny` still wins. Nothing is set for Codex (its approval policy is per user).
+- **Limit found in the live run:** Claude Code applies allow rules from a project's `.claude/settings.json` only after someone accepts the workspace trust dialog for that folder, and `claude -p` never shows it. A headless run in an untrusted folder still asked before each command, exactly as before (hooks, by contrast, run untrusted). Trusting the folder by editing `~/.claude.json` was blocked by the session's safety check, so the trusted case is from Claude Code's documentation, not tested here. The maintainer chose to keep the rules for trusted interactive sessions (the trust dialog lists them) and to document the unattended case: `agent install` (and `init`'s offer) prints the same rules as `--allowedTools "..."` (`agent_setup.claude_allowed_tools_args()`), which needs no trust.
+- **Live run with that flag (2026-10-27):** `claude -p --permission-mode acceptEdits --allowedTools <the four rules>` in the same fixture. Claude ran `agent guide`, declared `SLACK_WEBHOOK_URL` with a description, `type = "url"`, `secret = true` and the `services` line, ran `schema sync` (`.env.example` updated), then both checks. Its only two prompts were for shell glue it chained onto those commands (`echo`, `cat > app.py`). No canary value in the transcript.
 
 
 ### BL-207 — `agent guide` covers development only: nothing on deployment or onboarding
