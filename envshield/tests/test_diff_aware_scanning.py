@@ -51,13 +51,15 @@ class TestGetDiffLines:
             assert 1 not in result  # "line1" existed
             assert 3 not in result  # "line2" existed
 
-    def test_handles_git_errors_gracefully(self):
-        """Should return empty set on git command errors."""
+    def test_git_error_propagates_instead_of_meaning_no_new_lines(self):
+        """BL-095: an empty set means "nothing new to scan", so returning one
+        on a git error silently skipped the file. The caller must see the
+        error and report the file as skipped."""
         with patch.object(
             git_utils, "get_head_file_content", side_effect=Exception("git error")
         ):
-            result = scanner._get_diff_lines("test.py")
-            assert result == set()
+            with pytest.raises(Exception, match="git error"):
+                scanner._get_diff_lines("test.py")
 
     def test_new_line_detected_even_if_identical_text_exists_elsewhere_in_head(self):
         """

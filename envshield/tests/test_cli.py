@@ -2364,6 +2364,8 @@ def test_scan_json_reports_clean_state(tmp_path):
             "secrets": [],
             "undeclared_variables": [],
             "skipped_files": [],
+            "skipped": [],
+            "symlinks_not_followed": [],
             "complete": True,
         }
 

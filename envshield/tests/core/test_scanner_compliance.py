@@ -992,6 +992,166 @@ def test_scan_json_rejects_a_nonexistent_path_instead_of_reporting_clean(tmp_pat
         assert "not found" in payload["error"].lower()
 
 
+class TestEverySkipIsReported:
+    """
+    Regression coverage for BL-095: `scan` reported `clean: true, complete:
+    true` while a file it never inspected held a secret. Every way a file
+    that should be scanned ends up unscanned must reach `skipped_files` with
+    a reason, and none of them may print the content it couldn't scan.
+
+    A symlink is different: git commits only its target path, never the
+    target's content, and a target inside the tree is scanned as its own
+    file. So a symlink is listed in `symlinks_not_followed` but doesn't make
+    the scan incomplete (maintainer decision on #77).
+    """
+
+    CANARY = "SYNTHETIC0000FAKEKEYNOTAREALSECRET1234"
+    SECRET_LINE = f"AWS_SECRET_ACCESS_KEY={CANARY}\n"
+
+    def _git_init(self):
+        os.system("git init -q")
+        os.system('git config user.email "test@example.com"')
+        os.system('git config user.name "Test"')
+
+    def _write_unreadable_secret_file(self, name="locked.env"):
+        with open(name, "w") as f:
+            f.write(self.SECRET_LINE)
+        os.chmod(name, 0)
+
+    @pytest.mark.skipif(
+        hasattr(os, "geteuid") and os.geteuid() == 0,
+        reason="root reads a chmod 000 file anyway",
+    )
+    def test_unreadable_file_makes_json_scan_incomplete(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._write_unreadable_secret_file()
+            try:
+                result = runner.invoke(app, ["scan", "--json"])
+            finally:
+                os.chmod("locked.env", 0o600)
+
+            assert result.exit_code == 1
+            payload = json.loads(result.stdout)
+            assert payload["complete"] is False
+            assert payload["skipped_files"] == ["./locked.env"]
+            assert payload["skipped"] == [
+                {"file_path": "./locked.env", "reason": "unreadable"}
+            ]
+            assert self.CANARY not in result.stdout
+
+    @pytest.mark.skipif(
+        hasattr(os, "geteuid") and os.geteuid() == 0,
+        reason="root reads a chmod 000 file anyway",
+    )
+    def test_unreadable_file_is_named_in_human_output(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._write_unreadable_secret_file()
+            try:
+                result = runner.invoke(app, ["scan"])
+            finally:
+                os.chmod("locked.env", 0o600)
+
+            # A bare interactive scan keeps exit 0 on incomplete coverage,
+            # as for an oversized file (BL-004), but never claims "no issues".
+            assert result.exit_code == 0
+            assert "No issues found" not in result.stdout
+            assert "couldn't be read" in result.stdout
+            assert "locked.env" in result.stdout
+            assert "coverage was incomplete" in result.stdout
+            assert self.CANARY not in result.stdout
+
+    def _stage_excluded_secret_file(self):
+        self._git_init()
+        with open("envshield.yml", "w") as f:
+            f.write("secret_scanning:\n  exclude_files:\n    - config.env\n")
+        with open("config.env", "w") as f:
+            f.write("PLAIN=1\n")
+        os.system("git add -A")
+        os.system('git commit -q -m "baseline"')
+        with open("config.env", "a") as f:
+            f.write(self.SECRET_LINE)
+        os.system("git add config.env")
+
+    def test_diff_failure_on_excluded_staged_file_is_reported(self, tmp_path, mocker):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._stage_excluded_secret_file()
+            mocker.patch(
+                "envshield.utils.git_utils.get_head_file_content",
+                side_effect=RuntimeError("simulated git failure"),
+            )
+
+            result = runner.invoke(app, ["scan", "--staged", "--json"])
+
+            assert result.exit_code == 1
+            payload = json.loads(result.stdout)
+            assert payload["complete"] is False
+            assert len(payload["skipped"]) == 1
+            assert payload["skipped"][0]["file_path"].endswith("config.env")
+            assert payload["skipped"][0]["reason"] == "diff_failed"
+            assert self.CANARY not in result.stdout
+
+    def test_diff_failure_blocks_the_pre_commit_hook_command(self, tmp_path, mocker):
+        """`scan --staged` is what the installed hook runs: a diff failure
+        must abort the commit, not let the excluded file through."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._stage_excluded_secret_file()
+            mocker.patch(
+                "envshield.utils.git_utils.get_head_file_content",
+                side_effect=RuntimeError("simulated git failure"),
+            )
+
+            result = runner.invoke(app, ["scan", "--staged"])
+
+            assert result.exit_code == 1
+            assert "Commit aborted" in result.stdout
+            assert "config.env" in result.stdout
+            assert self.CANARY not in result.stdout
+
+    def test_oversized_file_reports_its_reason(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            with open("big.env", "w") as f:
+                f.write("PADDING=" + ("a" * 1_000_010) + "\n")
+
+            result = runner.invoke(app, ["scan", "--json"])
+
+            payload = json.loads(result.stdout)
+            assert payload["skipped"] == [
+                {"file_path": "./big.env", "reason": "too_large"}
+            ]
+
+    def test_symlink_is_listed_but_scan_stays_complete(self, tmp_path):
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        target = outside / "secret.env"
+        target.write_text(self.SECRET_LINE)
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            os.symlink(target, "linked.env")
+            with open("app.env", "w") as f:
+                f.write("SOME_VALUE=fine\n")
+
+            result = runner.invoke(app, ["scan", "--json"])
+
+            assert result.exit_code == 0
+            payload = json.loads(result.stdout)
+            assert payload["complete"] is True
+            assert payload["skipped_files"] == []
+            assert payload["symlinks_not_followed"] == ["./linked.env"]
+            assert self.CANARY not in result.stdout
+
+    def test_ordinary_clean_scan_reports_nothing_skipped(self, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            with open("app.env", "w") as f:
+                f.write("SOME_VALUE=fine\n")
+
+            result = runner.invoke(app, ["scan", "--json"])
+
+            assert result.exit_code == 0
+            payload = json.loads(result.stdout)
+            assert payload["complete"] is True
+            assert payload["skipped"] == []
+            assert payload["symlinks_not_followed"] == []
+
+
 class TestSymlinkNeverFollowed:
     """
     Regression coverage for the security invariant behind P0-2: a scan must

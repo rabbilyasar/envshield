@@ -3,7 +3,7 @@ import difflib
 import logging
 import os
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import typer
 from rich.console import Console
@@ -446,39 +446,46 @@ def _get_diff_lines(file_path: str) -> Optional[set]:
         set: Line numbers (1-indexed) that are newly added
         None: If the file doesn't exist in HEAD (brand new file) - scan all lines
         empty set: If there are no new lines
+
+    Raises whatever computing the diff raised. An empty set means "nothing
+    new to scan", so returning one on an error silently skipped the file
+    (BL-095); the caller reports it as skipped instead.
     """
-    try:
-        head_content = git_utils.get_head_file_content(file_path)
+    head_content = git_utils.get_head_file_content(file_path)
 
-        # Brand new file - return None to indicate "scan all lines"
-        if head_content is None:
-            return None
+    # Brand new file - return None to indicate "scan all lines"
+    if head_content is None:
+        return None
 
-        staged_content = git_utils.get_staged_file_content(file_path)
-        if staged_content is None:
-            return set()
-
-        # Extract lines
-        head_lines = head_content.splitlines()
-        staged_lines = staged_content.splitlines()
-
-        # A positional diff, not a content-set comparison: matching by exact
-        # line text alone would treat a genuinely new line as "pre-existing"
-        # whenever some unrelated line elsewhere in the file happens to have
-        # identical text (e.g. a repeated comment or template block) --
-        # letting a real new secret hide behind a coincidental text match.
-        matcher = difflib.SequenceMatcher(
-            None, head_lines, staged_lines, autojunk=False
-        )
-        new_line_numbers = set()
-        for tag, _i1, _i2, j1, j2 in matcher.get_opcodes():
-            if tag in ("insert", "replace"):
-                new_line_numbers.update(range(j1 + 1, j2 + 1))
-
-        return new_line_numbers
-    except Exception:
-        # On any error, return empty set (conservative - don't scan)
+    staged_content = git_utils.get_staged_file_content(file_path)
+    if staged_content is None:
         return set()
+
+    # Extract lines
+    head_lines = head_content.splitlines()
+    staged_lines = staged_content.splitlines()
+
+    # A positional diff, not a content-set comparison: matching by exact
+    # line text alone would treat a genuinely new line as "pre-existing"
+    # whenever some unrelated line elsewhere in the file happens to have
+    # identical text (e.g. a repeated comment or template block) --
+    # letting a real new secret hide behind a coincidental text match.
+    matcher = difflib.SequenceMatcher(None, head_lines, staged_lines, autojunk=False)
+    new_line_numbers = set()
+    for tag, _i1, _i2, j1, j2 in matcher.get_opcodes():
+        if tag in ("insert", "replace"):
+            new_line_numbers.update(range(j1 + 1, j2 + 1))
+
+    return new_line_numbers
+
+
+# Why a file that should have been scanned wasn't, as printed by run_scan.
+# Keys are the `reason` values in scan's `skipped` output.
+_SKIP_REASON_LABELS = {
+    "too_large": "over 1MB",
+    "unreadable": "that couldn't be read",
+    "diff_failed": "whose staged diff couldn't be computed",
+}
 
 
 def _display_path(file_path: str) -> str:
@@ -790,6 +797,7 @@ def _scan_single_file(
     new_lines_only: Optional[set] = None,
     system_vars: Optional[set] = None,
     skip_undeclared: bool = False,
+    raise_on_read_error: bool = False,
 ) -> (List[Dict], List[Dict]):
     """
     Helper to scan one file for both secrets and undeclared variables.
@@ -812,6 +820,11 @@ def _scan_single_file(
     resolved but has nothing loaded to check it against (see
     _build_undeclared_var_resolver) -- never as a substitute for `schema_vars`
     being empty, which means something different (everything is undeclared).
+
+    `raise_on_read_error` re-raises a file that can't be opened or read
+    (permission denied, deleted mid-scan, a symlink caught by O_NOFOLLOW)
+    instead of returning no findings, so _scan_files can report it as
+    skipped rather than scanned-and-clean (BL-095).
     """
     secret_findings = []
     undeclared_findings = []
@@ -946,13 +959,21 @@ def _scan_single_file(
                 )
 
     except (IOError, OSError):
+        if raise_on_read_error:
+            raise
         return [], []
 
     return secret_findings, undeclared_findings
 
 
-def _collect_files_to_scan(paths: Optional[List[str]], staged_only: bool) -> List[str]:
-    """Collects a list of files to be scanned based on user input."""
+def _collect_files_to_scan(
+    paths: Optional[List[str]], staged_only: bool
+) -> Tuple[List[str], List[str]]:
+    """
+    Collects the files to be scanned based on user input. Returns
+    (files_to_scan, skipped_symlinks): the symlinks are returned so the
+    '--json' output can list them (BL-095), not only the console line below.
+    """
 
     if staged_only:
         console.print("Scanning [yellow]staged files[/yellow]...")
@@ -960,7 +981,7 @@ def _collect_files_to_scan(paths: Optional[List[str]], staged_only: bool) -> Lis
         if not files:
             console.print("[green]No staged files to scan.[/green]")
             raise typer.Exit()
-        return files
+        return files, []
 
     files_to_scan = []
     scan_paths = paths or ["."]
@@ -1028,7 +1049,7 @@ def _collect_files_to_scan(paths: Optional[List[str]], staged_only: bool) -> Lis
         )
         files_to_scan = [f for f in files_to_scan if f not in ignored]
 
-    return files_to_scan
+    return files_to_scan, sorted(skipped_symlinks)
 
 
 def _filter_files(files: List[str], exclude_patterns: List[str]) -> List[str]:
@@ -1189,7 +1210,14 @@ def _scan_files(
 ):
     """
     Does the actual file collection and scanning, returning the raw
-    (secret_findings, undeclared_findings, skipped_large_files) lists.
+    (secret_findings, undeclared_findings, skipped, skipped_symlinks) lists.
+
+    `skipped` holds every file that should have been scanned but wasn't, as
+    {"file_path", "reason"} dicts, reason one of "too_large", "unreadable" or
+    "diff_failed" (see _SKIP_REASON_LABELS). Any entry makes
+    the scan incomplete. `skipped_symlinks` doesn't: git commits only a
+    symlink's target path, and a target inside the tree is scanned as its
+    own file.
 
     Extracted from run_scan so both the Rich-rendering path and the
     '--json' path (see scan_result) share one implementation instead of
@@ -1246,7 +1274,7 @@ def _scan_files(
             if candidate_dir != "." and not staged_only:
                 paths = [candidate_dir]  # walk only X's subtree
 
-    files_to_scan = _collect_files_to_scan(paths, staged_only)
+    files_to_scan, skipped_symlinks = _collect_files_to_scan(paths, staged_only)
 
     if owned_by_service:
         files_to_scan = [f for f in files_to_scan if owned_by_service(f)]
@@ -1266,7 +1294,10 @@ def _scan_files(
 
     all_secret_findings = []
     all_undeclared_findings = []
-    skipped_large_files = []
+    skipped = []
+
+    def _skip(file_path: str, reason: str):
+        skipped.append({"file_path": file_path, "reason": reason})
 
     with Progress(
         SpinnerColumn(),
@@ -1310,7 +1341,15 @@ def _scan_files(
                 new_lines_only = None
                 is_excluded = file_path in excluded_files
                 if is_excluded:
-                    new_lines = _get_diff_lines(file_path)
+                    try:
+                        new_lines = _get_diff_lines(file_path)
+                    except Exception:
+                        # Unknown which lines are new, so the file can't be
+                        # treated as having none (BL-095). Reported, not
+                        # scanned in full: the exclusion usually exists
+                        # because the whole file is noisy.
+                        _skip(file_path, "diff_failed")
+                        continue
                     if new_lines is not None:
                         if len(new_lines) == 0:
                             # File is excluded and has no new lines - skip it
@@ -1322,7 +1361,7 @@ def _scan_files(
                 # excluded-but-brand-new one (new_lines_only still None --
                 # scanned in full despite the exclusion, below).
                 if new_lines_only is None and len(content) > MAX_SCANNABLE_SIZE_BYTES:
-                    skipped_large_files.append(file_path)
+                    _skip(file_path, "too_large")
                     continue
 
                 if is_excluded:
@@ -1350,19 +1389,24 @@ def _scan_files(
                     os.path.exists(file_path)
                     and os.path.getsize(file_path) > MAX_SCANNABLE_SIZE_BYTES
                 ):
-                    skipped_large_files.append(file_path)
+                    _skip(file_path, "too_large")
                     continue
-                secrets, undeclared = _scan_single_file(
-                    file_path,
-                    schema_vars,
-                    system_vars=system_vars,
-                    skip_undeclared=skip_undeclared,
-                )
+                try:
+                    secrets, undeclared = _scan_single_file(
+                        file_path,
+                        schema_vars,
+                        system_vars=system_vars,
+                        skip_undeclared=skip_undeclared,
+                        raise_on_read_error=True,
+                    )
+                except OSError:
+                    _skip(file_path, "unreadable")
+                    continue
 
             all_secret_findings.extend(secrets)
             all_undeclared_findings.extend(undeclared)
 
-    return all_secret_findings, all_undeclared_findings, skipped_large_files
+    return all_secret_findings, all_undeclared_findings, skipped, skipped_symlinks
 
 
 def run_scan(
@@ -1384,25 +1428,27 @@ def run_scan(
     to allow the operation (Git-hook mode with interactive override for high-confidence
     findings). Normal scan mode (enforce_mode=False) preserves existing behavior.
     """
-    all_secret_findings, all_undeclared_findings, skipped_large_files = _scan_files(
+    all_secret_findings, all_undeclared_findings, skipped, _ = _scan_files(
         paths, staged_only, config_path, exclude_patterns, service_name
     )
 
-    if skipped_large_files:
-        console.print(
-            f"\n[bold yellow]⚠️  Skipped {len(skipped_large_files)} file(s) over 1MB (not scanned -- coverage is incomplete for these):[/bold yellow]"
-        )
-        for skipped_path in skipped_large_files:
-            console.print(f"    [dim]{skipped_path}[/dim]")
+    for reason, label in _SKIP_REASON_LABELS.items():
+        skipped_paths = [s["file_path"] for s in skipped if s["reason"] == reason]
+        if skipped_paths:
+            console.print(
+                f"\n[bold yellow]⚠️  Skipped {len(skipped_paths)} file(s) {label} (not scanned -- coverage is incomplete for these):[/bold yellow]"
+            )
+            for skipped_path in skipped_paths:
+                console.print(f"    [dim]{skipped_path}[/dim]")
 
     # M7: Enforcement mode (Git hook with interactive override)
     if enforce_mode:
         from . import enforcement
 
         # Incomplete coverage is fatal in enforcement mode (same as staged_only)
-        if skipped_large_files:
+        if skipped:
             console.print(
-                "\n[bold red]Commit aborted. Coverage incomplete (files > 1MB skipped).[/bold red]"
+                f"\n[bold red]Commit aborted. Coverage incomplete ({len(skipped)} file(s) skipped, listed above).[/bold red]"
             )
             raise typer.Exit(code=1)
 
@@ -1519,7 +1565,7 @@ def run_scan(
     # incompleteness must be fatal there even with zero findings; a bare
     # interactive scan keeps its existing exit-0 UX, but never claims full
     # coverage in its printed message either.
-    incomplete = bool(skipped_large_files)
+    incomplete = bool(skipped)
     fatal_incomplete = incomplete and staged_only
 
     if not found_issues and not fatal_incomplete:
@@ -1556,7 +1602,7 @@ def scan_result(
     was_quiet = console.quiet
     console.quiet = True
     try:
-        secrets, undeclared, skipped = _scan_files(
+        secrets, undeclared, skipped, skipped_symlinks = _scan_files(
             paths, staged_only, config_path, exclude_patterns, service_name
         )
     finally:
@@ -1566,10 +1612,15 @@ def scan_result(
         "clean": not (secrets or undeclared),
         "secrets": secrets,
         "undeclared_variables": undeclared,
-        "skipped_files": skipped,
+        # Paths only, kept for existing consumers; `skipped` adds the reason.
+        "skipped_files": [s["file_path"] for s in skipped],
+        "skipped": skipped,
+        # Not followed, by design, and not a coverage gap (see _scan_files).
+        "symlinks_not_followed": skipped_symlinks,
         # True iff every eligible file was actually inspected -- False
         # when eligible content was skipped for a reason `scan` couldn't
-        # verify around (today, only the >1MB case; see BL-004/BL-095).
+        # verify around (over 1MB, unreadable, or a failed staged diff;
+        # see BL-004/BL-095).
         # Deliberately independent of `clean`: `clean` states whether
         # anything was *found* in what was scanned, `complete` states
         # whether the scan actually covered everything eligible -- a
