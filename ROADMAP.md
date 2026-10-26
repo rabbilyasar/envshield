@@ -109,9 +109,10 @@ issue.
    detection), with the old forms kept working through v5; the same answer
    in a terminal and in CI; output that stays readable in CI logs; the
    pull request that adopts EnvShield doesn't fail its own check. One
-   command checks a change and returns one finding list, and a documented
-   recipe runs it from Claude Code, Codex and other coding agents after
-   each edit.
+   command checks a change and returns one finding list. Agent setup:
+   `init` writes a short `AGENTS.md` section and the Claude Code/Codex hook
+   that runs that command after each edit, and `envshield agent guide`
+   tells an agent how to run the check and keep the schema up to date.
    ([#42](https://github.com/rabbilyasar/envshield/issues/42),
    [#45](https://github.com/rabbilyasar/envshield/issues/45),
    [#63](https://github.com/rabbilyasar/envshield/issues/63))
@@ -172,8 +173,10 @@ after Phase 7. Decisions behind each phase:
 [docs/architecture/v5-decisions.md](docs/architecture/v5-decisions.md).
 
 **For AI coding agents:** v5 positions EnvShield as the deterministic
-configuration check in an agent's loop — hooks and `--json` output an agent
-can act on when it adds code that needs configuration. No MCP server is
+configuration check in an agent's loop, and ships the setup that puts it
+there (#63, decided 2026-10-26): after `init`, a project's coding agent
+knows when to run the check, how to act on its findings, and how to
+maintain the schema when its code needs a new variable. No MCP server is
 planned for v5.
 
 **Compatibility:** v5.0.0 is a major release. Verdicts, the gate, `setup`
