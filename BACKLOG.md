@@ -998,7 +998,7 @@ Component: `init`, `envshield.yml` generation
 
 ### BL-177 — First-run and generated text is off-message or wrong
 
-Type: `UX` / `DOCUMENTATION` · Evidence: `CONFIRMED` (first-run trial, 2026-10-14) · Priority: **P3** · Status: **fixed by V6-2 ([#45](https://github.com/rabbilyasar/envshield/issues/45), branch `rabbilyasar/v6-2-consistent-defaults`, unmerged; D-14)**
+Type: `UX` / `DOCUMENTATION` · Evidence: `CONFIRMED` (first-run trial, 2026-10-14) · Priority: **P3** · Status: **fixed by V6-2 ([#45](https://github.com/rabbilyasar/envshield/issues/45), merged `f8106f2`, PR #86, unreleased; D-14)**
 Component: `init` output, generated `envshield.yml`, `env.schema.toml`, `.env.example`; `check` on a manifest
 
 - `init` ends with "Your project is now protected." Nothing has been validated at that point.
@@ -1078,7 +1078,7 @@ Component: Python discovery (`ast.parse` of user files)
 
 ### BL-183 — Tables truncate file paths at 80 columns, the CI default
 
-Type: `UX` · Evidence: `CONFIRMED` (real-repo trial, 2026-10-14; output captured through a pipe, as in CI) · Priority: **P2** · Status: **fixed by V6-2 ([#45](https://github.com/rabbilyasar/envshield/issues/45), branch `rabbilyasar/v6-2-consistent-defaults`, unmerged; D-14)**
+Type: `UX` · Evidence: `CONFIRMED` (real-repo trial, 2026-10-14; output captured through a pipe, as in CI) · Priority: **P2** · Status: **fixed by V6-2 ([#45](https://github.com/rabbilyasar/envshield/issues/45), merged `f8106f2`, PR #86, unreleased; D-14)**
 Component: Rich table output (`undeclared`, and others using fixed tables)
 
 - **Current behavior:** `undeclared` prints `frontend/lib/b…`, `src/domain/reco…` and `RECOVERY_TIMING_…`. In CI, where output isn't a TTY, Rich falls back to 80 columns, so the file and line, the whole point of the finding, are unreadable.
@@ -1088,7 +1088,7 @@ Component: Rich table output (`undeclared`, and others using fixed tables)
 
 ### BL-184 — `schema diff` classifies introducing EnvShield as BREAKING
 
-Type: `UX` / `PRODUCT` · Evidence: `CONFIRMED` (real-repo trial, 2026-10-14) · Priority: **P2** · Status: **fixed by V6-2 ([#45](https://github.com/rabbilyasar/envshield/issues/45), branch `rabbilyasar/v6-2-consistent-defaults`, unmerged; D-14)**
+Type: `UX` / `PRODUCT` · Evidence: `CONFIRMED` (real-repo trial, 2026-10-14) · Priority: **P2** · Status: **fixed by V6-2 ([#45](https://github.com/rabbilyasar/envshield/issues/45), merged `f8106f2`, PR #86, unreleased; D-14)**
 Component: `schema diff` classification when the base revision has no contract
 
 - **Current behavior:** on jossjobs, with a base revision before the schema existed, `schema diff` says "No EnvShield contract existed … implicit empty starting contract" and then lists all 7 variables as BREAKING and exits 1. A CI step running `schema diff --fail-on breaking` therefore blocks the pull request that adopts EnvShield.
@@ -1107,7 +1107,7 @@ Component: `doctor` template check, `init`'s `.gitignore` handling
 
 ### BL-186 — Flask `config` "may be read" notes flood `check` output
 
-Type: `UX` · Evidence: `CONFIRMED` (real-repo trial, 2026-10-14) · Priority: **P3** · Status: **fixed by V6-2 ([#45](https://github.com/rabbilyasar/envshield/issues/45), branch `rabbilyasar/v6-2-consistent-defaults`, unmerged; D-14)**
+Type: `UX` · Evidence: `CONFIRMED` (real-repo trial, 2026-10-14) · Priority: **P3** · Status: **fixed by V6-2 ([#45](https://github.com/rabbilyasar/envshield/issues/45), merged `f8106f2`, PR #86, unreleased; D-14)**
 Component: `check` code-references output (`dynamic_references` / framework-aware discovery)
 
 - **Current behavior:** phineas's `check` prints 56 lines of "X may be read from configuration at … (not an environment read EnvShield can confirm; informational)". Many are a vendored library's own config keys (`phineas/spectree/config.py`).
@@ -1117,7 +1117,7 @@ Component: `check` code-references output (`dynamic_references` / framework-awar
 
 ### BL-188 — In a terminal, multi-service `check`/`undeclared` ask which service and default to the first; CI checks all
 
-Type: `UX` · Evidence: `CONFIRMED` (demo project, 2026-10-14) · Priority: **P2** · Status: **fixed by V6-2 ([#45](https://github.com/rabbilyasar/envshield/issues/45), branch `rabbilyasar/v6-2-consistent-defaults`, unmerged; D-14)**
+Type: `UX` · Evidence: `CONFIRMED` (demo project, 2026-10-14) · Priority: **P2** · Status: **fixed by V6-2 ([#45](https://github.com/rabbilyasar/envshield/issues/45), merged `f8106f2`, PR #86, unreleased; D-14)**
 Component: service selection (`resolve_targets` and its interactive picker)
 
 - **Current behavior:** on a two-service project, `envshield check` with a TTY opens "Which service? (Use arrow keys)" with `api` preselected and "All services" last. Without a TTY (CI, pipes) the same command checks every service. There is no `--all` flag, so a terminal user can't ask for the CI behavior non-interactively. (Found because the demo recording hung on the picker.)
@@ -1966,7 +1966,7 @@ Source: found while fixing `BL-095` (#77), checking the same `--staged` loop for
 
 ### BL-203 — From the project root, a bare `check` checks only the root service and skips nested services, in CI too
 
-Type: `UX` / `COVERAGE` · Evidence: `CONFIRMED` (live, 2026-10-27, while implementing #42) · Priority: **P2** · Status: **fixed by V6-2 ([#45](https://github.com/rabbilyasar/envshield/issues/45), branch `rabbilyasar/v6-2-consistent-defaults`, unmerged; D-14)**
+Type: `UX` / `COVERAGE` · Evidence: `CONFIRMED` (live, 2026-10-27, while implementing #42) · Priority: **P2** · Status: **fixed by V6-2 ([#45](https://github.com/rabbilyasar/envshield/issues/45), merged `f8106f2`, PR #86, unreleased; D-14)**
 Component: `core/service_manager.py` (`_infer_from_invocation_dir`, reached through `resolve_targets`)
 Source: found while moving undeclared-read reporting from plain `scan` to `check` (V0-2b, #42).
 
@@ -1997,7 +1997,7 @@ Component: `cli.py::_import_schema`, `core/importer.py` (`generate_schema_from_f
 
 ### BL-205 — `check --since --code-only`, the CI replacement for `undeclared`, is 40–110× slower on large repositories
 
-Type: `PERFORMANCE` · Evidence: `CONFIRMED` (real-repo trial, 2026-10-27; wall-clock seconds, one run each, warm disk) · Priority: **P2** (correct, but it may make the CI step the slowest in a pipeline) · Status: **open**
+Type: `PERFORMANCE` · Evidence: `CONFIRMED` (real-repo trial, 2026-10-27; wall-clock seconds, one run each, warm disk) · Priority: **P2** (correct, but it may make the CI step the slowest in a pipeline) · Status: **fixed by [#85](https://github.com/rabbilyasar/envshield/issues/85) (option 1), branch `rabbilyasar/bl-205-fast-since`, unmerged**
 Component: `core/evaluator.py::discover_code_references` (walks the whole service tree), used by `check --since` and `--code-only`; `core/dependency_snapshot.py` (what `undeclared` reads: changed files only)
 
 - **Measured** (`undeclared HEAD~10 HEAD` vs. `check --since HEAD~10 --code-only`): PostHog (61,789 files) 1.4 s vs. 155 s; Twenty (39,796) 3.8 s vs. 65 s; n8n (32,305) 2.2 s vs. 50 s; Dify (15,081) 5.1 s vs. 29 s; Langfuse (7,461) 3.6 s vs. 15 s; cal.com (7,710) 1.3 s vs. 8 s. Under 1,000 files both take about a second. Plain `check` costs the same as `check --since`, since both walk every file the service owns.
@@ -2005,6 +2005,8 @@ Component: `core/evaluator.py::discover_code_references` (walks the whole servic
 - **Expected behavior:** the CI form costs about what `undeclared` did. One option, to be decided: with `--since`, discover only changed and untracked files (plus the REV side) for the gate, and report old reads by count. That changes what the report lists, so it's a design decision, not a tuning fix.
 - **Relationships:** `BL-050` (scan/undeclared benchmark), V0-2b (#42), D-13.
 - **Issue:** [#85](https://github.com/rabbilyasar/envshield/issues/85).
+- **Fix (2026-10-27, maintainer chose option 1):** with `--since`, code references come only from the files changed or untracked since REV (`since.changed_files`, which fails closed if git can't list them), through the same per-file rules as the full walk (`evaluator.service_source_filter`). A read is old only if a changed file read the same name at REV, found by `check`'s own discovery. An old read in an unchanged file is no longer listed with `--since`; plain `check` still lists it. D-13 updated.
+- **Re-measured on fresh clones** (same six repositories, median of three runs, `undeclared HEAD~10 HEAD` vs. `check --since HEAD~10 --code-only`): PostHog 4.2 s vs. **3.0 s** (was 155 s); Twenty 1.8 s vs. **0.6 s** (was 65 s); n8n 1.7 s vs. **0.7 s** (was 50 s); Dify 3.1 s vs. **0.4 s** (was 29 s); Langfuse 1.4 s vs. **0.6 s** (was 15 s); cal.com 0.7 s vs. **0.5 s** (was 8 s). Faster than `undeclared` on all six. Over `HEAD~39` both commands report the same new reads on all six (Dify: `USERNAME`, `packages/openapi-content-mapper/src/tooling/mapper-cache.ts:114`, from both), and `check` additionally lists 4–18 old reads in changed files per repository; the slowest run was PostHog at 6.1 s.
 
 A second real-repository trial on 2026-10-27, for V6-2 (#45, branch `rabbilyasar/v6-2-consistent-defaults`): the same 13 repositories, recloned from the first trial's clones at each repository's original upstream commit (before that trial's local `init` commit), under `~/envshield-trials/2026-10-27-v6-2`, with output piped at `COLUMNS=80` as in CI. Each ran `service list`, `check --json`, `check --since HEAD~10 --code-only --json`, `doctor --json`, `schema diff HEAD~1 HEAD` (human and `--json`, the adoption diff for the ten fresh `init`s), `scan`, the human `check`, `undeclared`, `schema diff` and `check --since --code-only` at 80 columns, and `check` on up to two Compose files.
 - **Secret safety:** same method as the first trial (kemonchilo's real `.env`; canaries elsewhere). No canary and no real value in any output; every raw match was the same kind of coincidence (repository and service names such as `formbricks`, `documenso`, `plane-redis`; `password`/`database` inside file and service names). No traceback.

@@ -222,14 +222,8 @@ def _exclude_patterns() -> List[str]:
     return list(scanning.get("exclude_files") or [])
 
 
-def discover_code_references(service_name: str) -> CodeReferences:
-    """
-    Walks the service's directory (only files resolve_file_owner gives this
-    service) plus its additional_source_roots (BL-106: shared code, exempt
-    from ownership), skipping default-excluded directories, symlinks,
-    git-ignored files, and secret_scanning.exclude_files -- the file set
-    'scan' checks undeclared reads in.
-    """
+def _walk_service_files(service_name: str) -> List[str]:
+    """discover_code_references' full walk (no `files`), unchanged."""
     service_dir = config_manager.get_service_dir(service_name)
     extra_roots = config_manager.get_service_additional_source_roots(service_name)
 
@@ -255,6 +249,78 @@ def discover_code_references(service_name: str) -> CodeReferences:
     ]
     ignored = git_utils.get_ignored_files(files)
     files = [f for f in files if f not in ignored]
+
+    return files
+
+
+def service_source_filter(service_name: str):
+    """
+    `belongs(path)`: whether a source file at `path` (relative to the
+    project root) is part of `service_name`'s code for code references --
+    the per-file rules of discover_code_references' walk: a discoverable
+    suffix, no default-excluded directory on the way, inside the service's
+    directory and owned by it (resolve_file_owner), or inside one of its
+    additional_source_roots (BL-106: exempt from ownership), and not
+    matching secret_scanning.exclude_files. Path rules only: it doesn't
+    look at the disk, so it also answers for a file deleted since a
+    revision (check --since, D-13).
+    """
+    service_dir = os.path.normpath(config_manager.get_service_dir(service_name))
+    extra_roots = [
+        os.path.normpath(r)
+        for r in config_manager.get_service_additional_source_roots(service_name)
+    ]
+    owner = config_manager.file_owner_resolver()
+    patterns = _exclude_patterns()
+
+    def belongs(path: str) -> bool:
+        path = os.path.normpath(path)
+        if not path.endswith(source_files.DISCOVERABLE_SUFFIXES):
+            return False
+        parts = path.split(os.sep)[:-1]
+        if any(source_files.is_default_excluded_dir(d) for d in parts):
+            return False
+        if not any(config_manager.service_dir_contains(path, r) for r in extra_roots):
+            if not config_manager.service_dir_contains(path, service_dir):
+                return False
+            if owner(path) != service_name:
+                return False
+        return not any(source_files.matches_exclusion(path, p) for p in patterns)
+
+    return belongs
+
+
+def discover_code_references(
+    service_name: str, files: Optional[List[str]] = None
+) -> CodeReferences:
+    """
+    Walks the service's directory (only files resolve_file_owner gives this
+    service) plus its additional_source_roots (BL-106: shared code, exempt
+    from ownership), skipping default-excluded directories, symlinks,
+    git-ignored files, and secret_scanning.exclude_files -- the file set
+    'scan' checks undeclared reads in.
+
+    `files` (paths relative to the project root, or absolute) replaces the
+    walk: only those of them that are this service's code
+    (service_source_filter), exist, and aren't symlinks are read. 'check
+    --since' passes the files changed since its revision (D-13), so a large
+    repository isn't walked for a three-file change (BL-205).
+    """
+    if files is not None:
+        belongs = service_source_filter(service_name)
+        candidates: List[str] = []
+        seen: set = set()
+        for f in files:
+            path = os.path.normpath(os.path.relpath(f) if os.path.isabs(f) else f)
+            if path in seen or os.path.islink(path) or not os.path.isfile(path):
+                continue
+            seen.add(path)
+            if belongs(path):
+                candidates.append(path)
+        ignored = git_utils.get_ignored_files(candidates)
+        files = [f for f in candidates if f not in ignored]
+    else:
+        files = _walk_service_files(service_name)
 
     result = CodeReferences()
     for path in files:
@@ -483,6 +549,7 @@ def evaluate_service(
     environment: Optional[Mapping[str, str]] = None,
     code: bool = False,
     env: str = schema_types.LOCAL,
+    code_files: Optional[List[str]] = None,
 ) -> ServiceEvaluation:
     """
     Evaluates one service in environment `env` (plan §7). In 'local', the
@@ -571,13 +638,15 @@ def evaluate_service(
             )
             evaluation.union_source_errors = errors
         if code and not file and evaluation.view is not None:
-            evaluation.code = discover_code_references(service_name)
+            evaluation.code = discover_code_references(service_name, code_files)
     except EnvShieldException as e:
         evaluation.error = str(e)
     return evaluation
 
 
-def evaluate_code_only(service_name: str) -> ServiceEvaluation:
+def evaluate_code_only(
+    service_name: str, code_files: Optional[List[str]] = None
+) -> ServiceEvaluation:
     """
     'check --code-only' (D-13): the contract and the service's code
     references, nothing else. Without a local file (CI), this is what
@@ -591,7 +660,7 @@ def evaluate_code_only(service_name: str) -> ServiceEvaluation:
         evaluation.schema_error = str(e)
         return evaluation
     try:
-        evaluation.code = discover_code_references(service_name)
+        evaluation.code = discover_code_references(service_name, code_files)
     except EnvShieldException as e:
         evaluation.error = str(e)
     return evaluation
@@ -879,6 +948,9 @@ def _since_entry(evaluation: ServiceEvaluation) -> Dict[str, Any]:
         contract = "compared"
     return {
         "revision": result.revision,
+        # Code references cover only the files changed since `revision`
+        # (#85); plain 'check' covers every file.
+        "code_scope": "changed_files",
         "new_undeclared": sorted(undeclared - result.read_before),
         "undeclared_before": sorted(undeclared & result.read_before),
         "contract": contract,
