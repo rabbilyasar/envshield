@@ -149,11 +149,14 @@ def _resolve_service_with_provenance(
             f"Pass --service explicitly. Available: {', '.join(available)}"
         )
 
-    # Multiple services, none specified: prompt the user
-    choices = available + ([ALL_SERVICES_CHOICE] if allow_multiple else [])
+    # Multiple services, none specified: prompt the user. When every
+    # service is an option it comes first and is preselected: the complete
+    # answer is the default (BL-188).
+    choices = ([ALL_SERVICES_CHOICE] if allow_multiple else []) + available
     selected = questionary.select(
         "Which service?",
         choices=choices,
+        default=choices[0],
     ).ask()
 
     if selected is None:
@@ -228,6 +231,28 @@ def resolve_targets(
         service_name, invocation_dir=invocation_dir
     )
     return targets
+
+
+def resolve_all_targets(service_name: Optional[str] = None) -> List[str]:
+    """
+    The services a whole-project command ('check', 'doctor', 'undeclared',
+    'schema diff', 'schema sync') runs against: `service_name` if given,
+    otherwise every configured service. Never inferred from the working
+    directory and never prompted for, so the answer is the same in a
+    terminal and in CI (V6-2, #45; BL-188, BL-203).
+    """
+    available = get_available_services()
+    if not available:
+        raise EnvShieldException(
+            "No services configured yet. Run 'envshield init' first."
+        )
+    if service_name:
+        if service_name not in available:
+            raise EnvShieldException(
+                f"Service '{service_name}' not found. Available: {', '.join(available)}"
+            )
+        return [service_name]
+    return list(available)
 
 
 def resolve_targets_with_provenance(

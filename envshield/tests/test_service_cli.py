@@ -104,7 +104,7 @@ def test_service_add_warns_when_no_schema_was_created(tmp_path):
         assert result.exit_code == 0
         assert not os.path.exists("api/env.schema.toml")
         assert "doesn't exist yet" in result.stdout
-        assert "import <file> --service api" in result.stdout.replace("\n", " ")
+        assert "init --from <file> --service api" in result.stdout.replace("\n", " ")
 
 
 def test_service_add_seeds_schema_from_import_file(tmp_path):
@@ -352,12 +352,12 @@ def test_commands_find_envshield_yml_from_a_subdirectory(tmp_path):
         assert "api" in result.stdout
 
 
-def test_doctor_infers_service_from_invocation_directory(tmp_path):
+def test_doctor_covers_every_service_from_inside_one(tmp_path):
     """
-    The other half of directory-context inference: with more than one
-    service configured and no --service given, running from inside one
-    service's own directory should target that service -- not prompt or
-    (worse, with no TTY) crash.
+    With more than one service and no --service, 'doctor' covers every
+    service wherever it's run, including from inside one service's own
+    directory: the working directory no longer narrows a whole-project
+    command (#45, BL-203). --service still does.
     """
     with runner.isolated_filesystem(temp_dir=tmp_path):
         os.makedirs("api")
@@ -370,7 +370,10 @@ def test_doctor_infers_service_from_invocation_directory(tmp_path):
 
         assert result.exit_code in (0, 1)  # health failures are fine; a crash isn't
         payload = json.loads(result.stdout)
-        assert [r["service"] for r in payload["results"]] == ["api"]
+        assert [r["service"] for r in payload["results"]] == ["api", "web"]
+
+        narrowed = runner.invoke(app, ["doctor", "--service", "api", "--json"])
+        assert [r["service"] for r in json.loads(narrowed.stdout)["results"]] == ["api"]
 
 
 class TestGitBoundaryPreventsFalseCleanAcrossNestedRepos:

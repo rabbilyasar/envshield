@@ -56,7 +56,7 @@ def test_full_scan_honours_a_root_anchored_exclusion(tmp_path):
         result = runner.invoke(app, ["scan"])
 
         assert result.exit_code == 0, result.stdout
-        assert "No issues found" in result.stdout
+        assert "✓ No secrets" in result.stdout
 
 
 def test_discoverable_files_skips_symlinks_and_excluded_dirs(tmp_path):

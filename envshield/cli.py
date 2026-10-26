@@ -465,12 +465,10 @@ def init(
     console.print("\n[bold green]✨ Setup Complete! ✨[/bold green]")
     if used_real_source:
         console.print(
-            "Your project is now protected. Review 'env.schema.toml' -- it was built from your real config, but double-check the secret/type guesses."
+            "Contract created. Review 'env.schema.toml': it was built from your real config, but the descriptions are placeholders and the secret/type values are guesses."
         )
     else:
-        console.print(
-            "Your project is now protected. Define your variables in 'env.schema.toml'."
-        )
+        console.print("Contract created. Define your variables in 'env.schema.toml'.")
     console.print("\n[bold cyan]Next step:[/bold cyan]")
     console.print("  envshield setup    # Configure your local environment")
 
@@ -490,9 +488,8 @@ def check(
         envvar="ENVSHIELD_SERVICE",
         show_envvar=False,
         help=(
-            "If set, validate against this service's schema (for multi-service "
-            "projects). With --runtime, ENVSHIELD_SERVICE is used when this "
-            "isn't given."
+            "Check only this service. Default: every service. With --runtime, "
+            "ENVSHIELD_SERVICE is used when this isn't given."
         ),
     ),
     container: Optional[str] = typer.Option(
@@ -624,12 +621,9 @@ def check(
         if runtime:
             targets = [_runtime_service(service)]
         else:
-            # resolve_targets already never blocks on the interactive "Which
-            # service?" picker without a TTY to answer it (CI/scripting,
-            # --json included) -- it runs every configured service instead.
-            targets = service_manager.resolve_targets(
-                service, invocation_dir=INVOCATION_DIR
-            )
+            # Every service unless --service narrows: the same answer in a
+            # terminal and in CI (#45).
+            targets = service_manager.resolve_all_targets(service)
         if since_rev is not None and not git_utils.revision_exists(since_rev):
             raise EnvShieldException(
                 f"revision '{since_rev}' does not resolve to a commit."
@@ -988,7 +982,7 @@ def _render_contract_changes(evaluation: "evaluator.ServiceEvaluation") -> None:
     )
     table = Table(show_header=True, header_style="bold blue")
     table.add_column("Variable", style="white", overflow="fold")
-    table.add_column("Category", style="cyan")
+    table.add_column("Category", style="cyan", overflow="fold")
     table.add_column("Change", style="white", overflow="fold")
     for change in result.contract.changes:
         table.add_row(
@@ -1070,9 +1064,9 @@ def _render_code_references(evaluation: "evaluator.ServiceEvaluation") -> None:
     )
     if undeclared:
         table = Table(show_header=True, header_style="bold blue")
-        table.add_column("Status", style="cyan")
-        table.add_column("Variable Name", style="white")
-        table.add_column("Referenced At", style="white")
+        table.add_column("Status", style="cyan", overflow="fold")
+        table.add_column("Variable Name", style="white", overflow="fold")
+        table.add_column("Referenced At", style="white", overflow="fold")
         old = evaluation.since.read_before if evaluation.since else None
         for name, usages in sorted(undeclared.items()):
             status = (
@@ -1092,10 +1086,14 @@ def _render_code_references(evaluation: "evaluator.ServiceEvaluation") -> None:
             "\n[bold]Suggestion:[/bold] Declare these in the schema (or remove "
             "the reads). 'envshield explain <VAR>' shows every reference."
         )
-    for name, usages in sorted(medium.items()):
+    if medium:
+        # One line, not one per name: they're informational (BL-186, #45).
+        n = len(medium)
         console.print(
-            f"[dim]  {name} may be read from configuration at {_where(usages)} "
-            "(not an environment read EnvShield can confirm; informational).[/dim]"
+            f"[dim]  {n} more name{'s' if n != 1 else ''} may be read from a "
+            "config object (not environment reads EnvShield can confirm; not "
+            "failed on). 'envshield explain VAR' shows each; --json lists them "
+            "with confidence 'medium'.[/dim]"
         )
 
 
@@ -1110,7 +1108,7 @@ def doctor_command(
         None,
         "--service",
         "-s",
-        help="If set, check health of this service (for multi-service projects).",
+        help="Check only this service. Default: every service.",
     ),
     json_output: bool = typer.Option(
         False,
@@ -1135,12 +1133,8 @@ def doctor_command(
         raise typer.Exit(code=1)
 
     try:
-        # resolve_targets already never blocks on the interactive "Which
-        # service?" picker without a TTY to answer it (CI/scripting,
-        # --json included) -- it runs every configured service instead.
-        targets = service_manager.resolve_targets(
-            service, invocation_dir=INVOCATION_DIR
-        )
+        # Every service unless --service narrows (#45).
+        targets = service_manager.resolve_all_targets(service)
     except EnvShieldException as e:
         if json_output:
             print(json.dumps({"success": False, "error": str(e)}, indent=2))
@@ -1514,7 +1508,7 @@ def schema_sync(
         None,
         "--service",
         "-s",
-        help="If set, sync this service's schema (for multi-service projects).",
+        help="Sync only this service's schema. Default: every service.",
     ),
     check: bool = typer.Option(
         False,
@@ -1524,9 +1518,7 @@ def schema_sync(
 ):
     """Generates/updates the environment template from your schema."""
     try:
-        targets = service_manager.resolve_targets(
-            service, invocation_dir=INVOCATION_DIR
-        )
+        targets = service_manager.resolve_all_targets(service)
     except EnvShieldException as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(code=1)
@@ -1593,9 +1585,9 @@ def _render_contract_diff_table(
         return
 
     table = Table(title=f"Contract diff: '{label_a}' -> '{label_b}'")
-    table.add_column("Variable", style="bold cyan")
-    table.add_column("Category")
-    table.add_column("Description")
+    table.add_column("Variable", style="bold cyan", overflow="fold")
+    table.add_column("Category", overflow="fold")
+    table.add_column("Description", overflow="fold")
 
     # Breaking first, then security, then everything else -- the changes
     # most likely to need action shouldn't be buried below cosmetic ones.
@@ -1655,11 +1647,11 @@ def _render_dependency_change_table(
         return
 
     table = Table(title=f"New source dependencies: '{label_a}' -> '{label_b}'")
-    table.add_column("Variable", style="bold cyan")
-    table.add_column("File")
-    table.add_column("Line")
-    table.add_column("Access")
-    table.add_column("Contract status")
+    table.add_column("Variable", style="bold cyan", overflow="fold")
+    table.add_column("File", overflow="fold")
+    table.add_column("Line", overflow="fold")
+    table.add_column("Access", overflow="fold")
+    table.add_column("Contract status", overflow="fold")
 
     order = {"missing_declaration": 0, "declared": 1}
     for change in sorted(
@@ -1739,7 +1731,7 @@ def undeclared(
         None,
         "--service",
         "-s",
-        help="Which service's schema to check against. Required in a multi-service project unless run from inside that service's own directory.",
+        help="Check only this service. Default: every service.",
     ),
     json_output: bool = typer.Option(
         False,
@@ -1801,9 +1793,7 @@ def undeclared(
                 raise typer.Exit(code=1)
 
     try:
-        targets = service_manager.resolve_targets(
-            service, invocation_dir=INVOCATION_DIR
-        )
+        targets = service_manager.resolve_all_targets(service)
     except EnvShieldException as e:
         _print_dependency_error(str(e), json_output, sarif_output)
         raise typer.Exit(code=1)
@@ -1911,7 +1901,7 @@ def schema_diff(
         None,
         "--service",
         "-s",
-        help="If set, diff only this service's schema (for multi-service projects).",
+        help="Diff only this service's schema. Default: every service.",
     ),
     json_output: bool = typer.Option(
         False,
@@ -1983,7 +1973,6 @@ def schema_diff(
             console.print(f"[bold red]Error:[/bold red] {message}")
         raise typer.Exit(code=1)
 
-    explicit_revisions = rev_a is not None
     if rev_a is None and rev_b is None:
         # HEAD is the BASELINE and the working tree is the target -- the
         # same direction as the explicit two-revision form (older on the
@@ -2030,9 +2019,7 @@ def schema_diff(
                 raise typer.Exit(code=1)
 
     try:
-        targets = service_manager.resolve_targets(
-            service, invocation_dir=INVOCATION_DIR
-        )
+        targets = service_manager.resolve_all_targets(service)
     except EnvShieldException as e:
         if json_output:
             print(
@@ -2065,33 +2052,30 @@ def schema_diff(
                 )
                 schema_left, system_left = view_left.fields, set(view_left.system)
             except SchemaNotFoundError:
-                # Only for the explicit two-revision form's OLDER side: a
-                # revision that genuinely doesn't resolve was already
-                # rejected above, so a missing schema/envshield.yml/service
-                # here means this revision predates EnvShield adopting this
-                # service at all -- an adoption-boundary diff, not an
-                # error. Treated as an empty contract (diff_schemas already
-                # supports this input; every declared variable on the right
-                # side reports as "added", which is the correct, reviewable
-                # answer to "what does the very first contract declare?").
-                # The NEWER side (schema_right, below) is never given this
-                # leniency: a target revision with no contract at all is
-                # far more likely a mistake (e.g. arguments swapped) than
-                # an intentional query, so it still raises.
-                if not explicit_revisions:
-                    raise
+                # The OLDER side only: a revision that doesn't resolve was
+                # already rejected above, so a missing schema/envshield.yml/
+                # service here means it predates EnvShield adopting this
+                # service -- in either form, including HEAD for a contract
+                # not yet committed. The change introduces the contract:
+                # every variable is listed, none is breaking (#45, BL-184).
+                # The NEWER side (view_right, below) gets no such leniency:
+                # a target with no contract at all is far more likely a
+                # mistake (arguments swapped), so it still raises.
                 schema_left, system_left = {}, set()
                 left_predates_adoption = True
             view_right = schema_snapshot.load_schema_view_for_diff(
                 target, right_revision
             )
-            result = contract_diff.diff_schemas(
-                schema_left,
-                view_right.fields,
-                system_left,
-                set(view_right.system),
-                environments=config_manager.get_environments(),
-            )
+            if left_predates_adoption:
+                result = contract_diff.contract_introduced(view_right.fields)
+            else:
+                result = contract_diff.diff_schemas(
+                    schema_left,
+                    view_right.fields,
+                    system_left,
+                    set(view_right.system),
+                    environments=config_manager.get_environments(),
+                )
         except EnvShieldException as e:
             had_error = True
             if json_output:
@@ -2111,13 +2095,16 @@ def schema_diff(
             entry["revision_a"] = left_label
             entry["revision_b"] = right_label
             entry["revision_a_predates_adoption"] = left_predates_adoption
+            entry["contract_introduced"] = left_predates_adoption
             results.append(entry)
         else:
             if left_predates_adoption:
                 console.print(
-                    f"[dim]ℹ️  No EnvShield contract existed for '{target}' at "
-                    f"'{left_label}' -- every variable below is shown as added, "
-                    "against an implicit empty starting contract.[/dim]"
+                    f"[bold]Contract introduced:[/bold] No EnvShield contract "
+                    f"existed for '{escape(target)}' at '{escape(left_label)}'. "
+                    "Its variables are listed below as informational; changes "
+                    "are classified as breaking from the first committed "
+                    "contract on."
                 )
             _render_contract_diff_table(
                 result,
@@ -2814,9 +2801,9 @@ def service_list():
         return
 
     table = Table(title="Configured Services")
-    table.add_column("Name", style="cyan")
-    table.add_column("Schema", style="white")
-    table.add_column("Local File", style="white")
+    table.add_column("Name", style="cyan", overflow="fold")
+    table.add_column("Schema", style="white", overflow="fold")
+    table.add_column("Local File", style="white", overflow="fold")
     had_error = False
     for name in sorted(services.keys()):
         try:
@@ -2860,7 +2847,7 @@ def service_add(
     import_from: Optional[str] = typer.Option(
         None,
         "--import",
-        help="If given, seed the new service's schema from this existing config file (same as running 'envshield import').",
+        help="If given, seed the new service's schema from this existing config file (same as 'envshield init --from FILE --service NAME').",
     ),
     deployment_manifest: Optional[str] = typer.Option(
         None,
@@ -2954,7 +2941,7 @@ def service_add(
         if import_from:
             if os.path.exists(schema_path):
                 console.print(
-                    f"[yellow]'{schema_path}' already exists -- not overwriting. Run 'envshield import {import_from} --service {name} --force' to regenerate it.[/yellow]"
+                    f"[yellow]'{schema_path}' already exists -- not overwriting. Run 'envshield init --from {import_from} --service {name} --force' to regenerate it.[/yellow]"
                 )
             else:
                 _seed_schema_from_file(import_from, schema_path, local_file)
@@ -2969,7 +2956,7 @@ def service_add(
             # service with "schema not found."
             console.print(
                 f"[yellow]'{schema_path}' doesn't exist yet -- '{name}' has no "
-                f"schema. Run 'envshield import <file> --service {name}' to build "
+                f"schema. Run 'envshield init --from <file> --service {name}' to build "
                 f"one from a real config file, or create '{schema_path}' by "
                 "hand.[/yellow]"
             )
@@ -3118,11 +3105,11 @@ def service_discover(
         return
 
     table = Table(title="Discovered Services")
-    table.add_column("Name", style="cyan")
-    table.add_column("Directory", style="white")
-    table.add_column("Format", style="magenta")
-    table.add_column("Config File", style="white")
-    table.add_column("Deployment Manifest", style="white")
+    table.add_column("Name", style="cyan", overflow="fold")
+    table.add_column("Directory", style="white", overflow="fold")
+    table.add_column("Format", style="magenta", overflow="fold")
+    table.add_column("Config File", style="white", overflow="fold")
+    table.add_column("Deployment Manifest", style="white", overflow="fold")
     for c in candidates:
         config_file_display = c["local_file"] or c["example_file"] or "(default .env)"
         table.add_row(

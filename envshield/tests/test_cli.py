@@ -1113,14 +1113,12 @@ def _write_two_service_project():
         f.write('[DB_URL]\ndescription="Beta DB"\nsecret=true\n')
 
 
-def test_schema_sync_without_service_prompts_and_runs_for_all_services(
-    mocker, tmp_path
-):
+def test_schema_sync_without_service_runs_for_all_services(mocker, tmp_path):
     """
     Regression: omitting --service on a multi-service project used to
     silently sync a single root-level '.env.example', ignoring every
-    configured service. It must now offer 'All services' and, when chosen,
-    sync each one into its own directory.
+    configured service. It syncs each one into its own directory, without
+    asking, even in a terminal (#45).
     """
     with runner.isolated_filesystem(temp_dir=tmp_path):
         _write_two_service_project()
@@ -1132,7 +1130,7 @@ def test_schema_sync_without_service_prompts_and_runs_for_all_services(
 
         result = runner.invoke(app, ["schema", "sync"])
 
-        mock_select.assert_called_once()
+        mock_select.assert_not_called()  # every service, no picker (#45)
         assert result.exit_code == 0
         assert "── alpha ──" in result.stdout
         assert "── beta ──" in result.stdout
@@ -1173,7 +1171,7 @@ def test_doctor_without_service_runs_for_all_services(mocker, tmp_path):
 
         result = runner.invoke(app, ["doctor"])
 
-        mock_select.assert_called_once()
+        mock_select.assert_not_called()  # every service, no picker (#45)
         assert "── alpha ──" in result.stdout
         assert "── beta ──" in result.stdout
 
@@ -1193,7 +1191,7 @@ def test_check_without_service_runs_for_all_services(mocker, tmp_path):
 
         result = runner.invoke(app, ["check"])
 
-        mock_select.assert_called_once()
+        mock_select.assert_not_called()  # every service, no picker (#45)
         assert result.exit_code == 0
         assert "── alpha ──" in result.stdout
         assert "── beta ──" in result.stdout

@@ -327,8 +327,8 @@ def load_bare_schema(path: str = SCHEMA_FILE_NAME) -> Dict[str, Any]:
     """
     if not os.path.exists(path):
         raise SchemaNotFoundError(
-            f"Schema file not found: {path}. Run 'envshield import <file>' to "
-            "generate one from an existing config, or 'envshield init'."
+            f"Schema file not found: {path}. Run 'envshield init', or 'envshield "
+            "init --from <file>' to build it from an existing config file."
         )
     schema = _load_schema_file(path)
     _validate_schema_fields(schema, path)
@@ -1328,7 +1328,10 @@ def generate_default_config_content(
                 "containers": {container or service_name: service_name},
             }
         ]
-    header = "# EnvShield Configuration File\n# This file manages your project's security settings.\n\n"
+    header = (
+        "# EnvShield project configuration: services, their schemas and files,\n"
+        "# and deployment manifests. Docs: https://docs.envshield.dev\n\n"
+    )
     return header + yaml.dump(config_data, sort_keys=False, indent=2)
 
 

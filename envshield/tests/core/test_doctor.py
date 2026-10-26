@@ -361,7 +361,7 @@ def test_check_config_source_drift_flags_a_var_added_to_another_source(
     assert passed is False
     assert "LOG_LEVEL" in message
     assert "config/settings.py" in message
-    assert "envshield import config/settings.py" in message
+    assert "envshield init --from config/settings.py --force" in message
 
 
 def test_check_config_source_drift_passes_when_no_other_source_exists(
