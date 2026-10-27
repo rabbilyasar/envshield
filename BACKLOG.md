@@ -2041,7 +2041,7 @@ Component: `core/agent_setup.py::install_hook_config` (`.claude/settings.json`)
 
 ### BL-207 — `agent guide` covers development only: nothing on deployment or onboarding
 
-Type: `AI_AGENT` / `DOCUMENTATION` · Evidence: `CONFIRMED` (review of `agent_setup.guide()` while finishing #63, 2026-10-27) · Priority: **P2** · Status: **fixed by [#90](https://github.com/rabbilyasar/envshield/issues/90), branch `rabbilyasar/agent-guide-stages`, unmerged**
+Type: `AI_AGENT` / `DOCUMENTATION` · Evidence: `CONFIRMED` (review of `agent_setup.guide()` while finishing #63, 2026-10-27) · Priority: **P2** · Status: **fixed by [#90](https://github.com/rabbilyasar/envshield/issues/90), merged `6929753` (PR #92), unreleased**
 Component: `core/agent_setup.py::guide`
 
 - **Current behavior:** the guide covers checking each edit and declaring new variables. For deployment it only says to set `requiredIn` and run the full check after editing a manifest. It doesn't say to add a variable required in an environment to that environment's manifest, how to check a manifest for an environment (`check --env E <manifest>`), or where `check --runtime` belongs in a deploy. For onboarding it only says not to run `setup` (it needs a terminal, #21). Nothing tells an agent helping a new developer to run `check --json` and relay each `by: "human"` step.
