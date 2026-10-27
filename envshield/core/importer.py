@@ -53,6 +53,11 @@ SECRET_KEY_KEYWORDS = [
     "accesskey",
     "secretkey",
     "authtoken",
+    # BL-208 (real-repo trial, 2026-10-28): NEXT_PRIVATE_SIGNING_PASSPHRASE
+    # and DB_PASSWD-shaped names held credentials and got their values
+    # written as schema defaults.
+    "passphrase",
+    "passwd",
 ]
 
 # Naming conventions several frontend frameworks use to mark an env var as
@@ -84,7 +89,40 @@ def key_contains_secret_keyword(key: str, keywords=SECRET_KEY_KEYWORDS) -> bool:
     contains "key" and AUTHOR_NAME contains "auth", but neither is a secret.
     """
     tokens = key.lower().split("_")
-    return any(keyword in tokens for keyword in keywords)
+    # A plural counts too (BL-208: GOOGLE_API_CREDENTIALS, API_KEYS,
+    # AUTH_TOKENS): still a whole token, so MONKEY/AUTHOR stay unmatched.
+    return any(keyword in tokens or keyword + "s" in tokens for keyword in keywords)
+
+
+# A key-value connection string's password field (ADO.NET, ODBC, libpq):
+# "Server=db;User Id=app;Password=hunter2", "host=db password=hunter2".
+_DSN_PASSWORD_RE = re.compile(r"(?i)(?:^|[;\s])(?:password|pwd)\s*=\s*[^;\s]")
+
+
+def value_embeds_credential(value: str) -> bool:
+    """
+    Whether a value carries a credential whatever its variable's name
+    (BL-208): a URL with a password in its userinfo (scheme://user:pass@host,
+    scheme://:pass@host), or a connection string with a password field.
+    A URL with only a user name, or none, doesn't count.
+    """
+    if not isinstance(value, str) or not value:
+        return False
+    if "@" in value:
+        try:
+            parsed = urlparse(value)
+            if parsed.scheme and parsed.netloc and parsed.password:
+                return True
+        except ValueError:
+            # A malformed URL (an unbalanced IPv6 bracket, a bad port) is
+            # judged by the text: anything before the last '@' with a ':'
+            # in its userinfo part.
+            pass
+        authority = value.split("://", 1)[-1].split("/", 1)[0]
+        userinfo = authority.rpartition("@")[0]
+        if ":" in userinfo and userinfo.split(":", 1)[1]:
+            return True
+    return bool(_DSN_PASSWORD_RE.search(value))
 
 
 def _is_conventionally_public(key: str) -> bool:
@@ -111,6 +149,10 @@ def _classify_variable(key: str, value: str) -> Tuple[bool, Any]:
     for secret in SECRET_PATTERNS:
         if re.search(secret["pattern"], value):
             return True, None
+    # A credential inside the value (a URL's password, a connection
+    # string's password field) is a secret whatever the name (BL-208).
+    if value_embeds_credential(value):
+        return True, None
 
     # 2. A conventionally-public name is never treated as secret from its
     # name alone -- skip the keyword heuristic entirely for these.
@@ -304,6 +346,7 @@ def generate_schema_from_file(
     types_found = 0
     oversized_defaults: list = []
     unsafe_names: list = []
+    credential_values: list = []
 
     console.print("\n[bold]Analyzing variables...[/bold]")
 
@@ -315,6 +358,8 @@ def generate_schema_from_file(
             unsafe_names.append(key)
             continue
         is_secret, default_value = _classify_variable(key, value)
+        if value_embeds_credential(value):
+            credential_values.append(key)
         # Inferring a type is safe regardless of secret status -- it only
         # records the *shape* a valid value must have (e.g. type = "url"),
         # never the value itself. defaultValue is the one field that would
@@ -396,6 +441,12 @@ def generate_schema_from_file(
     console.print("\n[bold green]✓ Analysis complete![/bold green]")
     console.print(f"- Processed {len(variables)} variables.")
     console.print(f"- Marked {secrets_found} variable(s) as secrets.")
+    if credential_values:
+        console.print(
+            "  Their value holds a password (in a URL or connection string), "
+            "so each is marked secret and gets no default: "
+            + ", ".join(sorted(credential_values))
+        )
     console.print(f"- Suggested {defaults_found} default value(s).")
     if preserved:
         console.print(
