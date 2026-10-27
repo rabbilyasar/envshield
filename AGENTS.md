@@ -543,7 +543,10 @@ Phase status: [progress.md](progress.md).
   `load_schema_view` (live) or `schema_snapshot.load_schema_for_diff` /
   `load_schema_view_for_diff` (revision).
 - Resolve topology centrally: `get_service_dir()` for a service's
-  directory, `get_schema_users()` for who shares a schema.
+  directory, `get_schema_users()` for who shares a schema,
+  `get_service_schema_path()` for which schema a service uses (its own
+  `schema:`, else the top-level `schema:`, the project contract, #18).
+  Never read a service entry's `schema` key directly.
 - Hooks contain no project topology; coverage is resolved from the current
   project configuration when the hook runs (`envshield hook run`). A
   schema's coverage includes its `extends` chain
@@ -1004,7 +1007,13 @@ checks each edit (`BL-192`; merged `2474744`, PR #88).
 run those commands without asking once the folder is trusted (`BL-206`;
 merged `cefca6c`, PR #91). [#90](https://github.com/rabbilyasar/envshield/issues/90)
 adds deployment and onboarding sections to `agent guide` (`BL-207`;
-merged `6929753`, PR #92). The full order is
+merged `6929753`, PR #92). Phase 2 has started: V2-1
+([#18](https://github.com/rabbilyasar/envshield/issues/18)) adds the
+project contract, a top-level `schema:` in `envshield.yml` (branch, not yet
+merged). Open P0: `BL-208`
+([#94](https://github.com/rabbilyasar/envshield/issues/94)), a password in
+a URL written into the schema by `init`; it blocks any release. The full
+order is
 ROADMAP.md's "v5 — in progress". Nothing since `v4.9.1` is released.
 
 **Previous phase (updated 2026-10-15): `v4.9.1` released; v5 V1 next.**

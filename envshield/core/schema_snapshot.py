@@ -79,26 +79,37 @@ def load_schema_view_for_diff(
         merged,
         schema_path,
         service_name,
-        _get_schema_users_at_revision(services, schema_path, revision),
+        _get_schema_users_at_revision(
+            services, schema_path, revision, _project_schema_at_revision(config)
+        ),
         registered=services.keys(),
     )
 
 
+def _project_schema_at_revision(config: Dict[str, Any]) -> Optional[str]:
+    """The top-level `schema:` at a revision (the project contract), or None."""
+    ref = config.get("schema")
+    return ref if isinstance(ref, str) and ref else None
+
+
 def _get_schema_users_at_revision(
-    services: Dict[str, Any], schema_path: str, revision: str
+    services: Dict[str, Any],
+    schema_path: str,
+    revision: str,
+    project_schema: Optional[str] = None,
 ) -> List[str]:
     """
     Mirrors config_manager.get_schema_users, lexically (posixpath -- there's
     no live filesystem to resolve a historical symlink against), and fails
     closed the same way: an entry whose schema can't be determined is an
-    error, never silently dropped from the user set.
+    error, never silently dropped from the user set. A service without its
+    own `schema:` uses `project_schema` (the top-level key at REV), through
+    the same interpreter as the live path.
     """
     target = posixpath.normpath(schema_path)
     users = []
     for name, entry in services.items():
-        ref = (
-            entry.get("schema", entry.get("path")) if isinstance(entry, dict) else None
-        )
+        ref = config_manager.service_schema_ref(entry, project_schema)
         if not isinstance(ref, str) or not ref:
             raise ServiceConfigError(
                 f"Service '{name}' in envshield.yml at revision '{revision}' has "
@@ -143,13 +154,24 @@ def _get_service_schema_path_at_revision(
         )
 
     service_config = services[service_name]
-    schema_path = (
-        service_config.get("schema") if isinstance(service_config, dict) else None
+    legacy_path = (
+        isinstance(service_config, dict)
+        and "path" in service_config
+        and "schema" not in service_config
     )
-    if not schema_path:
+    # Legacy 'path:' was never resolved here; the live lookup rejects it too.
+    schema_path = (
+        None
+        if legacy_path
+        else config_manager.service_schema_ref(
+            service_config, _project_schema_at_revision(config)
+        )
+    )
+    if not isinstance(schema_path, str) or not schema_path:
         raise SchemaNotFoundError(
-            f"Service '{service_name}' has no schema path in envshield.yml at "
-            f"revision '{revision}'."
+            f"Service '{service_name}' has no schema in envshield.yml at "
+            f"revision '{revision}': neither its own 'schema:' nor a "
+            "top-level 'schema:'."
         )
     return _ensure_lexically_within_project(schema_path, revision)
 
