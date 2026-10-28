@@ -19,7 +19,7 @@ envshield.yml
     ↓
 registered logical services
     ↓
-schema users              (services whose `schema:` resolves to the same file)
+schema users              (services whose schema resolves to the same file)
     ↓
 merged system schema      (the file, with its `extends` chain merged)
     ↓
@@ -29,6 +29,31 @@ effective service schema  (what load_schema(service) returns)
     ↓
 physical-file contract    (union of projections that share one .env/.env.example)
 ```
+
+### Which schema a service uses (#18)
+
+A service uses its own `schema:` if its entry has one (legacy, unchanged).
+Otherwise it uses the **project contract**, the top-level `schema:` in
+`envshield.yml`:
+
+```yaml
+schema: env.schema.toml
+services:
+  api:
+    dir: api
+  worker:
+    dir: worker
+  legacy:
+    schema: legacy/env.schema.toml   # its own schema, as before
+```
+
+Mixed layouts are valid. A service with neither is an error that names
+both options. `config_manager.service_schema_ref()` is the one
+interpreter of this rule, live and at a revision
+(`schema_snapshot`); reach it through `get_service_schema_path()`,
+`get_schema_users()` and `uses_project_schema()`. Users of the project
+contract are schema users like any other, so every shared-schema rule
+below applies to them unchanged. `init` writes the top-level form.
 
 Three distinct things, never to be conflated:
 
@@ -281,6 +306,16 @@ service directory = schema parent
 ```
 
 Legacy behavior, preserved. An explicit `dir` still wins if present.
+
+### Project contract
+
+A service on the project contract (no `schema:` of its own) needs an
+explicit `dir`, whatever the number of users: where the project's schema
+file lives says nothing about where one service's code is. The one
+exception is a project with a single service, whose `dir` defaults to
+`.`, the whole project. `init` writes `dir: .` explicitly anyway, so
+adding a second service later doesn't make the first one's `dir`
+required after the fact.
 
 ### Shared schema
 

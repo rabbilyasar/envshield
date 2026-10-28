@@ -181,6 +181,8 @@ def load_schema_view(service_name: str) -> schema_scope.ServiceSchemaView:
     """
     schema_path = get_service_schema_path(service_name)
     if not schema_path:
+        if service_name in get_services():
+            raise missing_schema_error(service_name)
         available = ", ".join(sorted(get_services().keys())) or "none registered yet"
         raise SchemaNotFoundError(
             f"Service '{service_name}' not found in configuration. "
@@ -277,6 +279,66 @@ def resolve_environment(name: Optional[str] = None) -> str:
     return chosen
 
 
+def get_project_schema_path() -> Optional[str]:
+    """
+    The project contract: envshield.yml's top-level `schema:`, validated to
+    stay inside the project, or None when there isn't one (V2-1, #18).
+    A service without its own `schema:` uses it.
+    """
+    ref = load_config().get("schema")
+    if ref is None:
+        return None
+    if not isinstance(ref, str) or not ref:
+        raise ServiceConfigError(
+            f"The top-level 'schema:' in {CONFIG_FILE_NAME} must be a path to "
+            "the project's schema file, relative to the project root."
+        )
+    return _ensure_within_project(ref, "project schema path")
+
+
+def service_schema_ref(entry: Any, project_schema: Optional[str]) -> Optional[str]:
+    """
+    The schema a service entry names: its own `schema:` (or legacy
+    `path:`) when it has one, as written -- even if it's invalid, so the
+    caller reports it -- otherwise the project contract. A bare
+    `name:` entry (YAML null) is a service with no settings of its own.
+    The one interpreter of "which schema does this entry use", live and at
+    a revision.
+    """
+    if entry is None:
+        entry = {}
+    if not isinstance(entry, dict):
+        return None
+    if "schema" in entry or "path" in entry:
+        return entry.get("schema", entry.get("path"))
+    return project_schema
+
+
+def uses_project_schema(service_name: str) -> bool:
+    """Whether a registered service gets its schema from the top-level `schema:`."""
+    services = get_services()
+    if service_name not in services:
+        return False
+    entry = services[service_name]
+    if entry is None:
+        entry = {}
+    return (
+        isinstance(entry, dict)
+        and "schema" not in entry
+        and "path" not in entry
+        and get_project_schema_path() is not None
+    )
+
+
+def missing_schema_error(service_name: str) -> ServiceConfigError:
+    """The error for a registered service with no schema of either kind."""
+    return ServiceConfigError(
+        f"Service '{service_name}' in {CONFIG_FILE_NAME} has no schema. Give "
+        "the project one with a top-level 'schema:' (every service without "
+        f"its own uses it), or give '{service_name}' its own 'schema:' path."
+    )
+
+
 def get_schema_users(schema_path: str) -> List[str]:
     """
     Every registered service whose `schema` is this same file (compared by
@@ -291,17 +353,17 @@ def get_schema_users(schema_path: str) -> List[str]:
     broken for its own commands, but its schema is still knowable.
     """
     target = os.path.realpath(os.path.join(os.getcwd(), schema_path))
+    project_schema = get_project_schema_path()
     users = []
     for name, entry in get_services().items():
-        ref = (
-            entry.get("schema", entry.get("path")) if isinstance(entry, dict) else None
-        )
+        ref = service_schema_ref(entry, project_schema)
         if not isinstance(ref, str) or not ref:
             raise ServiceConfigError(
-                f"Service '{name}' in {CONFIG_FILE_NAME} has no usable 'schema:' "
-                f"path, so EnvShield can't tell whether it shares '{schema_path}' "
+                f"Service '{name}' in {CONFIG_FILE_NAME} has no usable schema, "
+                f"so EnvShield can't tell whether it shares '{schema_path}' "
                 "with other services -- and secret scoping depends on exactly "
-                f"that. Give '{name}' a 'schema:' path, or remove it with "
+                "that. Add a top-level 'schema:' (the project contract), give "
+                f"'{name}' its own 'schema:' path, or remove it with "
                 f"'envshield service remove {name}'."
             )
         if os.path.realpath(os.path.join(os.getcwd(), ref)) == target:
@@ -520,13 +582,17 @@ def get_services() -> Dict[str, Dict[str, Any]]:
 
 def get_service_schema_path(service_name: str) -> Optional[str]:
     """
-    Returns the schema path for a given service, or None if the service
-    doesn't exist.
+    Returns the schema path for a given service: its own `schema:`, or else
+    the project contract (the top-level `schema:`). None if the service
+    doesn't exist or has neither; callers that need a schema raise
+    missing_schema_error for a registered service.
     """
     services = get_services()
     if service_name not in services:
         return None
     service_config = services[service_name]
+    if service_config is None:
+        service_config = {}
     if isinstance(service_config, dict) and "schema" in service_config:
         return _ensure_within_project(
             service_config["schema"], f"service '{service_name}' schema path"
@@ -537,6 +603,9 @@ def get_service_schema_path(service_name: str) -> Optional[str]:
             "envshield.yml, which was renamed to 'schema:' in 4.5.0. "
             "Rename it to 'schema:' to continue."
         )
+    if isinstance(service_config, dict):
+        # No schema of its own: the project contract, if there is one.
+        return get_project_schema_path()
     return None
 
 
@@ -932,17 +1001,32 @@ def get_service_dir(service_name: str) -> str:
     envshield.yml.
     """
     schema_path = get_service_schema_path(service_name)
+    services = get_services()
     if not schema_path:
+        if service_name in services:
+            raise missing_schema_error(service_name)
         raise SchemaNotFoundError(
             f"Service '{service_name}' not found in configuration."
         )
-    services = get_services()
     explicit = _explicit_service_dir(service_name, services[service_name])
     users = get_schema_users(schema_path)
     if explicit is not None:
         if len(users) > 1:
             reject_duplicate_dir(service_name, explicit, schema_path)
         return explicit
+
+    if uses_project_schema(service_name):
+        # On the project contract, where the schema file lives says nothing
+        # about where a service's code is: 'dir' is required, except for a
+        # project's only service, which is the whole project (#18).
+        if len(services) == 1:
+            return "."
+        raise ServiceConfigError(
+            f"Service '{service_name}' uses the project schema "
+            f"('{schema_path}'), so it needs a 'dir:' in {CONFIG_FILE_NAME} "
+            "saying where its code is (use '.' for the project root). Only a "
+            "project's single service can leave it out."
+        )
 
     if len(users) > 1:
         raise ServiceConfigError(
@@ -1203,7 +1287,10 @@ def _unresolved_peer_path(entry: Any, key: str) -> Optional[str]:
     override = entry.get(key)
     if override:
         return override if isinstance(override, str) else None
-    schema = entry.get("schema", entry.get("path"))
+    try:
+        schema = service_schema_ref(entry, get_project_schema_path())
+    except EnvShieldException:
+        return None
     if not isinstance(schema, str) or not schema:
         return None
     return os.path.join(os.path.dirname(schema), _ENV_FILE_DEFAULTS[key])
@@ -1306,11 +1393,15 @@ def generate_default_config_content(
     built from -- see add_service's docstring for why a later 'init
     --force' needs to remember this instead of re-detecting it.
     """
-    service_entry: Dict[str, Any] = {"schema": schema_path}
+    # The project contract (#18): one top-level schema. The service names
+    # its directory explicitly, so adding a second service later doesn't
+    # make this one's 'dir' required after the fact.
+    service_entry: Dict[str, Any] = {"dir": "."}
     if config_source:
         service_entry["config_source"] = config_source
     config_data: Dict[str, Any] = {
         "project_name": project_name,
+        "schema": schema_path,
         "services": {
             service_name: service_entry,
         },
