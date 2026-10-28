@@ -12,9 +12,11 @@ from rich.table import Table
 
 from ..config import manager as config_manager
 from ..core.exceptions import (
+    CredentialDefaultError,
     DuplicateServiceDirError,
     EnvShieldException,
     SchemaNotFoundError,
+    SecretDefaultConflictError,
 )
 from ..utils import git_utils
 from . import discovery
@@ -1122,6 +1124,11 @@ def _build_undeclared_var_resolver(service_name: Optional[str]):
             # Invalid topology, not one broken service: skipping both tied
             # services would let their files fall through to another
             # service's projection (BL-137). Fail the scan instead.
+            raise
+        except (SecretDefaultConflictError, CredentialDefaultError):
+            # The schema itself holds a secret value (BL-001, BL-209):
+            # committing it is the leak, so the pre-commit scan fails
+            # closed instead of skipping it like an unrelated broken schema.
             raise
         except EnvShieldException as e:
             # A broken schema in one service (e.g. mid-edit, unrelated to

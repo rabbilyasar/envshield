@@ -9,6 +9,7 @@ from envshield.core import file_updater, schema_scope, schema_types
 from envshield.core.exceptions import (
     ConfigNotFoundError,
     ConfigParseError,
+    CredentialDefaultError,
     DuplicateServiceDirError,
     EnvShieldException,
     InvalidManifestDefinitionError,
@@ -427,6 +428,15 @@ def _reject_secret_defaults(schema: Dict[str, Any], schema_path: str) -> None:
     )
     if offending:
         raise SecretDefaultConflictError(schema_path, offending)
+    # BL-209: a default holding a password is refused whatever 'secret'
+    # says -- it is committed with .env.example and generated code.
+    with_credentials = sorted(
+        key
+        for key, details in schema.items()
+        if schema_types.default_holds_credential(details)
+    )
+    if with_credentials:
+        raise CredentialDefaultError(schema_path, with_credentials)
 
 
 def load_toml_schema(schema_path: str) -> Dict[str, Any]:

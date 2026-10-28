@@ -146,7 +146,7 @@ def _render_python_field(key: str, details: dict[str, Any]) -> tuple[str, set[st
     # dict that bypassed that gate. Treated exactly as "no default", same
     # as an absent defaultValue -- the field becomes required (or optional-
     # via-requiredIf) instead of silently defaulting to a hidden value.
-    if schema_types.secret_default_conflict(details):
+    if schema_types.default_must_not_render(details):
         default_value = None
     field_type = _effective_field_type(details)
 
@@ -376,7 +376,7 @@ def _render_ts_field(key: str, details: dict[str, Any]) -> str:
     # Defense in depth: see the matching comment in _render_python_field --
     # config_manager.load_schema already refuses this combination; this is
     # a second guarantee for a schema dict passed in directly.
-    if schema_types.secret_default_conflict(details):
+    if schema_types.default_must_not_render(details):
         default_value = None
     field_type = _effective_field_type(details)
     conditional = (

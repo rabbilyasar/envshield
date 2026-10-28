@@ -94,35 +94,8 @@ def key_contains_secret_keyword(key: str, keywords=SECRET_KEY_KEYWORDS) -> bool:
     return any(keyword in tokens or keyword + "s" in tokens for keyword in keywords)
 
 
-# A key-value connection string's password field (ADO.NET, ODBC, libpq):
-# "Server=db;User Id=app;Password=hunter2", "host=db password=hunter2".
-_DSN_PASSWORD_RE = re.compile(r"(?i)(?:^|[;\s])(?:password|pwd)\s*=\s*[^;\s]")
-
-
-def value_embeds_credential(value: str) -> bool:
-    """
-    Whether a value carries a credential whatever its variable's name
-    (BL-208): a URL with a password in its userinfo (scheme://user:pass@host,
-    scheme://:pass@host), or a connection string with a password field.
-    A URL with only a user name, or none, doesn't count.
-    """
-    if not isinstance(value, str) or not value:
-        return False
-    if "@" in value:
-        try:
-            parsed = urlparse(value)
-            if parsed.scheme and parsed.netloc and parsed.password:
-                return True
-        except ValueError:
-            # A malformed URL (an unbalanced IPv6 bracket, a bad port) is
-            # judged by the text: anything before the last '@' with a ':'
-            # in its userinfo part.
-            pass
-        authority = value.split("://", 1)[-1].split("/", 1)[0]
-        userinfo = authority.rpartition("@")[0]
-        if ":" in userinfo and userinfo.split(":", 1)[1]:
-            return True
-    return bool(_DSN_PASSWORD_RE.search(value))
+# Moved to schema_types (BL-209), so schema loading uses the same rule.
+value_embeds_credential = schema_types.value_embeds_credential
 
 
 def _is_conventionally_public(key: str) -> bool:

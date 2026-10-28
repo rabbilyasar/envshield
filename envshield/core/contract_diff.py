@@ -405,16 +405,34 @@ def _value_changes(
 
     default_a, default_b = a.get("defaultValue"), b.get("defaultValue")
     if _defaults_differ(default_a, default_b, type_a, type_b):
+        # A revision isn't gated like a live load (rejecting history would
+        # break diffing the very commit that removes a leaked default), so
+        # a secret's default, or one holding a credential, is never shown
+        # (BL-001, BL-209): the change is reported without its values.
+        hidden = any(
+            schema_types.default_must_not_render(side)
+            or bool(side.get("secret", False))
+            for side in (a, b)
+        )
+        if hidden:
+            description = (
+                f"'{key}' default changed (values not shown: the field is "
+                "secret or its default holds a credential)."
+            )
+            detail: Dict[str, Any] = {"before": None, "after": None, "redacted": True}
+        else:
+            description = (
+                f"'{key}' default changed from {default_a!r} to "
+                f"{default_b!r}. This can't be proven to affect runtime "
+                "behavior without source or deployment context."
+            )
+            detail = {"before": default_a, "after": default_b}
         changes.append(
             ContractChange(
                 variable=key,
                 category="default_changed",
-                description=(
-                    f"'{key}' default changed from {default_a!r} to "
-                    f"{default_b!r}. This can't be proven to affect runtime "
-                    "behavior without source or deployment context."
-                ),
-                detail={"before": default_a, "after": default_b},
+                description=description,
+                detail=detail,
             )
         )
 
