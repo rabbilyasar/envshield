@@ -12,9 +12,10 @@ changes go in AGENTS.md; this file holds only Claude-specific notes.
 
 ## Claude-specific notes
 
-- **Commit attribution.** §22 forbids `Co-authored-by:` trailers and any AI
-  attribution in commit messages. This overrides Claude Code's default
-  commit attribution.
+- **Attribution.** §22 forbids `Co-authored-by:` trailers and any AI
+  attribution in commit messages and PR descriptions (no "Generated with
+  Claude Code" line, no session link). This overrides Claude Code's
+  default attribution.
 - **Uncommitted work on another branch.** When the main checkout has
   uncommitted changes for a different issue, do the new issue's work in a
   `git worktree` on its own branch. Never stash, commit or carry over
