@@ -1618,71 +1618,63 @@ def test_init_still_blocks_without_force_when_a_real_service_exists(tmp_path, mo
         assert "already exists" in result.stdout
 
 
-def test_init_warns_and_cancels_when_declining_a_detected_multi_service_layout(
-    tmp_path, mocker
-):
+def _monorepo_with_two_services():
+    os.system("git init -q")
+    os.makedirs("api")
+    with open("api/.env", "w") as f:
+        f.write("API_KEY=abc\nPORT=8000\n")
+    os.makedirs("web")
+    with open("web/.env", "w") as f:
+        f.write("WEB_KEY=xyz\nPORT=3000\n")
+
+
+def _assert_one_contract_for_api_and_web():
+    import yaml
+
+    config = yaml.safe_load(open(CONFIG_FILE_NAME))
+    assert config["schema"] == SCHEMA_FILE_NAME
+    assert config["services"]["api"]["dir"] == "api"
+    assert config["services"]["web"]["dir"] == "web"
+    assert all("schema" not in entry for entry in config["services"].values())
+    assert not os.path.exists("api/env.schema.toml")
+    assert not os.path.exists("web/env.schema.toml")
+    schema = toml.load(SCHEMA_FILE_NAME)
+    # Secrets are scoped to the service that reads them; nothing generic
+    # (no framework template variables) is invented.
+    assert schema["API_KEY"]["secret"] is True
+    assert schema["API_KEY"]["services"] == ["api"]
+    assert schema["WEB_KEY"]["services"] == ["web"]
+    assert "DATABASE_URL" not in schema
+    # PORT is read by both: one table granted to both, and no default,
+    # since they read it with different values.
+    assert schema["PORT"]["services"] == ["api", "web"]
+    assert "defaultValue" not in schema["PORT"]
+    assert config_manager.load_schema("api")["API_KEY"]
+    assert "API_KEY" not in config_manager.load_schema("web")
+
+
+def test_init_registers_service_directories_on_one_contract(tmp_path, mocker):
     """
-    Real bug this reproduces: 'init' on a project shaped like a monorepo
-    (service-like subdirectories, nothing real at the root) used to
-    silently fabricate a generic, fictional single-service schema and
-    declare success -- never mentioning the real services at all. It must
-    instead warn and let the user back out in favor of 'service discover'.
+    #19 (replaces the old "multi-service layout: use 'service discover'"
+    warning, itself a fix for 'init' inventing a generic schema in a
+    monorepo): 'init' in a repository of service directories, nothing at
+    the root, registers each on one project contract with its 'dir'.
     """
     with runner.isolated_filesystem(temp_dir=tmp_path):
-        os.system("git init -q")
         mocker.patch("envshield.core.hooks_manager._is_interactive", return_value=True)
-        os.makedirs("api")
-        with open("api/.env", "w") as f:
-            f.write("API_KEY=abc\n")
-        os.makedirs("web")
-        with open("web/.env", "w") as f:
-            f.write("WEB_KEY=xyz\n")
-        # Decline the "continue anyway?" prompt.
         mocker.patch("questionary.confirm").return_value.ask.return_value = False
-
+        _monorepo_with_two_services()
         result = runner.invoke(app, ["init"])
-
         assert result.exit_code == 0, result.stdout
-        assert "multi-service" in result.stdout
-        assert "service discover" in result.stdout
-        assert not os.path.exists(SCHEMA_FILE_NAME)
+        _assert_one_contract_for_api_and_web()
 
 
-def test_init_proceeds_with_generic_template_when_confirming_anyway(tmp_path, mocker):
-    """Confirming 'continue anyway' still produces the generic fallback template, same as before this check existed."""
+def test_init_registers_service_directories_without_a_tty(tmp_path):
     with runner.isolated_filesystem(temp_dir=tmp_path):
-        os.system("git init -q")
-        mocker.patch("envshield.core.hooks_manager._is_interactive", return_value=True)
-        os.makedirs("api")
-        with open("api/.env", "w") as f:
-            f.write("API_KEY=abc\n")
-        os.makedirs("web")
-        with open("web/.env", "w") as f:
-            f.write("WEB_KEY=xyz\n")
-        mocker.patch("questionary.confirm").return_value.ask.return_value = True
-
+        _monorepo_with_two_services()
         result = runner.invoke(app, ["init"])
-
         assert result.exit_code == 0, result.stdout
-        assert os.path.exists(SCHEMA_FILE_NAME)
-
-
-def test_init_warns_but_proceeds_without_a_tty_to_ask(tmp_path):
-    """No TTY to ask (CI/scripting) must not silently block 'init' -- warn and keep going, same as every other no-TTY-safe prompt."""
-    with runner.isolated_filesystem(temp_dir=tmp_path):
-        os.system("git init -q")
-        os.makedirs("api")
-        with open("api/.env", "w") as f:
-            f.write("API_KEY=abc\n")
-        os.makedirs("web")
-        with open("web/.env", "w") as f:
-            f.write("WEB_KEY=xyz\n")
-
-        result = runner.invoke(app, ["init"])
-
-        assert result.exit_code == 0, result.stdout
-        assert "multi-service" in result.stdout
-        assert os.path.exists(SCHEMA_FILE_NAME)
+        _assert_one_contract_for_api_and_web()
 
 
 def test_init_says_nothing_when_no_multi_service_layout_is_detected(tmp_path, mocker):

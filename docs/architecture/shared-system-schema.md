@@ -48,7 +48,26 @@ services:
 ```
 
 Mixed layouts are valid. A service with neither is an error that names
-both options. `config_manager.service_schema_ref()` is the one
+both options.
+
+**Writing the contract (#19).** The contract is maintained by hand, so
+EnvShield only ever appends to it, through `core/contract_writer.py`.
+`init` (a repository of service directories gets one contract, each
+directory registered with `dir`; `init --force` re-scans and appends),
+`service add` (`--import` appends), `service discover` and `init --from`
+append new `[VAR]` tables at the end under a `# Added by <command> on
+<date>` comment. The original file is always a byte prefix of the result;
+a name already declared (in the contract or an `extends` base) is never
+appended again; a contract that doesn't parse is refused, and the result
+must parse to the old tables plus the new ones or nothing is written.
+Grants: an appended secret always gets `services = ["<service>"]`; a
+non-secret is scoped only when the project has more than one service; a
+name several services read in one run becomes one table granted to all of
+them (defaults that differ are left out). `init --from` and
+`service add --import` commit a default observed in a local file only
+when the user confirms it (none without a terminal). A project without a
+top-level `schema:` keeps one schema per service, as before, and these
+commands print one tip about the project contract. `config_manager.service_schema_ref()` is the one
 interpreter of this rule, live and at a revision
 (`schema_snapshot`); reach it through `get_service_schema_path()`,
 `get_schema_users()` and `uses_project_schema()`. Users of the project
