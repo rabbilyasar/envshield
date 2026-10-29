@@ -117,14 +117,11 @@ def test_setup_command_no_example_file(tmp_path):
         assert "'.env.example' not found" in result.stdout
 
 
-def test_setup_command_overwrite_declined(mocker, tmp_path):
+def test_setup_never_asks_to_overwrite_and_keeps_existing_lines(mocker, tmp_path):
     """
-    Regression: declining the overwrite prompt used to leave '.env'
-    untouched (correct) but the CLI wrapper still unconditionally printed
-    '✓ Configuration complete!' right after -- a false success report for
-    a setup that did nothing. Also covers 'default' (pressing Enter, which
-    questionary.confirm's default=False resolves the same way as an
-    explicit decline).
+    #20 (B4): there is no whole-file "overwrite?" prompt any more -- declining
+    it used to cancel setup entirely. An existing '.env' is completed in
+    place: its own lines (even ones the schema doesn't know) are kept.
     """
     with runner.isolated_filesystem(temp_dir=tmp_path):
         _write_root_service_config()
@@ -132,30 +129,20 @@ def test_setup_command_overwrite_declined(mocker, tmp_path):
             f.write("KEY=VALUE\n")
         with open(".env", "w") as f:
             f.write("OLD_KEY=OLD_VALUE")
-
-        mocker.patch(
-            "questionary.confirm",
-            return_value=mocker.Mock(ask=mocker.Mock(return_value=False)),
-        )
+        confirm = mocker.patch("questionary.confirm")
 
         result = runner.invoke(app, ["setup"])
 
-        assert result.exit_code == 0
-        assert "Setup cancelled" in result.stdout
-        assert "Configuration complete" not in result.stdout
+        assert result.exit_code == 0, result.stdout
+        confirm.assert_not_called()
+        assert "Configuration complete" in result.stdout
+        content = open(".env").read()
+        assert content.startswith("OLD_KEY=OLD_VALUE\n")
+        assert "KEY=VALUE" in content
 
-        with open(".env", "r") as f:
-            content = f.read()
-            assert content == "OLD_KEY=OLD_VALUE"
 
-
-def test_setup_manager_reports_cancellation_via_return_value(mocker, tmp_path):
-    """
-    run_setup's return value is the CLI's only signal that nothing was
-    written -- a caller that ignores it (as the CLI used to) can't tell a
-    cancelled setup apart from a completed one. `SetupResult.__bool__`
-    mirrors `completed`, so a plain truthiness check still works.
-    """
+def test_setup_manager_returns_completed_and_keeps_unknown_lines(tmp_path):
+    """run_setup always completes now (#20); nothing to cancel up front."""
     with runner.isolated_filesystem(temp_dir=tmp_path):
         _write_root_service_config()
         with open(setup_manager.EXAMPLE_FILE, "w") as f:
@@ -163,15 +150,11 @@ def test_setup_manager_reports_cancellation_via_return_value(mocker, tmp_path):
         with open(".env", "w") as f:
             f.write("OLD_KEY=OLD_VALUE")
 
-        mocker.patch(
-            "questionary.confirm",
-            return_value=mocker.Mock(ask=mocker.Mock(return_value=False)),
-        )
-
         result = setup_manager.run_setup(service_name="app")
 
-        assert result.completed is False
-        assert bool(result) is False
+        assert result.completed is True
+        assert bool(result) is True
+        assert "OLD_KEY=OLD_VALUE" in open(".env").read()
 
 
 def test_setup_command_overwrite_accepted_still_reports_completion(mocker, tmp_path):
@@ -439,13 +422,11 @@ def test_setup_does_not_re_prompt_for_an_existing_valid_value(mocker, tmp_path):
             assert "LOG_LEVEL=info" in f.read()
 
 
-def test_setup_rejects_a_blank_answer_for_a_required_variable(mocker, tmp_path):
+def test_setup_blank_answer_leaves_a_required_variable_for_you(mocker, tmp_path):
     """
-    Real bug: pressing Enter with no input for a required variable (no
-    default) was silently accepted as a valid answer -- 'setup' would
-    report success and write a blank value, even though 'check'/'doctor'
-    immediately flag a blank required variable as broken. The wizard whose
-    whole job is to prevent that must not be the one creating it.
+    #20: the developer may skip a prompt. A skipped required variable is
+    never written blank (that would create the very "blank" failure
+    'check' catches); it stays unset and is named as still to set.
     """
     with runner.isolated_filesystem(temp_dir=tmp_path):
         _write_root_service_config()
@@ -453,16 +434,13 @@ def test_setup_rejects_a_blank_answer_for_a_required_variable(mocker, tmp_path):
             f.write('[WEB_KEY]\ndescription="x"\n')
         with open(setup_manager.EXAMPLE_FILE, "w") as f:
             f.write("WEB_KEY=\n")
-
-        mock_prompt = mocker.patch("envshield.core.setup_manager.Prompt.ask")
-        mock_prompt.side_effect = ["", "real_value"]
+        mocker.patch("envshield.core.setup_manager.Prompt.ask", return_value="")
 
         result = runner.invoke(app, ["setup"])
 
-        assert result.exit_code == 0
-        assert "required and cannot be left blank" in result.stdout
-        with open(".env") as f:
-            assert "WEB_KEY=real_value" in f.read()
+        assert result.exit_code == 0, result.stdout
+        assert "still to set yourself: WEB_KEY" in " ".join(result.stdout.split())
+        assert "WEB_KEY" not in open(".env").read()
 
 
 def test_setup_still_accepts_blank_to_clear_an_invalid_but_optional_value(
@@ -515,7 +493,9 @@ def test_setup_uses_a_picker_for_enum_fields(mocker, tmp_path):
         assert result.exit_code == 0
         mock_select.assert_called_once()
         _, kwargs = mock_select.call_args
-        assert kwargs["choices"] == ["debug", "info", "warn", "error"]
+        # The values, then a way to skip (#20).
+        assert kwargs["choices"][:4] == ["debug", "info", "warn", "error"]
+        assert kwargs["choices"][4].startswith("(leave it unset")
         with open(".env") as f:
             assert "LOG_LEVEL=debug" in f.read()
 
@@ -743,20 +723,25 @@ class TestDriftClassificationReflectsDefaultResolution:
             assert "missing" not in result.stdout
             assert "LOG_LEVEL=info" in open(".env").read()
 
-    def test_a_blank_defaulted_field_is_not_reported_as_blank(self, mocker, tmp_path):
+    def test_a_blank_defaulted_field_is_reported_and_offered_its_default(
+        self, mocker, tmp_path
+    ):
+        """#20: an explicit empty value is the developer's; a required one is
+        reported and the default offered, never filled in silently."""
         with runner.isolated_filesystem(temp_dir=tmp_path):
             _write_root_service_config()
             with open(SCHEMA_FILE_NAME, "w") as f:
                 f.write('[LOG_LEVEL]\ndescription="x"\ndefaultValue="info"\n')
             with open(".env", "w") as f:
                 f.write("LOG_LEVEL=\n")
-
-            mocker.patch("questionary.confirm").return_value.ask.return_value = True
+            select = mocker.patch("questionary.select")
+            select.return_value.ask.return_value = "Use the default (info)"
 
             result = runner.invoke(app, ["setup"])
 
             assert result.exit_code == 0, result.stdout
-            assert "blank" not in result.stdout
+            assert "blank: LOG_LEVEL" in result.stdout
+            assert "LOG_LEVEL is set but empty" in result.stdout
             assert "LOG_LEVEL=info" in open(".env").read()
 
     def test_a_missing_non_defaulted_required_field_is_still_reported_as_missing(
@@ -918,7 +903,11 @@ def test_setup_requiredif_explanation_never_leaks_a_secret_triggers_value(
         with open(setup_manager.EXAMPLE_FILE, "w") as f:
             f.write(f"STRIPE_TOKEN={sentinel}\nPAYMENTS_ENABLED=\n")
 
-        mocker.patch("envshield.core.setup_manager.Prompt.ask", return_value="true")
+        # #20: a secret is never seeded from the template, so it's entered
+        # at the prompt; PAYMENTS_ENABLED is then required.
+        mocker.patch(
+            "envshield.core.setup_manager.Prompt.ask", side_effect=[sentinel, "true"]
+        )
 
         result = runner.invoke(app, ["setup"])
 
@@ -947,14 +936,11 @@ def test_setup_reports_configured_count_on_completion(mocker, tmp_path):
         assert "2 variable(s) set" in result.stdout
 
 
-def test_setup_reports_partial_completion_across_multiple_services(mocker, tmp_path):
+def test_setup_reports_every_service_and_keeps_existing_lines(mocker, tmp_path):
     """
-    Regression for P0-2: previously, one declined service silently blanked
-    out the entire command's completion report -- even for other services
-    that succeeded in the same run -- and installed no hooks even though
-    real configuration had just been written. 'setup' must report what
-    actually happened, per service and in aggregate, rather than staying
-    silent the moment anything is less than a full sweep.
+    P0-2 kept: 'setup' reports what happened per service and in aggregate.
+    With no whole-file prompt (#20), a service with an existing '.env' is
+    completed in place rather than skipped.
     """
     with runner.isolated_filesystem(temp_dir=tmp_path):
         os.makedirs("alpha")
@@ -975,22 +961,16 @@ def test_setup_reports_partial_completion_across_multiple_services(mocker, tmp_p
         )
         mock_select = mocker.patch("questionary.select")
         mock_select.return_value.ask.return_value = "All services"
-        # beta already has a '.env' -- decline its overwrite prompt.
-        mocker.patch("questionary.confirm").return_value.ask.return_value = False
-        mocker.patch(
-            "envshield.core.setup_manager.Prompt.ask", return_value="alpha-key"
-        )
+        mocker.patch("envshield.core.setup_manager.Prompt.ask", return_value="k")
 
         result = runner.invoke(app, ["setup"])
 
         assert result.exit_code == 0, result.stdout
-        assert "Configuration complete for 1 of 2 service(s)" in result.stdout
-        assert "1 variable(s) set" in result.stdout
-        assert "1 of 2 service(s) left unchanged" in result.stdout
-        with open("alpha/.env") as f:
-            assert "API_KEY=alpha-key" in f.read()
-        with open("beta/.env") as f:
-            assert f.read() == "OLD=value\n"
+        assert "Configuration complete for 2 of 2 service(s)" in result.stdout
+        assert "2 variable(s) set" in result.stdout
+        assert "API_KEY=k" in open("alpha/.env").read()
+        beta = open("beta/.env").read()
+        assert beta.startswith("OLD=value\n") and "DB_URL=k" in beta
 
 
 def test_setup_announces_an_inferred_service_but_not_an_explicit_one(tmp_path):

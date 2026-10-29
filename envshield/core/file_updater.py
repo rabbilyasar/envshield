@@ -200,6 +200,166 @@ def open_new_secret_file(path: str):
     return open_for_write(path, secret=True, create_parents=True)
 
 
+def atomic_write(
+    path: str, content: str, root: Optional[str] = None, secret: bool = False
+) -> None:
+    """
+    Replaces `path` with `content` in one step (V3-1, #20): the content goes
+    to a new temporary file in the same directory, which is then renamed
+    over `path`, so an interruption leaves the original byte-identical.
+    The same rules as open_for_write apply (BL-154): `path` must be a plain
+    file inside `root` reached without a symlink; missing parents are
+    created under that rule. `secret` makes the result 0600 (the temporary
+    file is created 0600, so a secret is never briefly world-readable);
+    otherwise an existing file's mode is kept.
+    """
+    if not _HAS_DIR_FD:
+        _assert_safe_write_target_lexically(path, root)
+        directory = os.path.dirname(os.path.abspath(path))
+        os.makedirs(directory, exist_ok=True)
+        mode = (
+            0o600
+            if secret
+            else (
+                stat.S_IMODE(os.stat(path).st_mode) if os.path.exists(path) else 0o644
+            )
+        )
+        tmp = os.path.join(
+            directory, f".{os.path.basename(path)}.envshield-tmp-{os.getpid()}"
+        )
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(content)
+                f.flush()
+                os.fsync(f.fileno())
+            os.chmod(tmp, mode)
+            os.replace(tmp, path)
+        except BaseException:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+            raise
+        return
+
+    dir_fd, leaf, _parts = _walk_parents(path, root, create=True)
+    if dir_fd is None:  # pragma: no cover - create=True always opens it
+        raise FileNotFoundError(errno.ENOENT, "No such directory", path)
+    tmp = None
+    try:
+        try:
+            st = os.stat(leaf, dir_fd=dir_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            st = None
+        if st is not None:
+            _check_leaf(path, st)
+        mode = 0o600 if secret else (stat.S_IMODE(st.st_mode) if st else None)
+        for attempt in range(100):
+            candidate = f".{leaf}.envshield-tmp-{os.getpid()}-{attempt}"
+            try:
+                fd = os.open(
+                    candidate,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW,
+                    0o600 if (secret or mode is not None) else 0o666,
+                    dir_fd=dir_fd,
+                )
+            except FileExistsError:
+                continue
+            tmp = candidate
+            break
+        if tmp is None:
+            raise EnvShieldException(f"Could not create a temporary file for '{path}'.")
+        with os.fdopen(fd, "w") as f:
+            if mode is not None and hasattr(os, "fchmod"):
+                os.fchmod(f.fileno(), mode)
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        os.rename(tmp, leaf, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+        tmp = None
+    finally:
+        if tmp is not None:
+            try:
+                os.unlink(tmp, dir_fd=dir_fd)
+            except OSError:
+                pass
+        os.close(dir_fd)
+
+
+def _assignment_re(key: str, is_python: bool) -> "re.Pattern[str]":
+    """A line that assigns `key`: `KEY=`, `export KEY=` (dotenv), `KEY =`."""
+    if is_python:
+        return re.compile(rf"^\s*{re.escape(key)}\s*=")
+    return re.compile(rf"^\s*(?:export\s+)?{re.escape(key)}\s*=")
+
+
+def render_assignment(key: str, value: str, is_python: bool, file_path: str) -> str:
+    """One assignment line for `key`, escaped for the file's format."""
+    # 'key' is about to become a bare assignment target (a Python
+    # identifier, or the left-hand side of a dotenv 'KEY=value' line) --
+    # unlike 'value', it can't be escaped into a safe form without
+    # changing its identity (callers match on it verbatim elsewhere), so
+    # an unsafe key is rejected outright rather than sanitized.
+    if not schema_types.is_safe_variable_name(key):
+        raise EnvShieldException(
+            f"{key!r} is not a safe variable name (must match "
+            f"^[A-Za-z_][A-Za-z0-9_]*$) -- refusing to write it into "
+            f"'{file_path}'."
+        )
+    # Python: KEY = 'VALUE' (repr() escapes quotes and backslashes).
+    if is_python:
+        return f"{key} = {value!r}\n"
+    # dotenv has no line-continuation syntax, so a literal newline/carriage
+    # return would split the value into extra lines -- potentially
+    # injecting a new KEY=VALUE assignment. There's no unescaping on read
+    # (parsers/_dotenv.py), so this is a one-way, safety-only transform.
+    safe_value = value.replace("\n", "\\n").replace("\r", "\\r")
+    already_quoted = (safe_value.startswith("'") and safe_value.endswith("'")) or (
+        safe_value.startswith('"') and safe_value.endswith('"')
+    )
+    if re.search(r"[#\s=]", safe_value) and not already_quoted:
+        return f'{key}="{safe_value}"\n'
+    return f"{key}={safe_value}\n"
+
+
+def patch_variable_lines(
+    lines: List[str],
+    updates: List[dict],
+    file_path: str,
+    removals: Optional[List[str]] = None,
+) -> List[str]:
+    """
+    `lines` with each update's key replaced in place (its first assignment
+    line), appended at the end if it has none, and each key in `removals`
+    deleted. Every other line is kept as it was.
+    """
+    is_python = file_path.endswith(".py")
+    remaining = {u["key"]: u["value"] for u in updates}
+    patterns = {k: _assignment_re(k, is_python) for k in remaining}
+    remove = {k: _assignment_re(k, is_python) for k in (removals or [])}
+    new_lines: List[str] = []
+    for line in lines:
+        if any(p.match(line) for p in remove.values()):
+            continue
+        matched = next((k for k, p in patterns.items() if p.match(line)), None)
+        if matched is not None and matched in remaining:
+            rendered = render_assignment(
+                matched, remaining.pop(matched), is_python, file_path
+            )
+            # Keep the line's own 'export ' (and indentation).
+            prefix = re.match(r"^\s*(?:export\s+)?", line).group(0)
+            new_lines.append(prefix + rendered if not is_python else rendered)
+        else:
+            new_lines.append(line)
+    if remaining:
+        if new_lines and not new_lines[-1].endswith("\n"):
+            new_lines[-1] += "\n"
+        if new_lines and new_lines[-1].strip():
+            new_lines.append("\n")
+        for key, value in remaining.items():
+            new_lines.append(render_assignment(key, value, is_python, file_path))
+    return new_lines
+
+
 def update_variables_in_file(file_path: str, updates: List[dict], secret: bool = False):
     """
     Updates one or more variables in a given file in-place, preserving
@@ -228,69 +388,8 @@ def update_variables_in_file(file_path: str, updates: List[dict], secret: bool =
             lines = f.readlines()
     except OSError as e:
         raise EnvShieldException(f"Could not read '{file_path}': {e}")
-
-    is_python = file_path.endswith(".py")
-
-    def _render(key: str, value: str) -> str:
-        # 'key' is about to become a bare assignment target (a Python
-        # identifier, or the left-hand side of a dotenv 'KEY=value' line) --
-        # unlike 'value', it can't be escaped into a safe form without
-        # changing its identity (callers match on it verbatim elsewhere), so
-        # an unsafe key is rejected outright rather than sanitized.
-        if not schema_types.is_safe_variable_name(key):
-            raise EnvShieldException(
-                f"{key!r} is not a safe variable name (must match "
-                f"^[A-Za-z_][A-Za-z0-9_]*$) -- refusing to write it into "
-                f"'{file_path}'."
-            )
-
-        # For Python files, format as: KEY = "VALUE" (repr() handles escaping
-        # quotes/backslashes that plain string values may contain).
-        if is_python:
-            return f"{key} = {value!r}\n"
-
-        # For .env files: dotenv has no line-continuation syntax, so a literal
-        # newline/carriage-return in the value would otherwise split it into
-        # extra lines -- potentially injecting an unintended new KEY=VALUE
-        # assignment into the file. There's no unescaping on read (see
-        # parsers/_dotenv.py), so this is a one-way, safety-only transform,
-        # not a round-trip-preserving escape. Quoting whitespace/'#'/'='
-        # mirrors setup_manager._write_dotenv_local_file's existing heuristic
-        # for the same file format.
-        safe_value = value.replace("\n", "\\n").replace("\r", "\\r")
-        already_quoted = (safe_value.startswith("'") and safe_value.endswith("'")) or (
-            safe_value.startswith('"') and safe_value.endswith('"')
-        )
-        if re.search(r"[#\s=]", safe_value) and not already_quoted:
-            return f'{key}="{safe_value}"\n'
-        return f"{key}={safe_value}\n"
-
-    remaining = {u["key"]: u["value"] for u in updates}
-
-    new_lines = []
-    for line in lines:
-        matched_key = None
-        for key in remaining:
-            # This regex is more specific: it looks for the key at the start of the line,
-            # ignoring whitespace, followed by an equals sign.
-            if re.match(rf"^\s*{re.escape(key)}\s*=", line):
-                matched_key = key
-                break
-
-        if matched_key:
-            new_lines.append(_render(matched_key, remaining.pop(matched_key)))
-        else:
-            new_lines.append(line)
-
-    if remaining:
-        if new_lines and not new_lines[-1].endswith("\n"):
-            new_lines[-1] += "\n"
-        new_lines.append("\n")
-        for key, value in remaining.items():
-            new_lines.append(_render(key, value))
-
+    new_lines = patch_variable_lines(lines, updates, file_path)
     try:
-        with open_for_write(file_path, secret=secret) as f:
-            f.writelines(new_lines)
+        atomic_write(file_path, "".join(new_lines), secret=secret)
     except OSError as e:
         raise EnvShieldException(f"Could not write to '{file_path}': {e}")

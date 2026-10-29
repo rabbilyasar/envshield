@@ -1023,8 +1023,12 @@ contract through one append-only writer and never rewrite it (merged
 `9fa5c40`, PR #99). V2-3
 ([#44](https://github.com/rabbilyasar/envshield/issues/44)): `init` seeds
 the first contract from the code's reads and proposes manifest
-registrations; no framework template (branch, not yet merged). The full
-order is
+registrations; no framework template (merged `cae7b25`, PR #100), which
+completes Phase 2. V3-1
+([#20](https://github.com/rabbilyasar/envshield/issues/20)): `setup`
+resolves every variable first, keeps explicit empty values, never copies a
+secret from the template, and writes each file once, atomically, in place
+(`BL-211`; branch, not yet merged). The full order is
 ROADMAP.md's "v5 — in progress". Nothing since `v4.9.1` is released.
 
 **Previous phase (updated 2026-10-15): `v4.9.1` released; v5 V1 next.**

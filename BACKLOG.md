@@ -976,7 +976,7 @@ The five entries below come from one first-run trial on 2026-10-14 (v4.8.0, a fr
 
 ### BL-175 — `init` builds the schema from `.env.example` only and ignores what the code reads
 
-Type: `UX` / `PRODUCT` · Evidence: `CONFIRMED` (first-run trial, 2026-10-14) · Priority: **P2** · Status: **fixed by V2-3 ([#44](https://github.com/rabbilyasar/envshield/issues/44)), branch `rabbilyasar/v2-3-init-seeds-contract`, unmerged**
+Type: `UX` / `PRODUCT` · Evidence: `CONFIRMED` (first-run trial, 2026-10-14) · Priority: **P2** · Status: **fixed by V2-3 ([#44](https://github.com/rabbilyasar/envshield/issues/44)), merged `cae7b25` (PR #100), unreleased**
 Component: `init` (`core/setup_manager.py` / import path), discovery (`discover_python_usages`, JS/TS discovery)
 
 - **Current behavior:** `init` created a three-variable schema from `.env.example`. The very next `check` listed `STRIPE_SECRET_KEY` (`api/app.py:4`) and `NEXT_PUBLIC_ANALYTICS_KEY` (`web/index.ts:2`) as "Not Declared". EnvShield's own discovery knew about both, but `init` never offered them.
@@ -988,7 +988,7 @@ Component: `init` (`core/setup_manager.py` / import path), discovery (`discover_
 
 ### BL-176 — `init` doesn't register a present Docker Compose file, so manifest checks start out invisible
 
-Type: `UX` / `PRODUCT` · Evidence: `CONFIRMED` (first-run trial, 2026-10-14) · Priority: **P2** · Status: **fixed by V2-3 ([#44](https://github.com/rabbilyasar/envshield/issues/44)), branch `rabbilyasar/v2-3-init-seeds-contract`, unmerged**
+Type: `UX` / `PRODUCT` · Evidence: `CONFIRMED` (first-run trial, 2026-10-14) · Priority: **P2** · Status: **fixed by V2-3 ([#44](https://github.com/rabbilyasar/envshield/issues/44)), merged `cae7b25` (PR #100), unreleased**
 Component: `init`, `envshield.yml` generation
 
 - **Current behavior:** with `docker-compose.yml` at the root, `init` registered no manifest. `explain STRIPE_SECRET_KEY` reported "No deployment manifest registered for this service", and `doctor` ran no deployment check. `init` also created one service (`trial`) for a repository with `api/` and `web/` directories. As a result, `check docker-compose.yml` reported the web-only `API_URL` as missing from the `api` container: correct for the one-service contract `init` built, but wrong for the real layout.
@@ -1039,7 +1039,7 @@ The entries below come from a real-repository trial on 2026-10-14. v4.8.0 (`main
 
 ### BL-180 — `init` declares variables the code never reads (framework templates) and misdetects the project type
 
-Type: `BUG` / `UX` · Evidence: `CONFIRMED` (real-repo trial, 2026-10-14) · Priority: **P2** · Status: **fixed by V2-3 ([#44](https://github.com/rabbilyasar/envshield/issues/44)), branch `rabbilyasar/v2-3-init-seeds-contract`, unmerged**
+Type: `BUG` / `UX` · Evidence: `CONFIRMED` (real-repo trial, 2026-10-14) · Priority: **P2** · Status: **fixed by V2-3 ([#44](https://github.com/rabbilyasar/envshield/issues/44)), merged `cae7b25` (PR #100), unreleased**
 Component: `init` framework detection and templates
 
 - **Current behavior:** with no config file to read, `init` writes a framework template. bazaardor got `DATABASE_URL` and `LOG_LEVEL`, and neither name appears anywhere in its tracked `.py`/`.ts` files. `check` then demands them. issuebear (622 `.py` files, 49 JS/TS) and issuebear-management were reported as "Detected a nodejs project".
@@ -1051,7 +1051,7 @@ Component: `init` framework detection and templates
 
 ### BL-181 — Multi-service Compose checks work only through a registration that nothing guides users to
 
-Type: `UX` / `PRODUCT` · Evidence: `CONFIRMED` (real-repo trial and demo project, 2026-10-14) · Priority: **P2** (deployment-led direction, amendment A1) · Status: **fixed by V2-3 ([#44](https://github.com/rabbilyasar/envshield/issues/44)), branch `rabbilyasar/v2-3-init-seeds-contract`, unmerged**
+Type: `UX` / `PRODUCT` · Evidence: `CONFIRMED` (real-repo trial and demo project, 2026-10-14) · Priority: **P2** (deployment-led direction, amendment A1) · Status: **fixed by V2-3 ([#44](https://github.com/rabbilyasar/envshield/issues/44)), merged `cae7b25` (PR #100), unreleased**
 Component: `check <file>` ad-hoc path, `init`, `doctor`
 
 - **Current behavior:** the ad-hoc `check docker-compose.yml` errors with "declares multiple services (…) -- pass --container to pick one" on kemonchilo (2 services) and zeus (7: athena, athenalambda, cache, db, hermes, hermeslambda, playwright). The capability does exist: registering the file under `manifests:` with a `containers:` map (`api: api`, `worker: worker`) makes plain `check` and `doctor` validate every mapped container against its own service projection. This was verified on a two-service demo project, where a variable scoped to `api` was reported missing from the `api` container while `worker` stayed clean. But `init` never writes that registration (`BL-176`), and the ad-hoc error never mentions it.
@@ -1101,7 +1101,7 @@ Component: `schema diff` classification when the base revision has no contract
 
 ### BL-185 — `doctor` passes "Template Sync" when the example file is git-ignored
 
-Type: `BUG` / `UX` · Evidence: `CONFIRMED` (real-repo trial, 2026-10-14) · Priority: **P2** · Status: **fixed by V2-3 ([#44](https://github.com/rabbilyasar/envshield/issues/44)), branch `rabbilyasar/v2-3-init-seeds-contract`, unmerged**
+Type: `BUG` / `UX` · Evidence: `CONFIRMED` (real-repo trial, 2026-10-14) · Priority: **P2** · Status: **fixed by V2-3 ([#44](https://github.com/rabbilyasar/envshield/issues/44)), merged `cae7b25` (PR #100), unreleased**
 Component: `doctor` template check, `init`'s `.gitignore` handling
 
 - **Current behavior:** rabbil-portfolio's `.gitignore` has `.env*` (create-next-app's default), which ignores `.env.example`. `scan` notes "Skipping 1 git-ignored file(s): ./.env.example", yet `doctor` reports "✓ Template Sync". The template EnvShield generates for teammates can never be committed.
@@ -1412,6 +1412,7 @@ Component: `core/setup_manager.py::run_setup` / `_write_dotenv_local_file`
 
   All seven pass. A mutation that keeps only schema keys fails six of them (the absent-file case has nothing to lose), so the tests do detect a loss. The lifecycle suite repeats the check end to end (`TestSharedSchemaFixture`: worker's `QUEUE_URL` survives `setup --service api`). Root reason: `setup` carries every key already in the local file (`all_keys = schema keys + seed keys`), and Phase 3 made the schema side the union.
 - **Evidence status:** **REFUTED** for every candidate path above (dotenv; a Python local file is only ever patched in place). Nothing to fix. Reopen only with a concrete reproduction.
+- **Update (#20, 2026-10-29):** `setup` no longer regenerates an existing local file: it patches it in place (`file_updater.patch_variable_lines`) and writes it once, atomically, so every line it doesn't change, a peer service's included, is kept byte for byte by construction. A shared file is still resolved from the union contract and written once (`test_setup_resolution.py::test_a_shared_file_is_written_once_with_the_union_contract`).
 
 ### BL-139 — `init --force` rewrites `envshield.yml` down to one service
 
@@ -2126,6 +2127,17 @@ Component: `cli.py::service_discover` (legacy branch), `service_discovery.discov
 - **Current behavior:** `discover_candidates` leaves `local_file`/`example_file` unset when the files have their default names. The legacy branch then seeds from `c["local_file"] or c["example_file"] or <dir>/.env`, so a directory whose only config is a default-named `.env.example` (a fresh clone) is registered with no schema file and no message; every command then fails for it with "schema not found".
 - **Expected behavior:** seed from `<dir>/.env.example` when there is no `.env`, as the project-contract path now does (`cli._candidate_config_file`, #19).
 - **Why not fixed in #19:** #19 keeps legacy layouts' behavior unchanged apart from one tip line.
+
+
+### BL-211 — `setup` filled defaults over explicit empty values, seeded secrets from `.env.example`, and cancelled when an existing file wasn't overwritten
+
+Type: `BUG` / `UX` · Evidence: `CONFIRMED` (code reading against the v5 plan, issue #20; plan labels B4 and Q3) · Priority: **P2** · Status: **fixed by V3-1 ([#20](https://github.com/rabbilyasar/envshield/issues/20)), branch `rabbilyasar/v3-1-setup-resolve-report-write`, unmerged**
+Component: `core/setup_manager.py::run_setup`, `core/file_updater.py`
+
+- **Behavior before:** values were seeded from the local file, else `.env.example`, then `_fill_schema_defaults` filled a default wherever `not resolved.get(key)`, so an explicit `PORT=` was replaced with the default; a secret present in `.env.example` was copied into `.env`; an existing dotenv file was regenerated after a whole-file "overwrite?" prompt, and declining it cancelled setup for that service (B4), dropping every other change; the write truncated the file in place.
+- **Fix (#20):** one resolution pass per variable, then one write. Precedence: (1) the local file's value, an explicit empty one included, kept and replaced only after confirmation; (3) the schema default, only for an absent non-secret; (4) the template value, only when non-secret, non-empty and valid (a template `KEY=` is absent); (5) a prompt, only for a variable required now (masked for a secret; a default is offered as an explicit choice -- use it, enter a value, or leave it -- so declining is possible; a blank answer skips); (6) otherwise unset and named as "still to set yourself". Optional variables are never prompted. The explicit-empty table: a required empty is reported then prompted; an optional empty that's valid is kept; an optional empty that's invalid offers enter / remove the line / keep. A declared variable is secret only if the schema says so (the name heuristic is for undeclared names). No whole-file prompt: the file is patched in place (unknown lines, comments and `export` prefixes kept) and written once through `file_updater.atomic_write` (a temporary file in the same directory, then a rename; 0600; BL-154's no-symlink walk), so Ctrl-C leaves it byte-identical with its permissions. The drift summary is computed after filling absent defaults only, so empties are reported. A contract load error still aborts before anything is resolved (BL-153); one variable's error never stops the others. `update_variables_in_file` now writes atomically too.
+- **Tests:** `envshield/tests/core/test_setup_resolution.py` (23): each precedence step, each explicit-empty row, confirmation and declining (B4), unknown lines and `export`, Ctrl-C (byte-identical, same mode, no temp file), one atomic write and 0600, nothing to change writes nothing, a shared file written once with the union contract, a symlinked target refused before any prompt, a contract load error, and scenario 8 (a pull adds a required variable; the post-merge hook runs `doctor`, which names it; `setup` asks only for it). 17 of the 23 fail on the old code. Seven tests in `test_setup_manager.py` that asserted the old behavior (the overwrite prompt, rejecting a blank answer, filling a blank default silently, seeding a secret from the template) were rewritten to the new rules.
+- **On real repositories (2026-10-29):** `setup` with every replacement declined and every prompt skipped, on the #44 trial clones of kemonchilo (a copy of its real `.env`, 64 lines), cal.com (174), Plane (31) and Formbricks (66): every original line kept in order, nothing rewritten, no value or canary in any output; dorjachai (no `.env`) got a new one.
 
 ---
 
