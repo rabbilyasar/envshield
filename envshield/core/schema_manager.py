@@ -993,7 +993,7 @@ def sync_schema(service_name: str) -> bool:
         # SecretDefaultConflictError) -- this still never renders the
         # literal default for a secret field even if this function is
         # ever called with a schema dict that bypassed that gate.
-        if schema_types.secret_default_conflict(details):
+        if schema_types.default_must_not_render(details):
             default_value = ""
         else:
             default_value = str(details.get("defaultValue", ""))

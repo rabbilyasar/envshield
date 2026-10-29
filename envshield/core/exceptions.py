@@ -79,6 +79,30 @@ class SecretDefaultConflictError(EnvShieldException):
         super().__init__(self.message)
 
 
+class CredentialDefaultError(EnvShieldException):
+    """
+    Raised when a schema field's 'defaultValue' holds a credential -- a
+    password inside a URL or connection string (BL-209) -- whatever its
+    'secret' flag. A default is written verbatim into .env.example and
+    generated code, so the password would be committed with them. Like
+    SecretDefaultConflictError, the message names only the field(s),
+    never the value.
+    """
+
+    def __init__(self, schema_path: str, fields: list):
+        joined = ", ".join(fields)
+        self.message = (
+            f"Schema error in {schema_path}: the 'defaultValue' of {joined} "
+            "holds a password (in a URL or connection string). A default is "
+            "copied into .env.example and generated code, so it would be "
+            "committed. Remove the 'defaultValue' and set 'secret = true'; "
+            "each developer's real value goes in their local .env "
+            "('envshield setup'). If the password was ever committed, "
+            "change it."
+        )
+        super().__init__(self.message)
+
+
 class ConfigParseError(EnvShieldException):
     """Raised when the envshield.yml file cannot be parsed."""
 

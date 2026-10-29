@@ -2061,7 +2061,7 @@ A fourth real-repository trial on 2026-10-28, for V2-1 (#18, branch `rabbilyasar
 
 ### BL-208 — `init` writes a password from a URL into the committed schema as a `defaultValue`
 
-Type: `SECURITY` · Evidence: `CONFIRMED` (live, 2026-10-28, while verifying #18) · Priority: **P0** (§4: any bug that can expose a secret is P0) · Status: **fixed by [#94](https://github.com/rabbilyasar/envshield/issues/94), branch `rabbilyasar/bl-208-import-credentials`, unmerged**
+Type: `SECURITY` · Evidence: `CONFIRMED` (live, 2026-10-28, while verifying #18) · Priority: **P0** (§4: any bug that can expose a secret is P0) · Status: **fixed by [#94](https://github.com/rabbilyasar/envshield/issues/94), merged `c6b6c30` (PR #97), unreleased**
 Component: `core/importer.py` (`_classify_variable`, the `defaultValue` write), reached from `init` and `init --from`
 
 - **Reproduction:** a `.env` with `REDIS_URL=redis://:zq9redis@cache:6379`, then `envshield init`. `env.schema.toml` gets `secret = false` and `defaultValue = "redis://:zq9redis@cache:6379"`: the password is now in a file meant to be committed, and `schema sync` copies it on into `.env.example`. In the same run `DATABASE_URL=postgres://app:zq9pass@db:5432/x` was classified secret (no default written), so the value check catches some credential URLs but not this one, and the name `REDIS_URL` has no secret keyword.
@@ -2079,7 +2079,7 @@ Component: `core/importer.py` (`_classify_variable`, the `defaultValue` write), 
 
 ### BL-209 — A password already committed in a schema or config file passes `scan`, the pre-commit hook and `check`
 
-Type: `SECURITY` · Evidence: `CONFIRMED` (live, 2026-10-28, while fixing `BL-208`) · Priority: **P1** (a secret already exposed by `BL-208` goes unreported) · Status: **open, proposed ([#96](https://github.com/rabbilyasar/envshield/issues/96))**
+Type: `SECURITY` · Evidence: `CONFIRMED` (live, 2026-10-28, while fixing `BL-208`) · Priority: **P1** (a secret already exposed by `BL-208` goes unreported) · Status: **fixed by [#96](https://github.com/rabbilyasar/envshield/issues/96), branch `rabbilyasar/bl-209-credential-default-gate`, unmerged**
 Component: `core/scanner.py` (no URL-credential rule), schema load (`config_manager`), `check`, `doctor`
 
 - **Reproduction:** `env.schema.toml` with `[REDIS_URL] secret = false, defaultValue = "redis://:zq9pwLEAK@cache:6379"`, staged. `scan`: "No secrets found." `scan --staged` (the pre-commit hook): "No secrets or undeclared reads found." `check --json`: VALID.
@@ -2087,6 +2087,11 @@ Component: `core/scanner.py` (no URL-credential rule), schema load (`config_mana
 - **Options:** see #96. Recommended: a schema-load gate like `BL-001`'s (a `defaultValue` that holds a credential is a schema error whatever `secret` says), reusing `importer.value_embeds_credential`; leave a generic URL-credential scan rule to Gitleaks and GitHub push protection (§14).
 - **Relationships:** `BL-208`, `BL-001`, `BL-014`.
 - **Issue:** [#96](https://github.com/rabbilyasar/envshield/issues/96).
+- **Decision (maintainer, 2026-10-29):** option 1, a schema-load gate.
+- **Fix (#96):** `schema_types.value_embeds_credential` (moved from the importer, which now uses it from there) and `default_holds_credential`. Loading a schema (`config_manager`'s two full-schema load points, the same as `BL-001`'s gate) raises `CredentialDefaultError` when a `defaultValue` holds a credential, whatever `secret` says, including a default inherited through `extends` and a per-service override (`schema_scope`). The message names the field and how to fix it (remove the default, `secret = true`, rotate the password if it was committed), never the value. Found and fixed in the same change, both the same invariant: (1) `scan --staged` (the pre-commit hook) skipped any schema that failed to load and passed, so a schema refused for holding a secret was committable; it now fails closed on `CredentialDefaultError` and `SecretDefaultConflictError`, and still skips an unrelated broken schema as before. (2) `schema diff` (and `check --since`) printed both values of a changed default, from revisions that aren't load-gated (gating history would break diffing the commit that removes a leak); a default change on a secret field, or one whose default holds a credential, is now reported without values (`detail: {before: null, after: null, redacted: true}`). Backstops where defaults are rendered (generated Python and TypeScript, `.env.example`, `explain`) use `schema_types.default_must_not_render`.
+- **Tests:** `envshield/tests/test_credential_default_gate.py` (58): every credential form from `BL-208`'s tests, with `secret = false` and absent, through loading, `extends`, a per-service override, `check` (human, `--json`, `--code-only`), `doctor`, `schema sync` (writes no `.env.example`), `explain`, `generate`, `scan --staged`, the renderers, and `schema diff` (library and the CLI on the fixing commit); safe defaults still load and a plain default change still shows its values. Against the old code, 43 of the 58 fail.
+- **On a real repository (2026-10-29):** the cal.com trial clone with a pre-fix leak committed (`DATABASE_URL` default `postgres://app:<canary>@db:5432/calendso`): `check`, `doctor`, `schema sync`, `explain` and `scan --staged` all exit 1 naming `DATABASE_URL`, none prints the password; the commit that removes it (default dropped, `secret = true`) diffs with exit 0, reporting the changes without the old value, and `check --since HEAD --code-only` passes.
+- **Compatibility:** a project whose schema already holds such a default now fails every command until it's removed, by design (fail closed on an exposed secret). The v5 migration guide must say so.
 
 ---
 

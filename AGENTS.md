@@ -1013,10 +1013,11 @@ project contract, a top-level `schema:` in `envshield.yml` (merged
 `0f2be72`, PR #95). `BL-208` (P0,
 [#94](https://github.com/rabbilyasar/envshield/issues/94)): `init` wrote
 credentials (a password inside a URL, `*_PASSPHRASE`/`*_CREDENTIALS`
-values) into the schema as defaults; fixed on a branch, not yet merged.
-`BL-209` (P1, [#96](https://github.com/rabbilyasar/envshield/issues/96),
-proposed): a password already in a committed schema passes every check.
-Both block a release while open. The full order is
+values) into the schema as defaults (merged `c6b6c30`, PR #97). `BL-209`
+(P1, [#96](https://github.com/rabbilyasar/envshield/issues/96)): a schema
+whose default holds a password now fails to load, the pre-commit scan
+blocks it, and `schema diff` never prints it (branch, not yet merged; it
+blocks a release while open). The full order is
 ROADMAP.md's "v5 — in progress". Nothing since `v4.9.1` is released.
 
 **Previous phase (updated 2026-10-15): `v4.9.1` released; v5 V1 next.**

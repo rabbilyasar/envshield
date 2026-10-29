@@ -254,6 +254,60 @@ def secret_default_conflict(field_schema: dict[str, Any]) -> bool:
     return str(field_schema.get("defaultValue", "")) != ""
 
 
+# A key-value connection string's password field (ADO.NET, ODBC, libpq):
+# "Server=db;User Id=app;Password=hunter2", "host=db password=hunter2".
+_DSN_PASSWORD_RE = re.compile(r"(?i)(?:^|[;\s])(?:password|pwd)\s*=\s*[^;\s]")
+
+
+def value_embeds_credential(value: Any) -> bool:
+    """
+    Whether a value carries a credential whatever its variable's name
+    (BL-208): a URL with a password in its userinfo (scheme://user:pass@host,
+    scheme://:pass@host), or a connection string with a password field.
+    A URL with only a user name, or none, doesn't count. Used by the
+    importer (never write it as a default) and by schema loading (reject
+    it as one, BL-209).
+    """
+    if not isinstance(value, str) or not value:
+        return False
+    if "@" in value:
+        try:
+            parsed = urlparse(value)
+            if parsed.scheme and parsed.netloc and parsed.password:
+                return True
+        except ValueError:
+            # A malformed URL (an unbalanced IPv6 bracket, a bad port) is
+            # judged by its text below.
+            pass
+        authority = value.split("://", 1)[-1].split("/", 1)[0]
+        userinfo = authority.rpartition("@")[0]
+        if ":" in userinfo and userinfo.split(":", 1)[1]:
+            return True
+    return bool(_DSN_PASSWORD_RE.search(value))
+
+
+def default_holds_credential(field_schema: Dict[str, Any]) -> bool:
+    """
+    True if a field's `defaultValue` carries a credential (BL-209), whatever
+    `secret` says: a default is written verbatim into .env.example and
+    generated code, so a password in it is committed with them.
+    """
+    if not isinstance(field_schema, dict):
+        return False
+    return value_embeds_credential(field_schema.get("defaultValue"))
+
+
+def default_must_not_render(field_schema: Dict[str, Any]) -> bool:
+    """
+    A field whose default may never be written or shown anywhere: a secret
+    with a default (BL-001) or a default that holds a credential (BL-209).
+    Schema loading rejects both; renderers check this as a backstop.
+    """
+    return secret_default_conflict(field_schema) or default_holds_credential(
+        field_schema
+    )
+
+
 def presence_rule(field_schema: Dict[str, Any], env: str = LOCAL) -> str:
     """
     When a field must be explicitly present (non-blank) in a checked file

@@ -32,7 +32,9 @@ view (and never mutate the input).
 from dataclasses import dataclass
 from typing import Any, Dict, FrozenSet, Iterable, List, Optional, Sequence, Tuple
 
+from . import schema_types
 from .exceptions import (
+    CredentialDefaultError,
     FileContractConflictError,
     SchemaScopeError,
     SecretDefaultConflictError,
@@ -179,6 +181,7 @@ def project(
     overrides: Dict[str, Dict[str, Dict[str, Any]]] = {}
     unscoped_secrets: List[str] = []
     secret_override_defaults: List[str] = []
+    credential_override_defaults: List[str] = []
 
     for key, details in merged.items():
         if not isinstance(details, dict) or SCOPE_KEY not in details:
@@ -202,6 +205,10 @@ def project(
             for name, override in sorted(key_overrides.items()):
                 if str(override.get("defaultValue", "")) != "":
                     secret_override_defaults.append(f"{key} (services.{name})")
+        # BL-209: a per-service default holding a password, whatever 'secret'.
+        for name, override in sorted(key_overrides.items()):
+            if schema_types.default_holds_credential(override):
+                credential_override_defaults.append(f"{key} (services.{name})")
 
     if unscoped_secrets:
         raise SchemaScopeError(
@@ -214,6 +221,8 @@ def project(
         )
     if secret_override_defaults:
         raise SecretDefaultConflictError(schema_path, secret_override_defaults)
+    if credential_override_defaults:
+        raise CredentialDefaultError(schema_path, credential_override_defaults)
 
     def reach(var: str) -> FrozenSet[str]:
         grant = grants[var]

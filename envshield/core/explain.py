@@ -170,7 +170,11 @@ def _describe_field(
     # defaultValue on a secret field (defense in depth for a field_schema
     # dict that reached this function some other way) -- 'requiredness'
     # above still reflects a default's presence without echoing its value.
-    default_value = None if is_secret else field_schema.get("defaultValue")
+    default_value = (
+        None
+        if schema_types.default_must_not_render(field_schema) or is_secret
+        else field_schema.get("defaultValue")
+    )
 
     described = {
         "type": schema_types.resolve_field_type(field_schema),
