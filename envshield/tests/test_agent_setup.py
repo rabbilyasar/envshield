@@ -596,9 +596,10 @@ def test_guide_covers_all_three_stages():
     onboarding = _section(guide, "## Onboarding")
     for text in (
         agent_setup.FULL_CHECK,
-        "envshield setup",
+        agent_setup.SETUP_NON_INTERACTIVE,
+        "SET YOURSELF",
         "their own terminal",
-        "exactly the schema's `defaultValue`",
+        "never writes a secret",
     ):
         assert text in onboarding, text
 
@@ -666,4 +667,6 @@ def test_guide_onboarding_matches_checks_agent_step(tmp_path):
         assert step["by"] == "agent"
         assert "defaultValue" in step["text"]
         onboarding = _section(agent_setup.guide(), "## Onboarding")
-        assert "may do" in onboarding and "defaultValue" in onboarding
+        # The guide routes check's agent step through setup, which does it.
+        assert agent_setup.SETUP_NON_INTERACTIVE in onboarding
+        assert "defaultValue" in onboarding

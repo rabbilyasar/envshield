@@ -1855,8 +1855,19 @@ def setup(
         "-s",
         help="If set, setup this service's config (for multi-service projects).",
     ),
+    non_interactive: bool = typer.Option(
+        False,
+        "--non-interactive",
+        help=(
+            "Never prompt: write what can be resolved without asking (existing "
+            "values, defaults, safe template values) and report the rest. "
+            "Implied when stdin isn't a terminal (CI, agents). Exits 1 while a "
+            "required variable is left to set."
+        ),
+    ),
 ):
-    """Interactively creates (or completes) a local environment file from the schema."""
+    """Creates or completes a local environment file from the schema, and reports what's ready and what you must set."""
+    interactive = not non_interactive and setup_manager.stdin_is_terminal()
     try:
         targets, provenance = service_manager.resolve_targets_with_provenance(
             service, invocation_dir=INVOCATION_DIR
@@ -1888,29 +1899,41 @@ def setup(
         for target in targets:
             _print_service_header(targets, target)
             results.append(
-                setup_manager.run_setup(service_name=target, output_file=output_file)
+                setup_manager.run_setup(
+                    service_name=target,
+                    output_file=output_file,
+                    interactive=interactive,
+                )
             )
 
         completed = [r for r in results if r.completed]
         skipped_count = len(results) - len(completed)
 
         if completed:
-            # After successful setup, offer to install git hooks -- even a
-            # partial success (some services configured, others declined)
-            # still means there's now something worth hooking.
+            # Offer to install git hooks: there's now something worth hooking.
             hm = hooks_manager.HooksManager()
             hm.install_hooks_if_needed(auto=True, force=False)
             total_configured = sum(r.configured_count for r in completed)
-            if len(results) > 1:
-                console.print(
-                    f"\n[bold green]✓ Configuration complete[/bold green] for "
-                    f"{len(completed)} of {len(results)} service(s) "
-                    f"({total_configured} variable(s) set)."
-                )
+            left = [(r, name) for r in completed for name in r.to_set_yourself]
+            if not left:
+                if len(results) > 1:
+                    console.print(
+                        f"\n[bold green]✓ Configuration complete[/bold green] for "
+                        f"{len(completed)} of {len(results)} service(s) "
+                        f"({total_configured} variable(s) set)."
+                    )
+                else:
+                    console.print(
+                        f"\n[bold green]✓ Configuration complete[/bold green] "
+                        f"({total_configured} variable(s) set)."
+                    )
             else:
+                names = ", ".join(sorted({name for _, name in left}))
                 console.print(
-                    f"\n[bold green]✓ Configuration complete[/bold green] "
-                    f"({total_configured} variable(s) set)."
+                    f"\n[bold yellow]{len(left)} required variable(s) still need a "
+                    f"value:[/bold yellow] {names}. Set them in the local file "
+                    "(or run 'envshield setup' in a terminal), then run "
+                    "'envshield check'."
                 )
             hm.print_hook_status()
 
@@ -1919,6 +1942,9 @@ def setup(
                 f"[yellow]{skipped_count} of {len(results)} service(s) left "
                 "unchanged.[/yellow]"
             )
+        # Exit 1 while anything required locally isn't READY (#21).
+        if not all(r.ready for r in results):
+            raise typer.Exit(code=1)
     except EnvShieldException as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(code=1)
