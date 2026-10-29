@@ -146,6 +146,9 @@ class KubernetesParser(BaseParser):
                 names = ", ".join(n or "?" for n in names_in_order)
                 raise EnvShieldException(
                     f"This manifest declares multiple containers ({names}) -- pass --container to pick one."
+                    " To check every container, register this file in "
+                    "envshield.yml under 'manifests:' with a 'containers:' map "
+                    "(container: service), then run 'envshield check'."
                 )
 
         # An explicit --container may name either a main or an init

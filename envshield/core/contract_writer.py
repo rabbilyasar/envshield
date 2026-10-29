@@ -37,6 +37,11 @@ from envshield.core.exceptions import EnvShieldException
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 
 
+# Marks an entry built from a code read rather than a config file (#44):
+# merging it adds a reader but never changes a default. Never written.
+FROM_CODE = "__from_code__"
+
+
 @dataclass
 class AppendResult:
     path: str
@@ -70,6 +75,21 @@ def _parse(text: str, path: str) -> Dict[str, Any]:
             f"'{path}' doesn't parse as TOML ({e}), so EnvShield won't add to "
             "it. Fix it and run the command again; the file was left unchanged."
         ) from e
+
+
+CONTRACT_HEADER = (
+    "# The project contract: every environment variable the services\n"
+    "# read. 'services = [...]' grants a variable to some services only;\n"
+    "# a secret always names its services.\n"
+)
+
+
+def declared_names(path: str) -> set:
+    """Every variable the contract at `path` declares (empty if none yet)."""
+    text = _read_contract(path, os.getcwd())
+    if text is None:
+        return set()
+    return _declared_names(path, _parse(text, path))
 
 
 def _declared_names(path: str, parsed: Dict[str, Any]) -> set:
@@ -165,13 +185,23 @@ def append_for_services(
                 if name not in result.already_declared:
                     result.already_declared.append(name)
                 continue
+            from_code = bool(details.get(FROM_CODE))
             if name not in merged:
-                merged[name] = {k: v for k, v in details.items() if k != "services"}
+                merged[name] = {
+                    k: v for k, v in details.items() if k not in ("services", FROM_CODE)
+                }
                 readers[name] = [service]
                 continue
             if service not in readers[name]:
                 readers[name].append(service)
             entry = merged[name]
+            if from_code:
+                # A code read says nothing about values: it only adds a
+                # reader, and can make the variable secret.
+                if details.get("secret"):
+                    entry["secret"] = True
+                    entry.pop("defaultValue", None)
+                continue
             if details.get("secret"):
                 entry["secret"] = True
             if entry.get("secret"):

@@ -127,6 +127,34 @@ def get_ignored_files(paths: list[str]) -> set[str]:
     return {line for line in result.stdout.splitlines() if line}
 
 
+def ignore_rule(path: str) -> tuple[str, str, str] | None:
+    """
+    The .gitignore rule that ignores `path`, as (source file, line number,
+    pattern), or None when it isn't ignored -- a tracked file never is --
+    or when Git can't tell (not a repository, no git).
+    """
+    if not get_git_root():
+        return None
+    try:
+        result = subprocess.run(
+            ["git", "check-ignore", "-v", "--", path],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        return None
+    line = result.stdout.splitlines()[0] if result.stdout.strip() else ""
+    if result.returncode != 0 or "\t" not in line:
+        return None
+    rule, _path = line.split("\t", 1)
+    source, _, rest = rule.partition(":")
+    number, _, pattern = rest.partition(":")
+    if pattern.startswith("!"):
+        return None  # a negation matched: not ignored
+    return source, number, pattern
+
+
 def get_staged_files() -> list[str]:
     """
     Gets a list of all files that are currently staged for the next commit.

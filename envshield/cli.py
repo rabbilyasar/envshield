@@ -28,6 +28,7 @@ from .core import (
     file_updater,
     generator,
     hooks_manager,
+    init_suggestions,
     inspector,
     scanner,
     schema_manager,
@@ -288,6 +289,13 @@ def _candidate_config_file(c: dict) -> Optional[str]:
 def _append_service_configs(candidates: List[dict], command: str) -> None:
     """Each discovered directory's variables, read from its own config file,
     appended to the project contract in one block."""
+    per_service = _service_config_entries(candidates)
+    if per_service:
+        _append_services_to_contract(per_service, command)
+
+
+def _service_config_entries(candidates: List[dict]) -> List[Any]:
+    """(service, entries) read from each discovered directory's config file."""
     per_service = []
     for c in candidates:
         config_file = _candidate_config_file(c)
@@ -301,11 +309,175 @@ def _append_service_configs(candidates: List[dict], command: str) -> None:
                     ),
                 )
             )
-    if per_service:
-        _append_services_to_contract(per_service, command)
+    return per_service
 
 
-def _init_service_directories(candidates: List[dict], project_name: str) -> None:
+def _accepts(prompt: str, yes: bool, without_terminal: bool) -> bool:
+    """An init suggestion: --yes accepts; a terminal asks (default yes);
+    otherwise `without_terminal` decides."""
+    if yes:
+        return True
+    if not hooks_manager._is_interactive():
+        return without_terminal
+    return bool(questionary.confirm(prompt, default=True).ask())
+
+
+def _offer_manifests(service_dirs: Dict[str, str], yes: bool) -> List[Dict[str, Any]]:
+    """
+    Deployment manifests to register, with a 'containers:' map proposed from
+    build directories and names (BL-176, BL-181). Without a terminal they're
+    registered, as a name-matched Compose file always was.
+    """
+    registrations = []
+    for proposal in init_suggestions.manifest_proposals(service_dirs):
+        mapped = ", ".join(
+            f"{escape(c)} → {escape(s)}" for c, s in sorted(proposal.containers.items())
+        )
+        console.print(
+            f"Found {proposal.kind} manifest [bold yellow]{escape(proposal.file)}"
+            f"[/bold yellow]: {mapped}."
+        )
+        if proposal.unmapped:
+            console.print(
+                f"[dim]  Not mapped (infrastructure, or no matching service): "
+                f"{', '.join(escape(c) for c in sorted(proposal.unmapped))}.[/dim]"
+            )
+        if _accepts(
+            "Register it so 'check' validates these containers?",
+            yes,
+            without_terminal=True,
+        ):
+            registrations.append(proposal.registration())
+    return registrations
+
+
+def _offer_code_reads(
+    services: List[str], yes: bool, pending: Optional[List[Any]] = None
+) -> None:
+    """
+    The variables the code reads that no config file declared (BL-175),
+    offered for the contract. Required only when the code fails without
+    them (os.environ[...]); a name that sounds secret is marked secret.
+
+    `pending`: (service, entries) read from config files in the same run,
+    appended in the same block, so a name one service's config declares and
+    another's code reads becomes one table granted to both (#44).
+    """
+    contract = cast(str, contract_writer.project_contract())
+    pending = pending or []
+    try:
+        declared = contract_writer.declared_names(contract)
+    except EnvShieldException as e:
+        console.print(f"[yellow]Not looking for code reads: {e}[/yellow]")
+        if pending:
+            _append_services_to_contract(pending, "envshield init")
+        return
+    covered = {(svc, name) for svc, entries in pending for name in entries}
+    reads, problems = init_suggestions.code_read_suggestions(
+        services, declared, covered
+    )
+    for problem in problems:
+        console.print(f"[dim]Couldn't read the code of {escape(problem)}[/dim]")
+    accepted: List[Any] = []
+    if reads:
+        table = Table(title="Read by the code, not declared yet")
+        table.add_column("Variable", style="cyan", overflow="fold")
+        table.add_column("Read in", overflow="fold")
+        if len(services) > 1:
+            table.add_column("Service", overflow="fold")
+        table.add_column("Secret")
+        table.add_column("Required")
+        for read in reads:
+            where = f"{read.locations[0][0]}:{read.locations[0][1]}"
+            if len(read.locations) > 1:
+                where += f" (+{len(read.locations) - 1})"
+            row = [read.variable, where]
+            if len(services) > 1:
+                row.append(read.service)
+            row += [
+                "yes" if read.secret else "no",
+                "yes"
+                if read.required
+                else "no (the code has a fallback or can't tell)",
+            ]
+            table.add_row(*(escape(c) for c in row))
+        console.print(table)
+        if _accepts(
+            f"Add these {len(reads)} variable(s) to the contract?",
+            yes,
+            without_terminal=False,
+        ):
+            per_service: Dict[str, Dict[str, Dict[str, Any]]] = {}
+            for read in reads:
+                per_service.setdefault(read.service, {})[read.variable] = read.entry()
+            accepted = list(per_service.items())
+        else:
+            console.print(
+                "Not added. Run 'envshield init --force --yes' to add them, or "
+                f"declare them in {escape(contract)} by hand."
+            )
+    if pending and accepted:
+        _append_services_to_contract(
+            pending + accepted, "envshield init (config files and code reads)"
+        )
+    elif pending:
+        _append_services_to_contract(pending, "envshield init")
+    elif accepted:
+        _append_services_to_contract(accepted, "envshield init (code reads)")
+
+
+def _offer_template_unignore(services: List[str], yes: bool) -> None:
+    """
+    A template teammates can't receive because Git ignores it (BL-185):
+    warn, and offer a '!' rule after the one that ignores it.
+    """
+    for service in services:
+        example = config_manager.get_env_paths(service_name=service)["example_file"]
+        if not os.path.exists(example):
+            continue
+        rule = git_utils.ignore_rule(example)
+        if rule is None:
+            continue
+        console.print(
+            f"[yellow]{escape(doctor.template_ignore_message(example) or '')}[/yellow]"
+        )
+        # Git names the rule's file relative to the repository root. Write
+        # the '!' rule to that file when it's a .gitignore inside this
+        # project; otherwise (a global excludes file, a parent directory's
+        # rule) to the project's own .gitignore, which overrides both.
+        source = rule[0]
+        git_root = git_utils.get_git_root() or os.getcwd()
+        source_abs = source if os.path.isabs(source) else os.path.join(git_root, source)
+        rel = os.path.relpath(source_abs)
+        inside = not (rel == os.pardir or rel.startswith(os.pardir + os.sep))
+        target = (
+            rel if inside and os.path.basename(rel) == ".gitignore" else ".gitignore"
+        )
+        negation = "!" + os.path.relpath(
+            example, os.path.dirname(target) or "."
+        ).replace(os.sep, "/")
+        if not _accepts(
+            f"Add '{negation}' to {target} so it's committed?",
+            yes,
+            without_terminal=False,
+        ):
+            continue
+        with file_updater.open_for_write(target, append=True) as f:
+            f.write(f"\n# Shared with teammates (envshield init)\n{negation}\n")
+        if git_utils.ignore_rule(example) is None:
+            console.print(
+                f"[bold green]✓[/bold green] {escape(example)} will be committed."
+            )
+        else:
+            console.print(
+                f"[yellow]Added '{escape(negation)}' to {escape(target)}, but Git still "
+                f"ignores {escape(example)} (a parent directory may be ignored).[/yellow]"
+            )
+
+
+def _init_service_directories(
+    candidates: List[dict], project_name: str, yes: bool = False
+) -> None:
     """
     'init' in a repository of service directories (#19): one project
     contract at the root, every directory registered on it with its 'dir',
@@ -319,7 +491,6 @@ def _init_service_directories(candidates: List[dict], project_name: str) -> None
         f"[bold cyan]{config_manager.SCHEMA_FILE_NAME}[/bold cyan]."
     )
     services: Dict[str, Dict[str, Any]] = {}
-    manifests: List[Dict[str, Any]] = []
     for c in candidates:
         entry: Dict[str, Any] = {"dir": os.path.normpath(c["dir"])}
         if c["local_file"]:
@@ -327,10 +498,9 @@ def _init_service_directories(candidates: List[dict], project_name: str) -> None
         if c["example_file"]:
             entry["example_file"] = c["example_file"]
         services[c["name"]] = entry
-        if c["deployment_manifest"]:
-            manifests.append(
-                {"file": c["deployment_manifest"], "containers": {c["name"]: c["name"]}}
-            )
+    manifests = _offer_manifests(
+        {name: entry["dir"] for name, entry in services.items()}, yes
+    )
     config_manager.write_file(
         config_manager.CONFIG_FILE_NAME,
         config_manager.generate_default_config_content(
@@ -341,15 +511,18 @@ def _init_service_directories(candidates: List[dict], project_name: str) -> None
     if not os.path.exists(config_manager.SCHEMA_FILE_NAME):
         config_manager.write_file(
             config_manager.SCHEMA_FILE_NAME,
-            "# The project contract: every environment variable the services\n"
-            "# read. 'services = [...]' grants a variable to some services only;\n"
-            "# a secret always names its services.\n",
+            contract_writer.CONTRACT_HEADER,
             f"Created schema: [bold cyan]{config_manager.SCHEMA_FILE_NAME}[/bold cyan]",
         )
-    _append_service_configs(candidates, "envshield init")
+    _offer_code_reads(
+        [c["name"] for c in candidates],
+        yes,
+        pending=_service_config_entries(candidates),
+    )
     config_manager.update_gitignore()
     for c in candidates:
         schema_manager.sync_schema(service_name=c["name"])
+    _offer_template_unignore([c["name"] for c in candidates], yes)
     hooks_manager.HooksManager().install_hooks_if_needed(auto=True, force=False)
     _offer_agent_setup()
     console.print("\n[bold green]✨ Setup Complete! ✨[/bold green]")
@@ -406,6 +579,16 @@ def init(
             "With --from and a Python config module: import every top-level "
             "assignment as a declared value, instead of discovering "
             "os.environ/os.getenv reads."
+        ),
+    ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help=(
+            "Accept every suggestion without asking: the variables the code "
+            "reads, deployment manifest registrations, and un-ignoring the "
+            "template. Also confirms --force."
         ),
     ),
 ):
@@ -483,7 +666,7 @@ def init(
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(code=1)
 
-    if force and has_services:
+    if force and has_services and not yes:
         overwrite = questionary.confirm(
             "Are you sure you want to overwrite your existing EnvShield configuration? This cannot be undone.",
             default=False,
@@ -624,11 +807,12 @@ def init(
             candidates = service_discovery.discover_candidates(".")
             if candidates:
                 # One project contract for every service directory (#19).
-                _init_service_directories(candidates, project_name)
+                _init_service_directories(candidates, project_name, yes)
                 return
-            schema_content = config_manager.generate_default_schema_content(
-                project_type
-            )
+            # No config file: the contract starts empty and is filled from
+            # what the code reads. A framework template would invent
+            # requirements the project doesn't have (BL-180).
+            schema_content = contract_writer.CONTRACT_HEADER
 
         if append_to_contract:
             # Only what the re-scan found that isn't declared yet; a
@@ -650,29 +834,32 @@ def init(
                 f"Created/updated schema: [bold cyan]{config_manager.SCHEMA_FILE_NAME}[/bold cyan]",
             )
 
-        compose_file = service_discovery.find_compose_file(".", ".")
-        if compose_file and service_discovery.compose_declares_service(
-            compose_file, service_name
-        ):
-            console.print(
-                f"Found deployment manifest [bold yellow]{compose_file}[/bold yellow] -- registering it so 'check'/'doctor' validate it automatically."
-            )
-        else:
-            compose_file = None
         config_content = config_manager.generate_default_config_content(
             project_name,
             service_name,
-            deployment_manifest=compose_file,
             config_source=config_source,
+            manifests=_offer_manifests({service_name: "."}, yes) or None,
         )
         config_manager.write_file(
             config_manager.CONFIG_FILE_NAME,
             config_content,
             f"Created/updated config: [bold cyan]{config_manager.CONFIG_FILE_NAME}[/bold cyan]",
         )
+        if from_file is None and config_source:
+            others = service_discovery.discover_candidates(
+                ".", known_dirs=["."], known_names=[service_name]
+            )
+            if others:
+                console.print(
+                    "[dim]Also found directories with their own config: "
+                    f"{', '.join(sorted(c['name'] for c in others))}. Run "
+                    "'envshield service discover' to add them as services.[/dim]"
+                )
 
+        _offer_code_reads([service_name], yes)
         config_manager.update_gitignore()
         schema_manager.sync_schema(service_name=service_name)
+        _offer_template_unignore([service_name], yes)
 
         # Offer to install git hooks
         hm = hooks_manager.HooksManager()
