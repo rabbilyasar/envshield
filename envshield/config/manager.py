@@ -621,7 +621,7 @@ def get_service_schema_path(service_name: str) -> Optional[str]:
 
 def add_service(
     name: str,
-    schema_path: str,
+    schema_path: Optional[str],
     local_file: Optional[str] = None,
     example_file: Optional[str] = None,
     description: Optional[str] = None,
@@ -659,7 +659,10 @@ def add_service(
     Note: envshield.yml is rewritten via a full YAML re-serialization, so
     any hand-written comments in an existing file won't survive.
     """
-    schema_path = _ensure_within_project(schema_path, f"service '{name}' schema path")
+    if schema_path is not None:
+        schema_path = _ensure_within_project(
+            schema_path, f"service '{name}' schema path"
+        )
     if local_file:
         local_file = _ensure_within_project(local_file, f"service '{name}' local_file")
     if example_file:
@@ -677,7 +680,10 @@ def add_service(
 
     existing = services.get(name)
     entry: Dict[str, Any] = dict(existing) if isinstance(existing, dict) else {}
-    entry["schema"] = schema_path
+    if schema_path is not None:
+        entry["schema"] = schema_path
+    # None: the service uses the project contract (#19); an own 'schema:' it
+    # already has is kept, never silently moved.
     if description:
         entry["description"] = description
     if local_file:
@@ -1384,10 +1390,16 @@ def generate_default_config_content(
     deployment_manifest: Optional[str] = None,
     container: Optional[str] = None,
     config_source: Optional[str] = None,
+    services: Optional[Dict[str, Dict[str, Any]]] = None,
+    manifests: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
     """
     Generates the YAML content for a default envshield.yml configuration
     file.
+
+    `services`/`manifests`, when given, replace the single `service_name`
+    entry and its manifest: 'init' in a repository of service directories
+    registers each one on the project contract (#19).
 
     Always registers exactly one service (`service_name`), even for a
     brand-new single-service project -- there is no separate "rootless"
@@ -1412,7 +1424,9 @@ def generate_default_config_content(
     config_data: Dict[str, Any] = {
         "project_name": project_name,
         "schema": schema_path,
-        "services": {
+        "services": services
+        if services is not None
+        else {
             service_name: service_entry,
         },
         "secret_scanning": {
@@ -1422,7 +1436,9 @@ def generate_default_config_content(
             ],
         },
     }
-    if deployment_manifest:
+    if manifests:
+        config_data["manifests"] = manifests
+    elif deployment_manifest and services is None:
         config_data["manifests"] = [
             {
                 "file": deployment_manifest,

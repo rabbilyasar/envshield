@@ -241,8 +241,10 @@ class SharedSchemaWriteRefusedError(EnvShieldException):
         self.message = (
             f"Refusing to rewrite '{schema_path}': it {reason} and is "
             "hand-maintained, so regenerating it would discard its comments "
-            "and scope layout. Edit it directly instead -- 'envshield "
-            "undeclared' and 'envshield explain' show what's missing."
+            "and scope layout. Edit it directly, or add new variables with "
+            "'envshield init --from FILE', which appends to the project "
+            "contract without rewriting it; 'envshield check' shows what's "
+            "missing."
         )
         super().__init__(self.message)
 

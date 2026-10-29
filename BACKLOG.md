@@ -2079,7 +2079,7 @@ Component: `core/importer.py` (`_classify_variable`, the `defaultValue` write), 
 
 ### BL-209 — A password already committed in a schema or config file passes `scan`, the pre-commit hook and `check`
 
-Type: `SECURITY` · Evidence: `CONFIRMED` (live, 2026-10-28, while fixing `BL-208`) · Priority: **P1** (a secret already exposed by `BL-208` goes unreported) · Status: **fixed by [#96](https://github.com/rabbilyasar/envshield/issues/96), branch `rabbilyasar/bl-209-credential-default-gate`, unmerged**
+Type: `SECURITY` · Evidence: `CONFIRMED` (live, 2026-10-28, while fixing `BL-208`) · Priority: **P1** (a secret already exposed by `BL-208` goes unreported) · Status: **fixed by [#96](https://github.com/rabbilyasar/envshield/issues/96), merged `a046624` (PR #98), unreleased**
 Component: `core/scanner.py` (no URL-credential rule), schema load (`config_manager`), `check`, `doctor`
 
 - **Reproduction:** `env.schema.toml` with `[REDIS_URL] secret = false, defaultValue = "redis://:zq9pwLEAK@cache:6379"`, staged. `scan`: "No secrets found." `scan --staged` (the pre-commit hook): "No secrets or undeclared reads found." `check --json`: VALID.
@@ -2092,6 +2092,25 @@ Component: `core/scanner.py` (no URL-credential rule), schema load (`config_mana
 - **Tests:** `envshield/tests/test_credential_default_gate.py` (58): every credential form from `BL-208`'s tests, with `secret = false` and absent, through loading, `extends`, a per-service override, `check` (human, `--json`, `--code-only`), `doctor`, `schema sync` (writes no `.env.example`), `explain`, `generate`, `scan --staged`, the renderers, and `schema diff` (library and the CLI on the fixing commit); safe defaults still load and a plain default change still shows its values. Against the old code, 43 of the 58 fail.
 - **On a real repository (2026-10-29):** the cal.com trial clone with a pre-fix leak committed (`DATABASE_URL` default `postgres://app:<canary>@db:5432/calendso`): `check`, `doctor`, `schema sync`, `explain` and `scan --staged` all exit 1 naming `DATABASE_URL`, none prints the password; the commit that removes it (default dropped, `secret = true`) diffs with exit 0, reporting the changes without the old value, and `check --since HEAD --code-only` passes.
 - **Compatibility:** a project whose schema already holds such a default now fails every command until it's removed, by design (fail closed on an exposed secret). The v5 migration guide must say so.
+
+
+A fifth real-repository trial on 2026-10-29, for V2-2 (#19, branch `rabbilyasar/v2-2-contract-writer`): the same 13 repositories, fresh shallow clones (`--depth 40`) under `~/envshield-trials/2026-10-29-v2-2`, read-only toward every remote, `COLUMNS=80`; `.env` canaries as in the 2026-10-28 trials (credential-shaped for `*_URL`/`*_URI`/`*_DSN`). The ten unconfigured ones got `init` (no terminal). Each then ran `service discover --yes`, `service add trialsvc <largest top-level directory> --import <a file with a secret and a non-secret>`, `init --from <a file with a flag and a password> --service <first service>`, `check --json`, `schema diff --json`, `check --since HEAD --code-only --json` and `service list`. After every writing step the contract was compared with its previous copy.
+- **Append-only:** on all ten contract repositories, after `discover`, `service add --import` and `init --from`, the previous contract was an exact byte prefix of the new one, and it parsed every time. `discover` registered new directories on the contract (cal.com `packages/prisma`; Plane `apps/admin`, `apps/api`, `apps/live` and more: 7 services), each with `dir` and no schema of its own.
+- **Grants:** no unscoped secret in any final contract; every service loaded (`check --json`: no service-level error on any repository).
+- **Refusals that were right:** `service add` exited 1 on Dify and jossjobs because the trial picked a directory `discover` had just registered for another service ("one directory of code is one logical service").
+- **`schema diff`** exited 1 on the contract repositories because the trial's `init --from` added required variables (`breaking`, as designed); variables an unscoped table now grants to a newly registered service show as `informational`.
+- **Legacy projects** (jossjobs, kemonchilo, phurut, which already had per-service schemas): unchanged layout, one tip line per command.
+- **Secret safety:** no canary or real value (kemonchilo's `.env`) in any output; no trial secret or credential URL written as a default (observed defaults from `init --from`/`--import` aren't written without a terminal to confirm them).
+- **Timing:** Twenty's recorded `check --json` time (37,245 s) was the machine suspending mid-run; re-timed at 57 s, as in earlier trials.
+
+### BL-210 — Legacy `service discover` registers a directory that has only a `.env.example` but never seeds its schema
+
+Type: `BUG` · Evidence: `CONFIRMED` (code reading and live, 2026-10-29, while implementing #19) · Priority: **P3** · Status: **open** (legacy path; the project-contract path is fixed in #19)
+Component: `cli.py::service_discover` (legacy branch), `service_discovery.discover_candidates`
+
+- **Current behavior:** `discover_candidates` leaves `local_file`/`example_file` unset when the files have their default names. The legacy branch then seeds from `c["local_file"] or c["example_file"] or <dir>/.env`, so a directory whose only config is a default-named `.env.example` (a fresh clone) is registered with no schema file and no message; every command then fails for it with "schema not found".
+- **Expected behavior:** seed from `<dir>/.env.example` when there is no `.env`, as the project-contract path now does (`cli._candidate_config_file`, #19).
+- **Why not fixed in #19:** #19 keeps legacy layouts' behavior unchanged apart from one tip line.
 
 ---
 

@@ -19,6 +19,7 @@ from .config import manager as config_manager
 from .core import (
     agent_setup,
     contract_diff,
+    contract_writer,
     dependency_diff,
     dependency_snapshot,
     doctor,
@@ -153,6 +154,213 @@ def _seed_schema_from_file(
         f.write(content)
 
 
+def _contract_entries_from_file(
+    config_file: str, as_local_values: bool = False, interactive: bool = False
+) -> Dict[str, Dict[str, Any]]:
+    """The variables the importer finds in `config_file`, as field tables."""
+    content = importer.generate_schema_from_file(
+        config_file, interactive=interactive, as_local_values=as_local_values
+    )
+    parsed = toml.loads(content)
+    return {k: v for k, v in parsed.items() if k != "extends" and isinstance(v, dict)}
+
+
+def _confirm_observed_defaults(entries: Dict[str, Dict[str, Any]], source: str) -> None:
+    """
+    'init --from' / 'service add --import' into the project contract (#19):
+    a default taken from a value observed in `source` is committed only when
+    confirmed. Without a terminal to ask on, none is written.
+    """
+    asked = sorted(k for k, v in entries.items() if "defaultValue" in v)
+    if not asked:
+        return
+    if not hooks_manager._is_interactive():
+        for key in asked:
+            del entries[key]["defaultValue"]
+        console.print(
+            f"[yellow]Left out {len(asked)} default value(s) taken from "
+            f"'{escape(source)}' (no terminal to confirm them): "
+            f"{', '.join(asked)}. Add a default by hand if it's safe to "
+            "commit.[/yellow]"
+        )
+        return
+    for key in asked:
+        keep = questionary.confirm(
+            f"Commit {entries[key]['defaultValue']!r} (seen in {source}) as "
+            f"{key}'s default in the project contract?",
+            default=False,
+        ).ask()
+        if not keep:
+            del entries[key]["defaultValue"]
+
+
+def _append_to_contract(
+    entries: Dict[str, Dict[str, Any]], service: str, command: str
+) -> contract_writer.AppendResult:
+    """Appends `entries` to the project contract for `service` and reports it."""
+    return _append_services_to_contract([(service, entries)], command)
+
+
+def _append_services_to_contract(
+    per_service: List[Any], command: str
+) -> contract_writer.AppendResult:
+    """
+    Appends what each (service, entries) pair read to the project contract
+    in one block, a name several of them read granted to all of them, and
+    reports it.
+    """
+    contract = cast(str, contract_writer.project_contract())
+    multi = len(config_manager.get_services()) > 1
+    who = ", ".join(escape(service) for service, _ in per_service)
+    result = contract_writer.append_for_services(contract, per_service, multi, command)
+    if result.appended:
+        console.print(
+            f"Added {len(result.appended)} variable(s) to [bold cyan]"
+            f"{escape(contract)}[/bold cyan] for {who}: "
+            f"{', '.join(result.appended)}"
+        )
+    else:
+        console.print(
+            f"Nothing new to add to [bold cyan]{escape(contract)}[/bold cyan] "
+            f"for {who}."
+        )
+    if result.conflicting_defaults:
+        console.print(
+            "[yellow]Read with different values by different services, so "
+            "declared without a default: "
+            f"{', '.join(sorted(result.conflicting_defaults))}.[/yellow]"
+        )
+    if result.already_declared:
+        console.print(
+            f"[dim]Already declared, so not added again: "
+            f"{', '.join(sorted(result.already_declared))}. If {who} needs one "
+            "that is granted only to other services, add it to that "
+            "variable's services list by hand.[/dim]"
+        )
+    return result
+
+
+def _scope_new_contract_secrets(content: str, service: str) -> str:
+    """
+    A new contract's secrets are granted to the service 'init' wrote it for
+    (#19), so registering a second service later can't turn them into
+    unscoped secrets in a shared schema, which fails every command. The
+    leading comment block is kept as written.
+    """
+    try:
+        parsed = toml.loads(content)
+    except (toml.TomlDecodeError, TypeError, IndexError):
+        return content
+    changed = False
+    for details in parsed.values():
+        if (
+            isinstance(details, dict)
+            and details.get("secret")
+            and ("services" not in details)
+        ):
+            details["services"] = [service]
+            changed = True
+    if not changed:
+        return content
+    header = []
+    for line in content.splitlines(keepends=True):
+        if line.startswith("[") or (line.strip() and not line.startswith("#")):
+            break
+        header.append(line)
+    return "".join(header) + toml.dumps(parsed)
+
+
+def _candidate_config_file(c: dict) -> Optional[str]:
+    """The file a discovered directory's variables are read from: its own
+    local or example file, else a default-named '.env', else '.env.example'
+    (discovery leaves default names unset)."""
+    for path in (
+        c["local_file"],
+        c["example_file"],
+        os.path.join(c["dir"], ".env"),
+        os.path.join(c["dir"], ".env.example"),
+    ):
+        if path and os.path.exists(path):
+            return path
+    return None
+
+
+def _append_service_configs(candidates: List[dict], command: str) -> None:
+    """Each discovered directory's variables, read from its own config file,
+    appended to the project contract in one block."""
+    per_service = []
+    for c in candidates:
+        config_file = _candidate_config_file(c)
+        if config_file:
+            console.print(f"\n[bold]{escape(c['name'])}[/bold] ({escape(config_file)})")
+            per_service.append(
+                (
+                    c["name"],
+                    _contract_entries_from_file(
+                        config_file, as_local_values=config_file == c["local_file"]
+                    ),
+                )
+            )
+    if per_service:
+        _append_services_to_contract(per_service, command)
+
+
+def _init_service_directories(candidates: List[dict], project_name: str) -> None:
+    """
+    'init' in a repository of service directories (#19): one project
+    contract at the root, every directory registered on it with its 'dir',
+    and each one's variables appended from its own config file.
+    """
+    names = ", ".join(sorted(c["name"] for c in candidates))
+    console.print(
+        f"Found service director{'y' if len(candidates) == 1 else 'ies'} with "
+        f"their own config: {names}. Registering "
+        f"{'it' if len(candidates) == 1 else 'each'} on one project contract, "
+        f"[bold cyan]{config_manager.SCHEMA_FILE_NAME}[/bold cyan]."
+    )
+    services: Dict[str, Dict[str, Any]] = {}
+    manifests: List[Dict[str, Any]] = []
+    for c in candidates:
+        entry: Dict[str, Any] = {"dir": os.path.normpath(c["dir"])}
+        if c["local_file"]:
+            entry["local_file"] = c["local_file"]
+        if c["example_file"]:
+            entry["example_file"] = c["example_file"]
+        services[c["name"]] = entry
+        if c["deployment_manifest"]:
+            manifests.append(
+                {"file": c["deployment_manifest"], "containers": {c["name"]: c["name"]}}
+            )
+    config_manager.write_file(
+        config_manager.CONFIG_FILE_NAME,
+        config_manager.generate_default_config_content(
+            project_name, "", services=services, manifests=manifests or None
+        ),
+        f"Created/updated config: [bold cyan]{config_manager.CONFIG_FILE_NAME}[/bold cyan]",
+    )
+    if not os.path.exists(config_manager.SCHEMA_FILE_NAME):
+        config_manager.write_file(
+            config_manager.SCHEMA_FILE_NAME,
+            "# The project contract: every environment variable the services\n"
+            "# read. 'services = [...]' grants a variable to some services only;\n"
+            "# a secret always names its services.\n",
+            f"Created schema: [bold cyan]{config_manager.SCHEMA_FILE_NAME}[/bold cyan]",
+        )
+    _append_service_configs(candidates, "envshield init")
+    config_manager.update_gitignore()
+    for c in candidates:
+        schema_manager.sync_schema(service_name=c["name"])
+    hooks_manager.HooksManager().install_hooks_if_needed(auto=True, force=False)
+    _offer_agent_setup()
+    console.print("\n[bold green]✨ Setup Complete! ✨[/bold green]")
+    console.print(
+        "Contract created. Review 'env.schema.toml': descriptions are "
+        "placeholders, and the secret/type values are guesses."
+    )
+    console.print("\n[bold cyan]Next step:[/bold cyan]")
+    console.print("  envshield setup    # Configure your local environment")
+
+
 def _print_service_header(targets: List[str], target: str) -> None:
     """Labels each service's output when a command is running against more than one."""
     if len(targets) > 1:
@@ -261,8 +469,16 @@ def init(
         )
         raise typer.Exit()
 
+    # 'init --force' on a project contract re-scans and appends new
+    # variables; the contract itself is never rewritten (#19).
+    append_to_contract = False
     try:
-        schema_manager.assert_schema_rewritable(config_manager.SCHEMA_FILE_NAME)
+        contract = config_manager.get_project_schema_path() if has_services else None
+        append_to_contract = bool(contract) and os.path.normpath(
+            cast(str, contract)
+        ) == os.path.normpath(config_manager.SCHEMA_FILE_NAME)
+        if not append_to_contract:
+            schema_manager.assert_schema_rewritable(config_manager.SCHEMA_FILE_NAME)
     except EnvShieldException as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(code=1)
@@ -407,33 +623,32 @@ def init(
             # never mentions the real services at all.
             candidates = service_discovery.discover_candidates(".")
             if candidates:
-                names = sorted(c["name"] for c in candidates)
-                console.print(
-                    "[yellow]This looks like a multi-service project -- found "
-                    f"service-like director{'y' if len(names) == 1 else 'ies'} "
-                    f"with their own config: {', '.join(names)}. A single generic "
-                    "schema at the project root won't capture their real "
-                    "variables. Consider 'envshield service discover' "
-                    "instead.[/yellow]"
-                )
-                if hooks_manager._is_interactive():
-                    proceed = questionary.confirm(
-                        "Continue with a single generic template at the "
-                        "project root anyway?",
-                        default=False,
-                    ).ask()
-                    if not proceed:
-                        console.print("[yellow]Initialization cancelled.[/yellow]")
-                        raise typer.Exit()
+                # One project contract for every service directory (#19).
+                _init_service_directories(candidates, project_name)
+                return
             schema_content = config_manager.generate_default_schema_content(
                 project_type
             )
 
-        config_manager.write_file(
-            config_manager.SCHEMA_FILE_NAME,
-            schema_content,
-            f"Created/updated schema: [bold cyan]{config_manager.SCHEMA_FILE_NAME}[/bold cyan]",
-        )
+        if append_to_contract:
+            # Only what the re-scan found that isn't declared yet; a
+            # template's made-up variables are never appended.
+            if used_real_source:
+                fresh = {
+                    key: details
+                    for key, details in toml.loads(schema_content).items()
+                    if key != "extends"
+                    and isinstance(details, dict)
+                    and key not in (existing_schema or {})
+                }
+                _append_to_contract(fresh, service_name, "envshield init --force")
+        else:
+            schema_content = _scope_new_contract_secrets(schema_content, service_name)
+            config_manager.write_file(
+                config_manager.SCHEMA_FILE_NAME,
+                schema_content,
+                f"Created/updated schema: [bold cyan]{config_manager.SCHEMA_FILE_NAME}[/bold cyan]",
+            )
 
         compose_file = service_discovery.find_compose_file(".", ".")
         if compose_file and service_discovery.compose_declares_service(
@@ -2759,6 +2974,21 @@ def _import_schema(
                 schema_manager.assert_schema_rewritable(output)
                 config_manager.add_service(service, output)
 
+        if service and config_manager.uses_project_schema(service):
+            # The project contract is only ever appended to (#19); --force
+            # has nothing to overwrite.
+            entries = _contract_entries_from_file(
+                file, as_local_values=as_local_values, interactive=interactive
+            )
+            _confirm_observed_defaults(entries, file)
+            _append_to_contract(
+                entries, service, f"envshield init --from {file} --service {service}"
+            )
+            schema_manager.sync_schema(service_name=service)
+            return
+        if not contract_writer.project_contract():
+            console.print(f"[dim]{contract_writer.LEGACY_TIP}[/dim]")
+
         schema_manager.assert_schema_rewritable(output)
 
         if os.path.exists(output) and not force and not interactive:
@@ -2903,6 +3133,24 @@ def service_add(
                 console.print(
                     f"[dim]Found deployment manifest {deployment_manifest} -- registering it too.[/dim]"
                 )
+        contract = contract_writer.project_contract()
+        existing_entry = config_manager.get_services().get(name)
+        has_own_schema = isinstance(existing_entry, dict) and (
+            "schema" in existing_entry or "path" in existing_entry
+        )
+        if contract and schema is None and not has_own_schema:
+            _service_add_to_contract(
+                name,
+                directory,
+                contract,
+                local_file=local_file,
+                example_file=example_file,
+                description=description,
+                import_from=import_from,
+                deployment_manifest=deployment_manifest,
+                manifest_container=manifest_container,
+            )
+            return
         # DIRECTORY is persisted as the service's explicit 'dir' whenever
         # the schema's own location wouldn't imply it: a schema outside
         # DIRECTORY (--schema), or a schema other services already use --
@@ -2983,9 +3231,77 @@ def service_add(
                 f"one from a real config file, or create '{schema_path}' by "
                 "hand.[/yellow]"
             )
+        if schema is None and not contract:
+            console.print(f"[dim]{contract_writer.LEGACY_TIP}[/dim]")
     except EnvShieldException as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(code=1)
+
+
+def _service_add_to_contract(
+    name: str,
+    directory: str,
+    contract: str,
+    local_file: Optional[str],
+    example_file: Optional[str],
+    description: Optional[str],
+    import_from: Optional[str],
+    deployment_manifest: Optional[str],
+    manifest_container: Optional[str],
+) -> None:
+    """'service add' in a project with a contract (#19): register the
+    service with its 'dir' and no schema of its own; '--import' appends."""
+    service_dir = os.path.normpath(directory)
+    config_manager.reject_duplicate_dir(name, service_dir, contract)
+    config_manager.add_service(
+        name,
+        None,
+        local_file=local_file,
+        example_file=example_file,
+        description=description,
+        service_dir=service_dir,
+    )
+    console.print(
+        f"[bold green]✓[/bold green] Registered service [bold cyan]{escape(name)}"
+        f"[/bold cyan] → {escape(service_dir)} (project contract "
+        f"{escape(contract)})"
+    )
+    services = config_manager.get_services()
+    missing_dir = [
+        user
+        for user in config_manager.get_schema_users(contract)
+        if user != name
+        and not (isinstance(services.get(user), dict) and "dir" in services[user])
+    ]
+    if missing_dir:
+        console.print(
+            f"[yellow]{', '.join(missing_dir)} now need"
+            f"{'s' if len(missing_dir) == 1 else ''} a 'dir:' in "
+            f"{config_manager.CONFIG_FILE_NAME}: with more than one service on "
+            "the project contract, each says where its code is. Re-run "
+            "'envshield service add <name> <directory>' for "
+            f"{'it' if len(missing_dir) == 1 else 'each'}.[/yellow]"
+        )
+    if deployment_manifest:
+        config_manager.add_manifest(
+            deployment_manifest, {manifest_container or name: name}
+        )
+    if import_from:
+        entries = _contract_entries_from_file(
+            import_from,
+            as_local_values=local_file is not None and import_from == local_file,
+        )
+        _confirm_observed_defaults(entries, import_from)
+        _append_to_contract(
+            entries, name, f"envshield service add {name} --import {import_from}"
+        )
+    else:
+        console.print(
+            f"'{escape(name)}' uses the project contract '{escape(contract)}'. "
+            f"Declare the variables only it reads there with services = "
+            f'["{escape(name)}"], or add them from a config file: '
+            f"'envshield init --from FILE --service {escape(name)}'."
+        )
 
 
 @service_app.command("remove")
@@ -3174,6 +3490,11 @@ def service_discover(
         console.print("[yellow]Nothing selected.[/yellow]")
         return
 
+    contract = contract_writer.project_contract()
+    if contract:
+        _discover_onto_contract(selected, contract)
+        return
+
     registered_count = 0
     for c in selected:
         schema_path = os.path.join(c["dir"], config_manager.SCHEMA_FILE_NAME)
@@ -3209,11 +3530,51 @@ def service_discover(
     console.print(
         f"\n[bold green]✨ Added {registered_count} service(s) to envshield.yml.[/bold green]"
     )
+    console.print(f"[dim]{contract_writer.LEGACY_TIP}[/dim]")
 
     # Offer to install git hooks
     hm = hooks_manager.HooksManager()
     hm.install_hooks_if_needed(auto=True, force=False)
 
+    console.print("\n[bold cyan]Next step:[/bold cyan]")
+    console.print("  envshield setup    # Configure your local environment")
+
+
+def _discover_onto_contract(selected: List[dict], contract: str) -> None:
+    """'service discover' in a project with a contract (#19): every selected
+    directory is registered with its 'dir', then its variables appended."""
+    registered = []
+    for c in selected:
+        service_dir = os.path.normpath(c["dir"])
+        try:
+            config_manager.reject_duplicate_dir(c["name"], service_dir, contract)
+            config_manager.add_service(
+                c["name"],
+                None,
+                local_file=c["local_file"],
+                example_file=c["example_file"],
+                service_dir=service_dir,
+            )
+            if c["deployment_manifest"]:
+                config_manager.add_manifest(
+                    c["deployment_manifest"], {c["name"]: c["name"]}
+                )
+        except EnvShieldException as e:
+            console.print(f"[bold red]Error:[/bold red] Skipping '{c['name']}': {e}")
+            continue
+        console.print(
+            f"[bold green]✓[/bold green] Registered [bold cyan]{escape(c['name'])}"
+            f"[/bold cyan] → {escape(service_dir)} (project contract "
+            f"{escape(contract)})"
+        )
+        registered.append(c)
+    # Appended after every registration, so each grant sees the final
+    # number of services.
+    _append_service_configs(registered, "envshield service discover")
+    console.print(
+        f"\n[bold green]✨ Added {len(registered)} service(s) to envshield.yml.[/bold green]"
+    )
+    hooks_manager.HooksManager().install_hooks_if_needed(auto=True, force=False)
     console.print("\n[bold cyan]Next step:[/bold cyan]")
     console.print("  envshield setup    # Configure your local environment")
 
