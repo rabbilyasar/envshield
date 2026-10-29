@@ -11,7 +11,7 @@ import typer
 from rich.console import Console
 
 from ..config import manager as config_manager
-from ..core.exceptions import EnvShieldException, ServiceConfigError
+from ..core.exceptions import EnvShieldException
 from ..utils import git_utils
 from . import file_updater
 
@@ -320,10 +320,7 @@ def schema_coverage() -> List[Tuple[str, List[str], List[str]]]:
     for name in config_manager.get_services():
         schema = config_manager.get_service_schema_path(name)
         if not schema:
-            raise ServiceConfigError(
-                f"Service '{name}' in {config_manager.CONFIG_FILE_NAME} has no "
-                "'schema:' path, so EnvShield can't tell which changes affect it."
-            )
+            raise config_manager.missing_schema_error(name)
         key = os.path.realpath(schema)
         if key in seen:
             continue

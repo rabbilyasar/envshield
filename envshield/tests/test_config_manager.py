@@ -1684,3 +1684,218 @@ class TestExplicitServiceDir:
         monkeypatch.chdir(tmp_path)
         with pytest.raises(UnsafePathError):
             config_manager.add_service("api", "env.schema.toml", service_dir="../x")
+
+
+# --- The project contract: a top-level 'schema:' (V2-1, #18) ----------------
+
+
+class TestProjectContract:
+    SCHEMA = '[PORT]\ndescription = "p"\n'
+
+    def _setup(self, monkeypatch, tmp_path, config, schema=None, files=None):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "envshield.yml").write_text(config)
+        (tmp_path / "env.schema.toml").write_text(schema or self.SCHEMA)
+        for path, content in (files or {}).items():
+            (tmp_path / path).parent.mkdir(parents=True, exist_ok=True)
+            (tmp_path / path).write_text(content)
+
+    def test_top_level_only(self, monkeypatch, tmp_path):
+        self._setup(
+            monkeypatch,
+            tmp_path,
+            "schema: env.schema.toml\nservices:\n"
+            "  api:\n    dir: api\n  worker:\n    dir: worker\n",
+        )
+        for name in ("api", "worker"):
+            assert config_manager.get_service_schema_path(name) == "env.schema.toml"
+            assert config_manager.uses_project_schema(name)
+        assert config_manager.get_schema_users("env.schema.toml") == ["api", "worker"]
+        assert config_manager.get_service_dir("api") == "api"
+        assert "PORT" in config_manager.load_schema("api")
+
+    def test_per_service_only_is_legacy_and_unchanged(self, monkeypatch, tmp_path):
+        self._setup(
+            monkeypatch,
+            tmp_path,
+            "services:\n  api:\n    schema: api/env.schema.toml\n",
+            files={"api/env.schema.toml": self.SCHEMA},
+        )
+        assert config_manager.get_project_schema_path() is None
+        assert not config_manager.uses_project_schema("api")
+        assert config_manager.get_service_schema_path("api") == "api/env.schema.toml"
+        assert config_manager.get_schema_users("api/env.schema.toml") == ["api"]
+        # Legacy: the directory the schema lives in.
+        assert config_manager.get_service_dir("api") == "api"
+
+    def test_mixed_layout(self, monkeypatch, tmp_path):
+        self._setup(
+            monkeypatch,
+            tmp_path,
+            "schema: env.schema.toml\nservices:\n"
+            "  api:\n    dir: api\n"
+            "  legacy:\n    schema: legacy/env.schema.toml\n",
+            files={"legacy/env.schema.toml": '[OLD]\ndescription = "o"\n'},
+        )
+        assert config_manager.get_service_schema_path("api") == "env.schema.toml"
+        assert (
+            config_manager.get_service_schema_path("legacy") == "legacy/env.schema.toml"
+        )
+        assert config_manager.get_schema_users("env.schema.toml") == ["api"]
+        assert config_manager.get_schema_users("legacy/env.schema.toml") == ["legacy"]
+        assert config_manager.get_service_dir("api") == "api"
+        assert config_manager.get_service_dir("legacy") == "legacy"
+        assert "OLD" in config_manager.load_schema("legacy")
+        assert "OLD" not in config_manager.load_schema("api")
+
+    @pytest.mark.parametrize("entry", ["  app: {}\n", "  app:\n"])
+    def test_single_service_without_dir_is_the_project_root(
+        self, monkeypatch, tmp_path, entry
+    ):
+        # 'app:' alone is YAML null: a service with no settings of its own.
+        self._setup(
+            monkeypatch,
+            tmp_path,
+            "schema: config/env.schema.toml\nservices:\n" + entry,
+            files={"config/env.schema.toml": self.SCHEMA},
+        )
+        assert config_manager.get_service_schema_path("app") == "config/env.schema.toml"
+        # Not the schema's own directory, as a legacy schema would be.
+        assert config_manager.get_service_dir("app") == "."
+
+    def test_multiple_services_missing_dir(self, monkeypatch, tmp_path):
+        self._setup(
+            monkeypatch,
+            tmp_path,
+            "schema: env.schema.toml\nservices:\n  api: {}\n  worker: {}\n",
+        )
+        for name in ("api", "worker"):
+            with pytest.raises(ServiceConfigError, match="needs a 'dir:'"):
+                config_manager.get_service_dir(name)
+
+    def test_contract_service_needs_dir_beside_a_legacy_service(
+        self, monkeypatch, tmp_path
+    ):
+        # Not a single-service project, even though the contract has one user.
+        self._setup(
+            monkeypatch,
+            tmp_path,
+            "schema: env.schema.toml\nservices:\n  api: {}\n"
+            "  legacy:\n    schema: legacy/env.schema.toml\n",
+            files={"legacy/env.schema.toml": self.SCHEMA},
+        )
+        with pytest.raises(ServiceConfigError, match="needs a 'dir:'"):
+            config_manager.get_service_dir("api")
+
+    def test_neither_key_names_both_options(self, monkeypatch, tmp_path):
+        self._setup(monkeypatch, tmp_path, "services:\n  api:\n    dir: api\n")
+        assert config_manager.get_service_schema_path("api") is None
+        for call in (
+            lambda: config_manager.load_schema("api"),
+            lambda: config_manager.get_service_dir("api"),
+            lambda: config_manager.get_schema_users("env.schema.toml"),
+        ):
+            with pytest.raises(ServiceConfigError) as exc:
+                call()
+            assert "top-level 'schema:'" in str(exc.value)
+            assert "own 'schema:'" in str(exc.value)
+
+    def test_unknown_service_is_still_not_found(self, monkeypatch, tmp_path):
+        self._setup(
+            monkeypatch, tmp_path, "schema: env.schema.toml\nservices:\n  api: {}\n"
+        )
+        assert config_manager.get_service_schema_path("nope") is None
+        with pytest.raises(SchemaNotFoundError, match="not found"):
+            config_manager.load_schema("nope")
+
+    def test_two_contract_services_with_the_same_dir(self, monkeypatch, tmp_path):
+        self._setup(
+            monkeypatch,
+            tmp_path,
+            "schema: env.schema.toml\nservices:\n"
+            "  api:\n    dir: app\n  worker:\n    dir: app\n",
+        )
+        with pytest.raises(DuplicateServiceDirError):
+            config_manager.get_service_dir("api")
+
+    def test_unscoped_secret_with_more_than_one_user(self, monkeypatch, tmp_path):
+        self._setup(
+            monkeypatch,
+            tmp_path,
+            "schema: env.schema.toml\nservices:\n"
+            "  api:\n    dir: api\n  worker:\n    dir: worker\n",
+            schema='[STRIPE_KEY]\ndescription = "s"\nsecret = true\n',
+        )
+        with pytest.raises(SchemaScopeError, match="STRIPE_KEY"):
+            config_manager.load_schema("api")
+
+    def test_unscoped_secret_is_fine_for_a_single_user(self, monkeypatch, tmp_path):
+        self._setup(
+            monkeypatch,
+            tmp_path,
+            "schema: env.schema.toml\nservices:\n  api: {}\n",
+            schema='[STRIPE_KEY]\ndescription = "s"\nsecret = true\n',
+        )
+        assert "STRIPE_KEY" in config_manager.load_schema("api")
+
+    @pytest.mark.parametrize("value", ["''", "[a, b]", "../outside.toml"])
+    def test_invalid_top_level_schema(self, monkeypatch, tmp_path, value):
+        self._setup(monkeypatch, tmp_path, f"schema: {value}\nservices:\n  api: {{}}\n")
+        with pytest.raises((ServiceConfigError, UnsafePathError)):
+            config_manager.load_schema("api")
+
+    def test_generated_default_config_uses_the_contract_and_loads(
+        self, monkeypatch, tmp_path
+    ):
+        import yaml
+
+        monkeypatch.chdir(tmp_path)
+        content = config_manager.generate_default_config_content("proj", "proj")
+        data = yaml.safe_load(content)
+        assert data["schema"] == "env.schema.toml"
+        assert "schema" not in data["services"]["proj"]
+        (tmp_path / "envshield.yml").write_text(content)
+        (tmp_path / "env.schema.toml").write_text(self.SCHEMA)
+        assert config_manager.get_service_schema_path("proj") == "env.schema.toml"
+        assert config_manager.get_service_dir("proj") == "."
+        assert "PORT" in config_manager.load_schema("proj")
+
+    def test_revision_lookup_uses_the_contract(self, monkeypatch, tmp_path):
+        import subprocess
+
+        from envshield.core import schema_snapshot
+
+        self._setup(
+            monkeypatch,
+            tmp_path,
+            "schema: env.schema.toml\nservices:\n"
+            "  api:\n    dir: api\n  worker:\n    dir: worker\n",
+            schema='[KEY]\ndescription = "k"\nsecret = true\nservices = ["api"]\n',
+        )
+        for args in (
+            ["init", "-q"],
+            [
+                "-c",
+                "user.email=t@e.x",
+                "-c",
+                "user.name=T",
+                "-c",
+                "commit.gpgsign=false",
+                "add",
+                "-A",
+            ],
+            [
+                "-c",
+                "user.email=t@e.x",
+                "-c",
+                "user.name=T",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-qm",
+                "c",
+            ],
+        ):
+            subprocess.run(["git", *args], check=True, capture_output=True)
+        assert "KEY" in schema_snapshot.load_schema_for_diff("api", "HEAD")
+        assert "KEY" not in schema_snapshot.load_schema_for_diff("worker", "HEAD")
