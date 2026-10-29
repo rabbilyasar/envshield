@@ -2143,7 +2143,7 @@ Component: `core/setup_manager.py::run_setup`, `core/file_updater.py`
 
 ### BL-212 — `setup` aborted without a terminal and never said what was ready or still needed
 
-Type: `BUG` / `AI_AGENT` · Evidence: `CONFIRMED` (agent-style evaluation 2026-10-19, `BL-040`; plan label B5) · Priority: **P2** · Status: **fixed by V3-2 ([#21](https://github.com/rabbilyasar/envshield/issues/21)), branch `rabbilyasar/v3-2-setup-report-noninteractive`, unmerged**
+Type: `BUG` / `AI_AGENT` · Evidence: `CONFIRMED` (agent-style evaluation 2026-10-19, `BL-040`; plan label B5) · Priority: **P2** · Status: **fixed by V3-2 ([#21](https://github.com/rabbilyasar/envshield/issues/21)), merged `c83d386` (PR #102), unreleased**
 Component: `core/setup_manager.py::run_setup`, `cli.py::setup`
 
 - **Behavior before:** without a terminal (CI, an agent), `setup` printed a getpass warning and "Input is not a terminal … Aborted" (exit 1), so nothing was written, not even defaults; with a terminal it ended with "Configuration complete" even when required variables were left unset, and gave no per-variable account.
@@ -2151,6 +2151,28 @@ Component: `core/setup_manager.py::run_setup`, `cli.py::setup`
 - **Tests:** `envshield/tests/core/test_setup_report.py` (7): every category and the counts, all-ready exits 0, scenario 13 (no terminal: no prompt, exit 1, the SET YOURSELF list, a partial write, `check`'s exit code unchanged), `--non-interactive` on a terminal, an optional invalid empty kept, a real subprocess with no stdin, and a known secret absent from stdout and stderr. All 7 fail on the pre-#21 code. Six existing setup tests were updated for the exit code and the report's wording.
 - **On real repositories (2026-10-30):** `setup` as a real process with no stdin on the 13 #44 trial clones: never prompted, under 1 s each, every original line kept, no canary or real value (kemonchilo's `.env`) in any output, no traceback. Exit 0 on cal.com, Documenso, Formbricks, jossjobs, Langfuse and phurut; exit 1 where something required is left (e.g. kemonchilo: 6 of 22 ready, its real `.env` leaving Telegram/WhatsApp secrets and `NODE_ENV` empty and build-time names like `GIT_SHA` unset, the `BL-201` shape).
 - **Relationships:** `BL-191` (B5), `BL-207`, `BL-211` (#20), #22.
+
+
+### BL-213 — A reference or encrypted value in a local file is reported VALID
+
+Type: `BUG` (false-clean) · Evidence: `CONFIRMED` (live, 2026-10-30, while testing the #22 design) · Priority: **P1** · Status: **open ([#103](https://github.com/rabbilyasar/envshield/issues/103))**
+Component: `core/verdicts.py`, `parsers/_dotenv.py` value states
+
+- **Reproduction:** `.env` values that point at or encrypt a secret are judged as the value itself. For a string field all of these are VALID; for `type = "url"`, `op://`, `sm://` and `bws://` are VALID and `vault:`, dotenvx `encrypted:` and SOPS `ENC[...]` are INVALID: `op://dev/postgres/url` (1Password, as used by `op run --env-file`), `sm://project/secret` (Berglas), `bws://abc-123`, `vault:secret/data/db#url`, `encrypted:BD...`, `ENC[AES256_GCM,data:...]`.
+- **Why it matters:** "never report VALID for something unchecked" (§1); `check` passes while the real value was never seen, a silent false-clean.
+- **Expected:** COULD NOT VERIFY `external_reference`, naming the form, whatever the field type; accepted with `--accept-unverified external_reference`.
+- **Relationships:** #22 design (`docs/architecture/secret-managers.md`), `BL-199` (Compose embedded references), D-10.
+- **Issue:** [#103](https://github.com/rabbilyasar/envshield/issues/103).
+
+### BL-214 — `check` and `doctor` hang forever on a mounted `.env` (a named pipe nobody serves)
+
+Type: `BUG` · Evidence: `CONFIRMED` (live, 2026-10-30) · Priority: **P1** (a hang in a command the hooks and agents run) · Status: **open ([#104](https://github.com/rabbilyasar/envshield/issues/104))**
+Component: local-file reading in `evaluator` / `parsers`, `doctor`
+
+- **Reproduction:** `mkfifo .env`, then `envshield check --json` and `envshield doctor --json`: both still blocked after 8 s. A 1Password Developer Environments mount is exactly this while 1Password is locked or not running. `scan` and `setup` finish. A *served* pipe (a writer streaming `.env` content) is read and validated correctly, with no value printed.
+- **Expected:** open a pipe without blocking and read it with a timeout (10 s); unserved, its variables are COULD NOT VERIFY `value_not_inspected` with a hint to unlock the secret manager; never write to a pipe.
+- **Relationships:** #22 design, `BL-174`.
+- **Issue:** [#104](https://github.com/rabbilyasar/envshield/issues/104).
 
 ---
 
@@ -2306,6 +2328,7 @@ Source(s): product-positioning review before v5 (this session).
 - **What none of the sources show:** validation of Docker Compose or Kubernetes manifests against a contract, one contract projected across several services with scoped secrets, contract diff across git revisions, per-environment requiredness checked inside the deploy environment, or AST discovery of undeclared reads failing a PR.
 - **Decision:** none yet. This needs the maintainer's decision during v5 planning. Options include keeping V3-3 as planned, narrowing it to a reference-only or validation role over existing providers (for example, checking a 1Password Environment against the schema instead of copying values), or deprioritizing it. Not a defect.
 - **Decided 2026-10-14** by the maintainer's plan amendment: A1 (development and deployment lead; onboarding works with the vault) and A2 (V3-3, #22, back to planning to validate or reference provider values instead of copying them to disk). Recorded in [docs/architecture/v5-decisions.md](docs/architecture/v5-decisions.md) by V0-1 (#14, 2026-10-19).
+- **Redesign approved (2026-10-30, maintainer):** EnvShield works with any secret manager without fetching from it. The team's own run command (`bws run`, `op run`, `doppler run`, `infisical run`, `sops exec-env`, `dotenvx run`, `envconsul`, ...) runs EnvShield the way it runs the app; EnvShield checks what's injected against the contract and never stores, writes or prints a value. `setup` and `check --with-secrets` can run the project's `secrets.run` command after a per-developer, direnv-style approval of the exact command; a plain `check` stays fast and treats vault-supplied variables as COULD NOT VERIFY `secret_manager` (accepted by default in `local`); every `secret = true` variable is vault-supplied once `secrets:` exists, with `source =` per-variable overrides. No provider plugins, no fetching, no copying to disk. Design: [docs/architecture/secret-managers.md](docs/architecture/secret-managers.md). Edge-case run of today's commands with a fake run command: 34 cases pass; findings `BL-213`, `BL-214` and the two gaps the design closes.
 
 ---
 
