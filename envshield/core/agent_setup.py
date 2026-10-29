@@ -47,6 +47,7 @@ HOOK_COMMAND = "envshield agent hook"
 # every edit (maintainer decision on #63).
 POST_CHANGE_CHECK = "envshield check --since HEAD --code-only --json"
 FULL_CHECK = "envshield check --json"
+SETUP_NON_INTERACTIVE = "envshield setup --non-interactive"
 GUIDE_COMMAND = "envshield agent guide"
 SCHEMA_SYNC = "envshield schema sync"
 # Claude Code may run these without asking (#89, maintainer decision): the
@@ -181,20 +182,23 @@ last: nothing may change the environment between the check and the app.
 When the user wants to run the project locally or set up its
 configuration:
 
-1. Run `{FULL_CHECK}`.
-2. List what is missing or invalid locally: each variable's name, its
-   `description` from `env.schema.toml`, and whether it is a secret.
-3. A finding whose `next_step.by` is "agent" (for example "Set PORT in
-   .env to the schema's defaultValue") you may do: add or change only
-   that one line, with exactly the schema's `defaultValue`. Don't read,
-   reorder or rewrite the rest of the file: it may hold secrets.
-4. For everything else, ask the user to run `envshield setup` in their own
-   terminal. It writes the local file and asks them for each value; you
-   can't run it (it needs a terminal), and you never write a value the
-   schema doesn't give as a default.
-5. Run the check again afterwards and report what is still missing. A
-   value the user can't get (for example a production secret) stays
-   missing; say who can provide it if the schema's description says.
+1. Run `{SETUP_NON_INTERACTIVE}`. It never prompts: it fills
+   in what's safe without asking (the schema's defaults, non-secret
+   template values), keeps every line already in the file, never writes a
+   secret, and prints one line per variable: READY, SET YOURSELF (with
+   the reason and the schema's description), or OPTIONAL. Exit code 1
+   means something required is still SET YOURSELF. This is also how to do
+   a `check` finding marked for the agent, such as setting a variable to
+   the schema's `defaultValue`.
+2. Tell the user each SET YOURSELF variable: its name, the reason and the
+   description, and whether it is a secret. Don't invent or look up a
+   value for them, and don't edit the local file yourself.
+3. For the values only they can provide, ask the user to run
+   `envshield setup` in their own terminal: it asks for each one
+   (masked for secrets), and they can skip any.
+4. Run `{FULL_CHECK}` afterwards and report what is still
+   missing. A value the user can't get (for example a production secret)
+   stays missing; say who can provide it if the description says.
 
 ## What not to do
 
@@ -202,8 +206,8 @@ configuration:
   and never copy one from one file to another to make a check pass.
 - When a finding's `next_step.by` is "human" (for example "supply this
   secret"), tell the user what is needed and why. Don't work around it.
-- Don't run `envshield setup` (it prompts on a terminal) or
-  `envshield init --force` (it rebuilds the schema).
+- Don't run `envshield setup` without `--non-interactive` (it prompts on
+  a terminal), or `envshield init --force` (it re-scans the project).
 - Don't delete or weaken a declaration to make a check pass.
 """
 

@@ -57,3 +57,17 @@ def scan_reports_undeclared(monkeypatch):
 
     monkeypatch.setattr(scanner, "run_scan", run_scan)
     monkeypatch.setattr(scanner, "scan_result", scan_result)
+
+
+@pytest.fixture(autouse=True)
+def setup_sees_a_terminal(monkeypatch):
+    """
+    'setup' prompts only on a terminal (#21), and a test runner's stdin
+    never is one. Tests simulate a terminal by default; a test of the
+    non-interactive path sets this back with
+    `monkeypatch.setattr(setup_manager, "stdin_is_terminal", lambda: False)`
+    or passes --non-interactive.
+    """
+    from envshield.core import setup_manager
+
+    monkeypatch.setattr(setup_manager, "stdin_is_terminal", lambda: True)

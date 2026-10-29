@@ -146,7 +146,7 @@ def test_a_secret_in_the_template_is_never_copied(tmp_path, prompts):
             example=f"API_KEY={SENTINEL}\n",
         )
         result = runner.invoke(app, ["setup"])
-        assert result.exit_code == 0, result.stdout
+        assert result.exit_code == 1, result.stdout  # skipped, left to set
         assert SENTINEL not in _read()
         assert SENTINEL not in result.stdout
         assert asked == [("API_KEY", True)]  # masked
@@ -181,7 +181,7 @@ def test_required_empty_with_a_default_is_kept_when_declined(tmp_path, selects):
     with runner.isolated_filesystem(temp_dir=tmp_path):
         _project('[PORT]\ndescription = "p"\ndefaultValue = "8000"\n', env="PORT=\n")
         result = runner.invoke(app, ["setup"])
-        assert result.exit_code == 0, result.stdout
+        assert result.exit_code == 1, result.stdout  # required, left empty
         assert _read() == "PORT=\n"
         assert any("Use the default (8000)" in c for _, cs in seen for c in cs)
 
@@ -246,8 +246,9 @@ def test_an_invalid_value_is_replaced_only_after_confirmation(
             env="A_PORT=nope\nB_PORT=bad\n",
         )
         result = runner.invoke(app, ["setup"])
-        # Declining one replacement doesn't cancel setup (B4).
-        assert result.exit_code == 0, result.stdout
+        # Declining one replacement doesn't cancel setup (B4); A_PORT is left
+        # invalid, so the exit code is 1 (#21).
+        assert result.exit_code == 1, result.stdout
         assert _read() == "A_PORT=nope\nB_PORT=8081\n"
         assert "nope" not in result.stdout and "bad" not in result.stdout
 
@@ -266,7 +267,7 @@ def test_unknown_lines_comments_and_export_are_kept(tmp_path, prompts):
         result = runner.invoke(app, ["setup"])
         assert result.exit_code == 0, result.stdout
         assert _read() == "# my notes\nexport PORT=9000\nLOCAL_ONLY=1\n\nNEW_VAR=v\n"
-        assert "added: NEW_VAR" in _flat(result)
+        assert ".env updated (1 added, 0 changed)" in _flat(result)
 
 
 def test_ctrl_c_while_prompting_leaves_the_file_byte_identical(tmp_path, mocker):
@@ -307,7 +308,7 @@ def test_nothing_to_change_writes_nothing(tmp_path, mocker):
         result = runner.invoke(app, ["setup"])
         assert result.exit_code == 0
         assert spy.call_count == 0
-        assert "Nothing to change" in result.stdout
+        assert ".env unchanged" in result.stdout
 
 
 def test_a_shared_file_is_written_once_with_the_union_contract(

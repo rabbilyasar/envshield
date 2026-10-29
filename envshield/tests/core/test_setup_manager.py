@@ -438,8 +438,11 @@ def test_setup_blank_answer_leaves_a_required_variable_for_you(mocker, tmp_path)
 
         result = runner.invoke(app, ["setup"])
 
-        assert result.exit_code == 0, result.stdout
-        assert "still to set yourself: WEB_KEY" in " ".join(result.stdout.split())
+        # Left to set: reported, and the exit code says so (#21).
+        assert result.exit_code == 1, result.stdout
+        flat = " ".join(result.stdout.split())
+        assert "SET YOURSELF WEB_KEY skipped" in flat
+        assert "0 of 1 required variables ready" in flat
         assert "WEB_KEY" not in open(".env").read()
 
 
@@ -1126,5 +1129,7 @@ def test_setup_re_checks_the_file_it_wrote(mocker, tmp_path):
 
         result = runner.invoke(app, ["setup"])
 
+        # The report replaces the post-write re-check (#21).
         assert result.exit_code == 0, result.stdout
-        assert "'.env' satisfies the schema" in result.stdout
+        assert "1 of 1 required variables ready" in result.stdout
+        assert "READY" in result.stdout and "default" in result.stdout

@@ -4,6 +4,7 @@
 import dataclasses
 import datetime
 import os
+import sys
 from typing import Any, Dict, List, Optional
 
 import questionary
@@ -20,25 +21,66 @@ console = Console()
 EXAMPLE_FILE = ".env.example"
 
 
+# Outcome categories (V3-2, #21). NEEDS ACCESS is produced once provider
+# references exist (V3-3, #22).
+READY = "READY"
+NEEDS_ACCESS = "NEEDS ACCESS"
+SET_YOURSELF = "SET YOURSELF"
+OPTIONAL = "OPTIONAL"
+
+
+@dataclasses.dataclass
+class Outcome:
+    """What setup did, or couldn't do, for one variable. Never a value."""
+
+    name: str
+    category: str
+    detail: str
+    required: bool
+
+
 @dataclasses.dataclass
 class SetupResult:
     """
-    What actually happened for one service's setup run -- richer than a
-    bare bool so a caller (the CLI's completion report) can say how much
-    was actually done instead of a single undifferentiated pass/fail.
-    `completed` is False only when the user declined to overwrite an
-    existing local file, in which case nothing was written and
-    `configured_count` is meaningless (left at 0). `__bool__` mirrors
-    `completed` so existing truthiness checks (`if not run_setup(...)`)
-    keep working unchanged.
+    What happened for one service's setup run: every variable's outcome,
+    and what was written. `completed` is always True since #20 (there's no
+    whole-file prompt to decline); `ready` is whether every variable
+    required locally is READY, which decides the exit code (#21).
     """
 
     completed: bool
     local_file: str
     configured_count: int = 0
+    outcomes: List[Outcome] = dataclasses.field(default_factory=list)
+    added: int = 0
+    changed: int = 0
 
     def __bool__(self) -> bool:
         return self.completed
+
+    @property
+    def required_total(self) -> int:
+        return sum(1 for o in self.outcomes if o.required)
+
+    @property
+    def required_ready(self) -> int:
+        return sum(1 for o in self.outcomes if o.required and o.category == READY)
+
+    @property
+    def ready(self) -> bool:
+        return self.required_ready == self.required_total
+
+    @property
+    def to_set_yourself(self) -> List[str]:
+        return [o.name for o in self.outcomes if o.category == SET_YOURSELF]
+
+
+def stdin_is_terminal() -> bool:
+    """Whether setup can prompt (#21). Tests replace this to simulate one."""
+    try:
+        return sys.stdin.isatty()
+    except (AttributeError, ValueError):
+        return False
 
 
 def _fill_schema_defaults(
@@ -213,11 +255,14 @@ def _prompt_value(
     raise _Skip
 
 
-def run_setup(service_name: str, output_file: Optional[str] = None) -> SetupResult:
+def run_setup(
+    service_name: str, output_file: Optional[str] = None, interactive: bool = True
+) -> SetupResult:
     """
     Guides a developer through creating or completing their local
     configuration (V3-1, #20): every variable is resolved first, then the
-    file is written once, atomically, in place.
+    file is written once, atomically, in place, and every variable's
+    outcome is reported (V3-2, #21).
 
     Per variable, in order: (1) a value already in the local file, an
     explicit empty one included, is kept, and replaced only after
@@ -228,10 +273,9 @@ def run_setup(service_name: str, output_file: Optional[str] = None) -> SetupResu
     unset. (Step 2, provider references, is V3-3.) Optional variables are
     never prompted. No value is ever printed.
 
-    Args:
-        output_file: Explicit path to write to. If omitted, resolves to the
-            service's local file ('.env', or its 'local_file').
-        service_name: Which registered service to set up.
+    `interactive=False` (--non-interactive, or no terminal) never prompts:
+    whatever can be resolved without asking is written, the rest is
+    reported, and every existing line stays as it is.
     """
     paths = config_manager.get_env_paths(service_name=service_name)
     example_file = paths["example_file"]
@@ -275,8 +319,8 @@ def run_setup(service_name: str, output_file: Optional[str] = None) -> SetupResu
             f"[bold yellow]Warning:[/bold yellow] {missing_schema} Values are taken "
             "from the existing files as they are, without validation."
         )
-    if schema:
-        # From the file as it is: an explicit empty value is reported.
+    if schema and interactive:
+        # An overview before prompting; empties are reported.
         _print_drift_summary(
             schema,
             schema_manager.diff_against_schema(
@@ -288,8 +332,15 @@ def run_setup(service_name: str, output_file: Optional[str] = None) -> SetupResu
     additions: Dict[str, str] = {}
     replacements: Dict[str, str] = {}
     removals: List[str] = []
-    unresolved: List[str] = []
+    outcomes: Dict[str, Outcome] = {}
+    sources: Dict[str, str] = {}
     resolved = dict(local)
+
+    def hint(key: str, reason: str) -> str:
+        description = schema.get(key, {}).get("description") or ""
+        if description and description != schema_types.PLACEHOLDER_DESCRIPTION:
+            return f"{reason}; {description}"
+        return reason
 
     # Steps 3-4 for every absent key first, so a requiredIf can see a
     # sibling's default or template value.
@@ -302,23 +353,31 @@ def run_setup(service_name: str, output_file: Optional[str] = None) -> SetupResu
             # warning above says so); empty ones are asked for.
             if example.get(key):
                 additions[key] = example[key]
+                sources[key] = f"from {os.path.basename(example_file)}"
                 resolved[key] = additions[key]
             continue
         if _secret(key, field_schema):
             continue
         if "defaultValue" in field_schema:
             additions[key] = str(field_schema["defaultValue"])
+            sources[key] = "default"
         elif example.get(key) and not schema_types.validate_value(
             example[key], field_schema
         ):
             additions[key] = example[key]
+            sources[key] = f"from {os.path.basename(example_file)}"
         else:
             continue
         resolved[key] = additions[key]
 
     asked_header = False
+
+    def outcome(key: str, category: str, detail: str, required: bool) -> None:
+        outcomes[key] = Outcome(key, category, detail, required)
+
     for key in keys:
         field_schema = schema.get(key, {})
+        required = False
         try:
             required = schema_types.should_be_present(field_schema, resolved)
             if key in local:
@@ -330,11 +389,16 @@ def run_setup(service_name: str, output_file: Optional[str] = None) -> SetupResu
                 )
                 if value == "" and required:
                     console.print(f"\n[yellow]{key} is set but empty.[/yellow]")
+                    reason = "set but empty"
                 elif error and value == "":
                     console.print(
                         f"\n[yellow]{key} is set but empty, and empty isn't valid "
                         f"({error}).[/yellow]"
                     )
+                    reason = f"set but empty, and empty isn't valid ({error})"
+                    if not interactive:
+                        outcome(key, OPTIONAL, reason, required)
+                        continue
                     choice = questionary.select(
                         f"  What should happen to {key}?",
                         choices=[
@@ -348,30 +412,63 @@ def run_setup(service_name: str, output_file: Optional[str] = None) -> SetupResu
                     if choice.startswith("Remove"):
                         removals.append(key)
                         resolved.pop(key, None)
+                        outcome(key, OPTIONAL, "line removed", required)
                         continue
                     if choice.startswith("Keep"):
+                        outcome(key, OPTIONAL, reason, required)
                         continue
                 elif error:
                     console.print(
                         f"\n[yellow]{key} has an invalid value ({error}).[/yellow]"
                     )
-                    if not questionary.confirm(
-                        f"  Replace {key}'s value?", default=True
-                    ).ask():
+                    reason = f"invalid ({error})"
+                    if (
+                        not interactive
+                        or not questionary.confirm(
+                            f"  Replace {key}'s value?", default=True
+                        ).ask()
+                    ):
+                        outcome(
+                            key,
+                            SET_YOURSELF if required else OPTIONAL,
+                            hint(key, reason) if required else reason,
+                            required,
+                        )
                         continue
                 else:
+                    outcome(
+                        key,
+                        READY if (value != "" or required) else OPTIONAL,
+                        "already set" if value != "" else "set but empty",
+                        required,
+                    )
+                    continue
+                if not interactive:
+                    outcome(key, SET_YOURSELF, hint(key, reason), required)
                     continue
                 try:
                     replacements[key] = _prompt_value(
                         key, field_schema, schema, resolved
                     )
                     resolved[key] = replacements[key]
+                    outcome(key, READY, "entered", required)
                 except _Skip:
-                    if required:
-                        unresolved.append(key)
+                    outcome(
+                        key,
+                        SET_YOURSELF if required else OPTIONAL,
+                        hint(key, reason),
+                        required,
+                    )
                 continue
-            if key in additions or not required:
-                continue  # resolved by steps 3-4, or optional: never prompted
+            if key in additions:
+                outcome(key, READY, sources.get(key, "default"), required)
+                continue
+            if not required:
+                outcome(key, OPTIONAL, "not required locally", required)
+                continue
+            if not interactive:
+                outcome(key, SET_YOURSELF, hint(key, "no shared source"), required)
+                continue
             if not asked_header:
                 console.print(
                     "\n[bold]Please provide values for the following variables:[/bold]"
@@ -380,12 +477,13 @@ def run_setup(service_name: str, output_file: Optional[str] = None) -> SetupResu
             try:
                 additions[key] = _prompt_value(key, field_schema, schema, resolved)
                 resolved[key] = additions[key]
+                outcome(key, READY, "entered", required)
             except _Skip:
-                unresolved.append(key)
+                outcome(key, SET_YOURSELF, hint(key, "skipped"), required)
         except EnvShieldException as e:
             # One variable's problem never stops the others.
             console.print(f"[red]✗ {key}: {e}[/red]")
-            unresolved.append(key)
+            outcome(key, SET_YOURSELF, str(e), True)
 
     # One atomic write, after everything is resolved: an interruption
     # before this point leaves the file as it was.
@@ -394,15 +492,51 @@ def run_setup(service_name: str, output_file: Optional[str] = None) -> SetupResu
         _write_changes(
             local_file, local_exists, keys, additions, replacements, removals
         )
-    _print_change_summary(
-        local_file, changed, additions, replacements, removals, unresolved
-    )
-    if schema:
-        _report_written_file(service_name, local_file)
-    return SetupResult(
+    result = SetupResult(
         completed=True,
         local_file=local_file,
         configured_count=len(additions) + len(replacements) + len(removals),
+        outcomes=[outcomes[k] for k in keys if k in outcomes],
+        added=len(additions),
+        changed=len(replacements) + len(removals),
+    )
+    _print_report(result, local_exists)
+    return result
+
+
+def _print_report(result: SetupResult, existed: bool) -> None:
+    """
+    Every variable's outcome, then the summary line (#21). Names, categories
+    and the contract's descriptions only: never a value.
+    """
+    if result.outcomes:
+        width = max(len(o.name) for o in result.outcomes)
+        console.print()
+        styles = {
+            READY: "green",
+            NEEDS_ACCESS: "yellow",
+            SET_YOURSELF: "yellow",
+            OPTIONAL: "dim",
+        }
+        for o in result.outcomes:
+            style = styles[o.category]
+            console.print(
+                f"  [{style}]{o.category:<12}[/{style}]  {o.name:<{width}}  "
+                f"[dim]{o.detail}[/dim]",
+                highlight=False,
+            )
+    if not existed:
+        written = f"{result.local_file} created ({result.added} added)"
+    elif result.added or result.changed:
+        written = (
+            f"{result.local_file} updated ({result.added} added, "
+            f"{result.changed} changed)"
+        )
+    else:
+        written = f"{result.local_file} unchanged"
+    console.print(
+        f"\n{result.required_ready} of {result.required_total} required variables "
+        f"ready. {written}."
     )
 
 
@@ -439,57 +573,6 @@ def _write_changes(
         file_updater.atomic_write(local_file, "".join(new_lines), secret=True)
     except OSError as e:
         raise EnvShieldException(f"Could not write to '{local_file}': {e}")
-
-
-def _print_change_summary(
-    local_file: str,
-    changed: bool,
-    additions: Dict[str, str],
-    replacements: Dict[str, str],
-    removals: List[str],
-    unresolved: List[str],
-) -> None:
-    """Names only, never a value."""
-    if not changed:
-        console.print(f"[green]✓ Nothing to change in '{local_file}'.[/green]")
-    else:
-        console.print(
-            f"\n[bold green]✓ Updated [magenta]{local_file}[/magenta]:[/bold green]"
-        )
-        for label, names in (
-            ("added", list(additions)),
-            ("replaced", list(replacements)),
-            ("removed", removals),
-        ):
-            if names:
-                console.print(f"  {label}: {', '.join(names)}")
-    if unresolved:
-        console.print(
-            f"  [yellow]still to set yourself:[/yellow] {', '.join(unresolved)}"
-        )
-
-
-def _report_written_file(service_name: str, local_file: str) -> None:
-    """
-    Evaluates the file just written the way 'check' does (the same
-    evaluator, so the two can't disagree) and says whether it now
-    satisfies the contract -- a value kept invalid after the retry limit,
-    say, is named here rather than hidden behind "configuration complete".
-    Names and constraint descriptions only, never a value.
-    """
-    from . import evaluator
-
-    source = evaluator.evaluate_source(local_file, service_name)
-    if source.clean:
-        console.print(f"[green]✓ '{local_file}' satisfies the schema.[/green]")
-    elif source.diff is not None:
-        console.print(
-            f"[bold yellow]Still not satisfied:[/bold yellow] {source.diff.summary()}"
-        )
-    else:
-        console.print(
-            f"[bold yellow]Couldn't re-check '{local_file}':[/bold yellow] {source.error}"
-        )
 
 
 def _write_dotenv_local_file(local_file: str, final_vars: Dict[str, str]) -> None:

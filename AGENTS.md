@@ -1028,7 +1028,11 @@ completes Phase 2. V3-1
 ([#20](https://github.com/rabbilyasar/envshield/issues/20)): `setup`
 resolves every variable first, keeps explicit empty values, never copies a
 secret from the template, and writes each file once, atomically, in place
-(`BL-211`; branch, not yet merged). The full order is
+(`BL-211`; merged `6377218`, PR #101). V3-2
+([#21](https://github.com/rabbilyasar/envshield/issues/21)): `setup`
+reports READY / SET YOURSELF / OPTIONAL per variable, never prompts
+without a terminal (`--non-interactive`), and exits 1 while a required
+variable isn't ready (`BL-212`; branch, not yet merged). The full order is
 ROADMAP.md's "v5 — in progress". Nothing since `v4.9.1` is released.
 
 **Previous phase (updated 2026-10-15): `v4.9.1` released; v5 V1 next.**
