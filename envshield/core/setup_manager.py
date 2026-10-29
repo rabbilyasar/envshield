@@ -4,7 +4,6 @@
 import dataclasses
 import datetime
 import os
-import re
 from typing import Any, Dict, List, Optional
 
 import questionary
@@ -60,7 +59,13 @@ def _fill_schema_defaults(
     """
     resolved = dict(values)
     for key, field_schema in schema.items():
-        if not resolved.get(key) and "defaultValue" in field_schema:
+        # Only an absent key (an explicit empty value is the developer's),
+        # and never a secret (#20).
+        if (
+            key not in resolved
+            and "defaultValue" in field_schema
+            and not field_schema.get("secret")
+        ):
             resolved[key] = field_schema["defaultValue"]
     return resolved
 
@@ -109,46 +114,124 @@ def _is_secret_key(key: str) -> bool:
     return key_contains_secret_keyword(key)
 
 
-def _read_seed_values(example_file: str, local_file: str) -> Dict[str, str]:
+def _read_values(path: str) -> Dict[str, str]:
+    """The variables `path` assigns, with their values ("" for `KEY=`)."""
+    if not os.path.exists(path):
+        return {}
+    parser = get_parser(path)
+    if not parser:
+        return {}
+    try:
+        values = parser.get_vars(path, get_values=True)
+    except FileNotFoundError:
+        return {}
+    return {k: ("" if v is None else str(v)) for k, v in values.items()}
+
+
+def _secret(key: str, field_schema: Dict[str, Any], declared: bool = True) -> bool:
+    """A declared variable is secret only if the schema says so; the name
+    heuristic is for a variable the schema doesn't declare."""
+    if declared:
+        return bool(field_schema.get("secret", False))
+    return _is_secret_key(key)
+
+
+class _Skip(Exception):
+    """The developer left a prompt blank: the variable stays as it is."""
+
+
+def _explain(key: str, field_schema: Dict[str, Any], schema, resolved) -> None:
+    description = field_schema.get("description")
+    if description and not description.startswith("TODO"):
+        console.print(f"  [dim]{description}[/dim]")
+    if field_schema.get("requiredIf") and schema_types.is_required_now(
+        field_schema, resolved
+    ):
+        condition_text = schema_types.requiredif_condition_text(field_schema, schema)
+        if condition_text:
+            console.print(f"  [dim]Required because {condition_text}.[/dim]")
+
+
+def _prompt_value(
+    key: str,
+    field_schema: Dict[str, Any],
+    schema: Dict[str, Any],
+    resolved: Dict[str, str],
+) -> str:
     """
-    Determines each variable's starting value: whatever the project's local
-    file already has (if it exists -- e.g. a new dev re-running setup, or a
-    Python module like acme's `env_config.local.py` that's checked into git
-    with working values already), falling back to the tracked template
-    (`.env.example`) when the local file doesn't exist yet at all.
+    Asks for one value (masked for a secret; a non-secret's default is the
+    suggestion). A blank answer, or three invalid ones, raises _Skip: the
+    variable is left for the developer to set (V3-2 reports it).
     """
-    for candidate in (local_file, example_file):
-        if not os.path.exists(candidate):
-            continue
-        parser = get_parser(candidate)
-        if not parser:
-            continue
-        try:
-            return parser.get_vars(candidate, get_values=True)
-        except FileNotFoundError:
-            continue
-    return {}
+    _explain(key, field_schema, schema, resolved)
+    secret = _secret(key, field_schema, declared=key in schema)
+    suggestion = None
+    if not secret and "defaultValue" in field_schema:
+        suggestion = str(field_schema["defaultValue"])
+    if suggestion is not None:
+        # With a default, the developer chooses explicitly, so declining is
+        # possible: pressing Enter in a text prompt would take the default.
+        use_default = f"Use the default ({suggestion})"
+        choice = questionary.select(
+            f"  {key}:",
+            choices=[use_default, "Enter a value", "Leave it as it is"],
+        ).ask()
+        if choice is None:
+            raise KeyboardInterrupt
+        if choice == use_default:
+            return suggestion
+        if choice.startswith("Leave"):
+            raise _Skip
+        suggestion = None
+    enum_choices = schema_types.enum_values(field_schema)
+    if enum_choices:
+        skip = "(leave it unset for now)"
+        chosen = questionary.select(
+            f"  Please select a value for {key}",
+            choices=enum_choices + [skip],
+            default=None,
+        ).ask()
+        if chosen is None:
+            raise KeyboardInterrupt
+        if chosen == skip:
+            raise _Skip
+        return chosen
+    for attempt in range(1, 4):
+        value = Prompt.ask(
+            f"  Please enter the value for [bold cyan]{key}[/bold cyan] (Enter to skip)",
+            password=secret,
+        )
+        if not value:
+            raise _Skip
+        error = schema_types.validate_value(value, field_schema)
+        if not error:
+            return value
+        console.print(f"  [red]✗ {error}[/red]")
+    console.print(
+        f"  [yellow]{key} left unset after 3 invalid values; set it yourself.[/yellow]"
+    )
+    raise _Skip
 
 
 def run_setup(service_name: str, output_file: Optional[str] = None) -> SetupResult:
     """
-    Guides a new developer through creating (or completing) their local
-    environment config, driven by the service's schema.
+    Guides a developer through creating or completing their local
+    configuration (V3-1, #20): every variable is resolved first, then the
+    file is written once, atomically, in place.
+
+    Per variable, in order: (1) a value already in the local file, an
+    explicit empty one included, is kept, and replaced only after
+    confirmation; (3) the schema's `defaultValue`, only for an absent,
+    non-secret key; (4) the `.env.example` value, only when non-secret,
+    non-empty and valid; (5) a prompt, only for a variable required now
+    (masked for a secret; the developer may skip); (6) otherwise it stays
+    unset. (Step 2, provider references, is V3-3.) Optional variables are
+    never prompted. No value is ever printed.
 
     Args:
         output_file: Explicit path to write to. If omitted, resolves to the
-            service's local file -- '.env' by default, or whatever
-            'local_file' is set to for this service in envshield.yml (see
-            config_manager.get_env_paths).
+            service's local file ('.env', or its 'local_file').
         service_name: Which registered service to set up.
-
-    Returns:
-        A SetupResult whose `completed` is False if the user declined to
-        overwrite an existing local file -- nothing was written. True
-        otherwise (including the no-op case where everything was already
-        configured). Callers must check this before reporting success,
-        rather than assuming a normal return means a file was actually
-        written.
     """
     paths = config_manager.get_env_paths(service_name=service_name)
     example_file = paths["example_file"]
@@ -156,32 +239,30 @@ def run_setup(service_name: str, output_file: Optional[str] = None) -> SetupResu
     is_python_target = local_file.endswith(".py")
 
     console.print(f"[bold]{local_file}[/bold]")
-    # Refuse an unsafe target before asking for any value (BL-154), not
-    # only when it's finally written.
+    # Refuse an unsafe target before asking for any value (BL-154).
     file_updater.assert_safe_write_target(local_file)
 
-    # Load the schema so we can use its authoritative 'secret' flag and
-    # descriptions during prompting, instead of re-guessing from the key name.
-    # Only a schema that doesn't exist yet falls back to the template alone
-    # (and says so); a schema that exists but fails to load -- malformed,
-    # invalid, a secret with a default -- is an error, never a silent
-    # unvalidated setup.
+    # A schema that doesn't exist yet falls back to the template alone; one
+    # that fails to load is an error before anything is resolved (BL-153).
     missing_schema: Optional[str] = None
     try:
         schema = config_manager.load_schema(service_name=service_name)
     except SchemaNotFoundError as e:
         schema = {}
         missing_schema = str(e)
-    # When the file being written is the service's own local file and other
-    # services share it, it's materialized from the union of their
-    # projections (the physical-file contract). A peer or conflict error
-    # propagates -- it must not fall back to writing without a schema.
+    # A local file several services share is written from the union of
+    # their projections (the physical-file contract).
     if schema and config_manager.same_physical_file(local_file, paths["local_file"]):
         schema = config_manager.load_file_contract(service_name, "local_file")
 
-    seed_values = _read_seed_values(example_file, local_file)
-
-    if not schema and not seed_values:
+    local_exists = os.path.exists(local_file)
+    local = _read_values(local_file) if local_exists else {}
+    example = (
+        _read_values(example_file)
+        if not config_manager.same_physical_file(example_file, local_file)
+        else {}
+    )
+    if not schema and not local and not example:
         if is_python_target:
             raise EnvShieldException(
                 f"'{local_file}' not found, and no schema exists to generate one from. Run 'envshield init --from <file>' or 'envshield schema sync' first."
@@ -189,159 +270,203 @@ def run_setup(service_name: str, output_file: Optional[str] = None) -> SetupResu
         raise EnvShieldException(
             f"'{example_file}' not found. Please run 'envshield schema sync' first to generate it."
         )
-
     if missing_schema:
         console.print(
             f"[bold yellow]Warning:[/bold yellow] {missing_schema} Values are taken "
             "from the existing files as they are, without validation."
         )
-
     if schema:
+        # From the file as it is: an explicit empty value is reported.
         _print_drift_summary(
             schema,
             schema_manager.diff_against_schema(
-                schema, _fill_schema_defaults(schema, seed_values)
+                schema, _fill_schema_defaults(schema, local)
             ),
         )
 
-    # A full rewrite only makes sense for a pure generated artifact (dotenv).
-    # A Python module may hold real logic beyond simple assignments, so it's
-    # only ever patched in place -- see the write step below -- and never
-    # needs an "overwrite?" confirmation.
-    if not is_python_target and os.path.exists(local_file):
-        overwrite = questionary.confirm(
-            f"A '{local_file}' file already exists. Do you want to overwrite it?",
-            default=False,
-        ).ask()
-        if not overwrite:
-            console.print("[yellow]Setup cancelled.[/yellow]")
-            return SetupResult(completed=False, local_file=local_file)
+    keys = list(schema.keys()) or [k for k in example if k not in local]
+    additions: Dict[str, str] = {}
+    replacements: Dict[str, str] = {}
+    removals: List[str] = []
+    unresolved: List[str] = []
+    resolved = dict(local)
 
-    # Step 1: Work out which variables already have a usable value (from the
-    # local file, the template, or the schema's own default), and which still
-    # need to be asked for. Schema vars come first (they're the contract);
-    # any extra vars already present locally are carried over untouched.
-    # _fill_schema_defaults fills in every schema default up front,
-    # regardless of key order, so a 'requiredIf' condition can be
-    # evaluated against a sibling's default value below even when that
-    # sibling comes later in the schema.
-    final_vars: Dict[str, str] = _fill_schema_defaults(schema, seed_values)
-    keys_to_prompt: List[str] = []
-    all_keys = list(schema.keys()) + [k for k in seed_values if k not in schema]
-
-    for key in all_keys:
+    # Steps 3-4 for every absent key first, so a requiredIf can see a
+    # sibling's default or template value.
+    for key in keys:
         field_schema = schema.get(key, {})
-        existing = final_vars.get(key)
-        if existing:
-            # Already has a value -- only re-prompt if it's actually invalid
-            # against the schema (e.g. hand-edited to something the
-            # enum/pattern/type no longer allows). A var with no schema
-            # entry at all (an extra, already-present local var) is never
-            # second-guessed.
-            if key not in schema or not schema_types.validate_value(
-                existing, field_schema
-            ):
-                continue
+        if key in local:
+            continue
+        if not schema:
+            # No schema: the template's values are taken as they are (the
+            # warning above says so); empty ones are asked for.
+            if example.get(key):
+                additions[key] = example[key]
+                resolved[key] = additions[key]
+            continue
+        if _secret(key, field_schema):
+            continue
+        if "defaultValue" in field_schema:
+            additions[key] = str(field_schema["defaultValue"])
+        elif example.get(key) and not schema_types.validate_value(
+            example[key], field_schema
+        ):
+            additions[key] = example[key]
         else:
-            if "defaultValue" in field_schema:
-                continue  # already filled above
-            if not schema_types.is_required_now(field_schema, final_vars):
-                continue  # not required right now (unmet 'requiredIf') -- don't nag for it
-        keys_to_prompt.append(key)
+            continue
+        resolved[key] = additions[key]
 
-    # Step 2: Prompt for whatever's still missing (or invalid)
-    if not keys_to_prompt:
-        console.print(
-            "[green]✓ No empty or invalid variables found to configure.[/green]"
-        )
-    else:
-        console.print(
-            "\n[bold]Please provide values for the following variables:[/bold]"
-        )
-        for key in keys_to_prompt:
-            field_schema = schema.get(key, {})
-            description = field_schema.get("description")
-            if description and not description.startswith("TODO"):
-                console.print(f"  [dim]{description}[/dim]")
-
-            # Only shown when the condition is the actual reason this
-            # field needs a value right now (schema_types.is_required_now
-            # -- not just "has a requiredIf at all") -- a field reaching
-            # this prompt for an unrelated reason (e.g. an invalid
-            # existing value) gets no condition explanation to avoid
-            # implying one that isn't why it's here.
-            if field_schema.get("requiredIf") and schema_types.is_required_now(
-                field_schema, final_vars
-            ):
-                condition_text = schema_types.requiredif_condition_text(
-                    field_schema, schema
+    asked_header = False
+    for key in keys:
+        field_schema = schema.get(key, {})
+        try:
+            required = schema_types.should_be_present(field_schema, resolved)
+            if key in local:
+                value = local[key]
+                error = (
+                    schema_types.validate_value(value, field_schema)
+                    if key in schema
+                    else None
                 )
-                if condition_text:
-                    console.print(f"  [dim]Required because {condition_text}.[/dim]")
-
-            is_secret = (
-                field_schema["secret"]
-                if "secret" in field_schema
-                else _is_secret_key(key)
-            )
-            enum_choices = schema_types.enum_values(field_schema)
-
-            if enum_choices:
-                # A picker can't produce an invalid value -- no retry loop needed.
-                existing = final_vars.get(key)
-                new_value = questionary.select(
-                    f"  Please select a value for {key}",
-                    choices=enum_choices,
-                    default=existing if existing in enum_choices else None,
-                ).ask()
-                if new_value is None:
-                    raise EnvShieldException("Setup cancelled by user.")
-            else:
-                # A field reaching this prompt is either currently required
-                # (should_be_present) or has an existing value invalid
-                # enough to need fixing -- blank is only a legitimate
-                # answer for the latter when it's genuinely optional
-                # (no default, requiredIf unmet). Accepting blank
-                # unconditionally here would let 'setup' itself produce
-                # exactly the "Blank in Local" failure 'check'/'doctor'
-                # exist to catch, defeating the wizard's whole purpose.
-                must_be_present = schema_types.should_be_present(
-                    field_schema, final_vars
-                )
-                new_value = ""
-                max_attempts = 3
-                for attempt in range(1, max_attempts + 1):
-                    new_value = Prompt.ask(
-                        f"  Please enter the value for [bold cyan]{key}[/bold cyan]",
-                        password=is_secret,
+                if value == "" and required:
+                    console.print(f"\n[yellow]{key} is set but empty.[/yellow]")
+                elif error and value == "":
+                    console.print(
+                        f"\n[yellow]{key} is set but empty, and empty isn't valid "
+                        f"({error}).[/yellow]"
                     )
-                    if not new_value:
-                        error = (
-                            "This value is required and cannot be left blank."
-                            if must_be_present
-                            else None
-                        )
-                    else:
-                        error = schema_types.validate_value(new_value, field_schema)
-                    if not error:
-                        break
-                    console.print(f"  [red]✗ {error}[/red]")
-                    if attempt == max_attempts:
-                        console.print(
-                            f"  [yellow]Keeping this value after {max_attempts} attempts -- fix it later with 'envshield check'.[/yellow]"
-                        )
-            final_vars[key] = new_value
+                    choice = questionary.select(
+                        f"  What should happen to {key}?",
+                        choices=[
+                            "Enter a value",
+                            "Remove the line (leave it unset)",
+                            "Keep it empty",
+                        ],
+                    ).ask()
+                    if choice is None:
+                        raise KeyboardInterrupt
+                    if choice.startswith("Remove"):
+                        removals.append(key)
+                        resolved.pop(key, None)
+                        continue
+                    if choice.startswith("Keep"):
+                        continue
+                elif error:
+                    console.print(
+                        f"\n[yellow]{key} has an invalid value ({error}).[/yellow]"
+                    )
+                    if not questionary.confirm(
+                        f"  Replace {key}'s value?", default=True
+                    ).ask():
+                        continue
+                else:
+                    continue
+                try:
+                    replacements[key] = _prompt_value(
+                        key, field_schema, schema, resolved
+                    )
+                    resolved[key] = replacements[key]
+                except _Skip:
+                    if required:
+                        unresolved.append(key)
+                continue
+            if key in additions or not required:
+                continue  # resolved by steps 3-4, or optional: never prompted
+            if not asked_header:
+                console.print(
+                    "\n[bold]Please provide values for the following variables:[/bold]"
+                )
+                asked_header = True
+            try:
+                additions[key] = _prompt_value(key, field_schema, schema, resolved)
+                resolved[key] = additions[key]
+            except _Skip:
+                unresolved.append(key)
+        except EnvShieldException as e:
+            # One variable's problem never stops the others.
+            console.print(f"[red]✗ {key}: {e}[/red]")
+            unresolved.append(key)
 
-    # Step 3: Write the result
-    if is_python_target:
-        _write_python_local_file(local_file, final_vars, keys_to_prompt)
-    else:
-        _write_dotenv_local_file(local_file, final_vars)
+    # One atomic write, after everything is resolved: an interruption
+    # before this point leaves the file as it was.
+    changed = bool(additions or replacements or removals)
+    if changed or not local_exists:
+        _write_changes(
+            local_file, local_exists, keys, additions, replacements, removals
+        )
+    _print_change_summary(
+        local_file, changed, additions, replacements, removals, unresolved
+    )
     if schema:
         _report_written_file(service_name, local_file)
     return SetupResult(
-        completed=True, local_file=local_file, configured_count=len(keys_to_prompt)
+        completed=True,
+        local_file=local_file,
+        configured_count=len(additions) + len(replacements) + len(removals),
     )
+
+
+def _write_changes(
+    local_file: str,
+    local_exists: bool,
+    keys: List[str],
+    additions: Dict[str, str],
+    replacements: Dict[str, str],
+    removals: List[str],
+) -> None:
+    """The single write: in place when the file exists, else a new file."""
+    ordered = [k for k in keys if k in additions] + [
+        k for k in additions if k not in keys
+    ]
+    if not local_exists:
+        if local_file.endswith(".py"):
+            _write_python_local_file(local_file, {k: additions[k] for k in ordered}, [])
+        else:
+            _write_dotenv_local_file(local_file, {k: additions[k] for k in ordered})
+        return
+    try:
+        with open(local_file, "r") as f:
+            lines = f.readlines()
+    except OSError as e:
+        raise EnvShieldException(f"Could not read '{local_file}': {e}")
+    updates = [{"key": k, "value": v} for k, v in replacements.items()] + [
+        {"key": k, "value": additions[k]} for k in ordered
+    ]
+    new_lines = file_updater.patch_variable_lines(
+        lines, updates, local_file, removals=removals
+    )
+    try:
+        file_updater.atomic_write(local_file, "".join(new_lines), secret=True)
+    except OSError as e:
+        raise EnvShieldException(f"Could not write to '{local_file}': {e}")
+
+
+def _print_change_summary(
+    local_file: str,
+    changed: bool,
+    additions: Dict[str, str],
+    replacements: Dict[str, str],
+    removals: List[str],
+    unresolved: List[str],
+) -> None:
+    """Names only, never a value."""
+    if not changed:
+        console.print(f"[green]✓ Nothing to change in '{local_file}'.[/green]")
+    else:
+        console.print(
+            f"\n[bold green]✓ Updated [magenta]{local_file}[/magenta]:[/bold green]"
+        )
+        for label, names in (
+            ("added", list(additions)),
+            ("replaced", list(replacements)),
+            ("removed", removals),
+        ):
+            if names:
+                console.print(f"  {label}: {', '.join(names)}")
+    if unresolved:
+        console.print(
+            f"  [yellow]still to set yourself:[/yellow] {', '.join(unresolved)}"
+        )
 
 
 def _report_written_file(service_name: str, local_file: str) -> None:
@@ -368,99 +493,57 @@ def _report_written_file(service_name: str, local_file: str) -> None:
 
 
 def _write_dotenv_local_file(local_file: str, final_vars: Dict[str, str]) -> None:
-    """Fully regenerates a dotenv-style local file -- safe, since it's a plain generated artifact."""
-    # Validated up front, before anything is written: a schema key is
-    # about to become the left-hand side of a 'KEY=value' line, and can't
-    # be escaped into a safe form without changing its identity, so it's
-    # rejected outright rather than sanitized. Checking every key before
-    # opening the file (rather than mid-loop) avoids leaving behind a
-    # truncated, half-written file if a later key turns out to be unsafe.
-    for key in final_vars:
-        if not schema_types.is_safe_variable_name(key):
-            raise EnvShieldException(
-                f"Schema key {key!r} is not a safe variable name (must "
-                f"match ^[A-Za-z_][A-Za-z0-9_]*$) -- refusing to write "
-                f"'{local_file}'."
-            )
-
+    """A new dotenv local file with exactly `final_vars`, written atomically."""
+    # Every key is validated before anything is written: it becomes the
+    # left-hand side of a 'KEY=value' line and can't be escaped safely.
+    lines = [
+        f"{service_discovery.ENVSHIELD_GENERATED_MARKER} on {datetime.datetime.now().strftime('%Y-%m-%d')}\n\n"
+    ]
+    for key, value in final_vars.items():
+        lines.append(file_updater.render_assignment(key, value, False, local_file))
     try:
-        # Creates missing parents and leaves the file 0600 whether or not it
-        # already existed -- a hand-created '.env' from before EnvShield
-        # doesn't keep broader permissions -- and refuses a symlinked or
+        # 0600 whether or not the file existed; refuses a symlinked or
         # out-of-project target (BL-154).
-        with file_updater.open_new_secret_file(local_file) as f:
-            f.write(
-                f"{service_discovery.ENVSHIELD_GENERATED_MARKER} on {datetime.datetime.now().strftime('%Y-%m-%d')}\n\n"
-            )
-            for key, value in final_vars.items():
-                # A literal newline/carriage-return would otherwise split into
-                # extra physical lines -- potentially injecting an unintended
-                # new KEY=VALUE assignment into the file.
-                safe_value = value.replace("\n", "\\n").replace("\r", "\\r")
-                if (
-                    re.search(r"[#\s=]", safe_value)
-                    and not (safe_value.startswith("'") and safe_value.endswith("'"))
-                    and not (safe_value.startswith('"') and safe_value.endswith('"'))
-                ):
-                    f.write(f'{key}="{safe_value}"\n')
-                else:
-                    f.write(f"{key}={safe_value}\n")
-        console.print(
-            f"\n[bold green]✓ Successfully created your [magenta]{local_file}[/magenta] file![/bold green]"
-        )
-    except IOError as e:
+        file_updater.atomic_write(local_file, "".join(lines), secret=True)
+    except OSError as e:
         raise EnvShieldException(f"Could not write to '{local_file}': {e}")
+    console.print(
+        f"\n[bold green]✓ Successfully created your [magenta]{local_file}[/magenta] file![/bold green]"
+    )
 
 
 def _write_python_local_file(
     local_file: str, final_vars: Dict[str, str], prompted_keys: List[str]
 ) -> None:
     """
-    Creates a fresh Python-module local file, or -- if one already exists --
-    patches only what changed: newly-prompted values, plus any schema
-    variable that isn't declared in the file at all yet (even if it was
-    silently filled from a schema default rather than prompted). Everything
-    else already in the file is left completely untouched.
+    A new Python-module local file with `final_vars`, or -- if one exists --
+    only `prompted_keys` and the variables it doesn't assign yet patched in
+    place. Written atomically either way.
     """
     if not os.path.exists(local_file):
-        # Same reasoning as _write_dotenv_local_file above -- validated
-        # before anything is written, since here an unsafe key would be
-        # arbitrary injected Python source once this module is imported,
-        # not just a malformed name.
-        for key in final_vars:
-            if not schema_types.is_safe_variable_name(key):
-                raise EnvShieldException(
-                    f"Schema key {key!r} is not a safe variable name (must "
-                    f"match ^[A-Za-z_][A-Za-z0-9_]*$) -- refusing to write "
-                    f"'{local_file}'."
-                )
-
+        lines = [
+            f"{service_discovery.ENVSHIELD_GENERATED_MARKER} on {datetime.datetime.now().strftime('%Y-%m-%d')}\n\n"
+        ]
+        for key, value in final_vars.items():
+            lines.append(file_updater.render_assignment(key, value, True, local_file))
         try:
-            with file_updater.open_new_secret_file(local_file) as f:
-                f.write(
-                    f"{service_discovery.ENVSHIELD_GENERATED_MARKER} on {datetime.datetime.now().strftime('%Y-%m-%d')}\n\n"
-                )
-                for key, value in final_vars.items():
-                    f.write(f"{key} = {value!r}\n")
-            console.print(
-                f"\n[bold green]✓ Successfully created your [magenta]{local_file}[/magenta] file![/bold green]"
-            )
-        except IOError as e:
+            file_updater.atomic_write(local_file, "".join(lines), secret=True)
+        except OSError as e:
             raise EnvShieldException(f"Could not write to '{local_file}': {e}")
+        console.print(
+            f"\n[bold green]✓ Successfully created your [magenta]{local_file}[/magenta] file![/bold green]"
+        )
         return
-
     parser = get_parser(local_file)
     existing_keys = parser.get_vars(local_file) if parser else set()
-    keys_needing_write = set(prompted_keys) | (set(final_vars.keys()) - existing_keys)
-
+    keys_needing_write = set(prompted_keys) | (set(final_vars) - existing_keys)
     if not keys_needing_write:
         console.print(
             f"[green]✓ '{local_file}' already has values for every variable.[/green]"
         )
         return
-
     updates = [{"key": key, "value": final_vars[key]} for key in keys_needing_write]
-    # A local secrets file: left 0600, set on the open descriptor.
+    # A local secrets file: left 0600.
     file_updater.update_variables_in_file(local_file, updates, secret=True)
     console.print(
         f"\n[bold green]✓ Updated [magenta]{local_file}[/magenta] with {len(updates)} value(s): {', '.join(sorted(keys_needing_write))}[/bold green]"
