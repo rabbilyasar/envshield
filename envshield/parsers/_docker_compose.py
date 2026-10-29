@@ -191,6 +191,9 @@ class DockerComposeParser(BaseParser):
             else:
                 raise EnvShieldException(
                     f"This docker-compose file declares multiple services ({', '.join(sorted(services))}) -- pass --container to pick one."
+                    " To check every container, register this file in "
+                    "envshield.yml under 'manifests:' with a 'containers:' map "
+                    "(container: service), then run 'envshield check'."
                 )
         elif container not in services:
             raise EnvShieldException(

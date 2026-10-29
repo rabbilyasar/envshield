@@ -64,6 +64,35 @@ def _check_requirements_txt(directory: str) -> Optional[str]:
     return "python"
 
 
+_COUNT_LIMIT = 20000
+_PY = (".py",)
+_JS = (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".vue", ".svelte")
+
+
+def _count_sources(directory: str) -> tuple:
+    """(Python files, JS/TS files) under `directory`, up to a limit (BL-180)."""
+    from .source_files import DEFAULT_EXCLUDED_DIRS
+
+    py = js = seen = 0
+    for _root, dirs, files in os.walk(directory):
+        dirs[:] = [
+            d for d in dirs if d not in DEFAULT_EXCLUDED_DIRS and not d.startswith(".")
+        ]
+        for name in files:
+            seen += 1
+            if name.endswith(_PY):
+                py += 1
+            elif name.endswith(_JS):
+                js += 1
+        if seen >= _COUNT_LIMIT:
+            break
+    return py, js
+
+
+def _python_type(directory: str) -> Optional[str]:
+    return _check_pyproject_toml(directory) or _check_requirements_txt(directory)
+
+
 def detect_project_type(directory: str = ".") -> Optional[str]:
     """
     Detects the project type by looking for marker files and their content.
@@ -73,8 +102,19 @@ def detect_project_type(directory: str = ".") -> Optional[str]:
     discovery to identify each candidate service's own framework from its
     own directory, rather than the repo root's.
     """
-    # Check for Node.js projects
+    # A package.json beside Python markers (a frontend build, tooling) doesn't
+    # make a mostly-Python project a Node one: the larger code base wins
+    # (BL-180: 622 .py files and 49 JS/TS were reported as "nodejs").
     package_json_path = os.path.join(directory, "package.json")
+    if os.path.exists(package_json_path) and (
+        os.path.exists(os.path.join(directory, "pyproject.toml"))
+        or os.path.exists(os.path.join(directory, "requirements.txt"))
+    ):
+        py, js = _count_sources(directory)
+        if py > js:
+            return _python_type(directory)
+
+    # Check for Node.js projects
     if os.path.exists(package_json_path):
         try:
             with open(package_json_path, "r") as f:

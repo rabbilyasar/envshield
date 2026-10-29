@@ -1565,22 +1565,25 @@ def test_init_force_keeps_the_recorded_source_without_a_tty_to_ask(tmp_path, moc
         assert config_manager.get_service_config_source(project_name) == ".env"
 
 
-def test_init_falls_back_to_the_framework_template_when_no_real_config_exists(
-    tmp_path, mocker
-):
+def test_init_never_writes_a_framework_template(tmp_path):
+    """
+    BL-180 (#44): with no config file, init used to write a framework
+    template (Flask: SECRET_KEY, FLASK_ENV; generic: DATABASE_URL,
+    LOG_LEVEL) the code never read, and the first 'check' demanded them.
+    The contract now holds only what something provides or reads.
+    """
     with runner.isolated_filesystem(temp_dir=tmp_path):
         os.system("git init -q")
-        mocker.patch("questionary.confirm").return_value.ask.return_value = False
         with open("requirements.txt", "w") as f:
             f.write("Flask\n")
 
         result = runner.invoke(app, ["init"])
 
         assert result.exit_code == 0, result.stdout
-        with open(SCHEMA_FILE_NAME, "r") as f:
-            content = f.read()
-            assert "SECRET_KEY" in content
-            assert "FLASK_ENV" in content
+        schema = toml.load(SCHEMA_FILE_NAME)
+        assert schema == {}
+        for invented in ("SECRET_KEY", "FLASK_ENV", "DATABASE_URL", "LOG_LEVEL"):
+            assert invented not in open(SCHEMA_FILE_NAME).read()
 
 
 def test_init_proceeds_without_force_when_envshield_yml_has_zero_services(tmp_path):

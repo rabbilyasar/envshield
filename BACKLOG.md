@@ -976,7 +976,7 @@ The five entries below come from one first-run trial on 2026-10-14 (v4.8.0, a fr
 
 ### BL-175 — `init` builds the schema from `.env.example` only and ignores what the code reads
 
-Type: `UX` / `PRODUCT` · Evidence: `CONFIRMED` (first-run trial, 2026-10-14) · Priority: **P2** · Status: **open**
+Type: `UX` / `PRODUCT` · Evidence: `CONFIRMED` (first-run trial, 2026-10-14) · Priority: **P2** · Status: **fixed by V2-3 ([#44](https://github.com/rabbilyasar/envshield/issues/44)), branch `rabbilyasar/v2-3-init-seeds-contract`, unmerged**
 Component: `init` (`core/setup_manager.py` / import path), discovery (`discover_python_usages`, JS/TS discovery)
 
 - **Current behavior:** `init` created a three-variable schema from `.env.example`. The very next `check` listed `STRIPE_SECRET_KEY` (`api/app.py:4`) and `NEXT_PUBLIC_ANALYTICS_KEY` (`web/index.ts:2`) as "Not Declared". EnvShield's own discovery knew about both, but `init` never offered them.
@@ -984,10 +984,11 @@ Component: `init` (`core/setup_manager.py` / import path), discovery (`discover_
 - **Impact:** a new user's contract is incomplete from the first minute, and the product's most distinctive capability (code-aware discovery) is absent from first contact.
 - **Relationships:** V2-2 ([#19](https://github.com/rabbilyasar/envshield/issues/19)) reworks `init`; `BL-176`.
 - **Issue:** V2-3 [#44](https://github.com/rabbilyasar/envshield/issues/44).
+- **Fix (#44, 2026-10-29):** after writing the contract, `init` offers every variable the code reads (high confidence, a literal name; `evaluator.discover_code_references`, the same discovery `check` uses) that no config file declared, in a table with where each is read: added on a terminal when confirmed, all of them with `--yes`, listed and not added otherwise (with the `init --force --yes` command that adds them later). In a multi-service contract each read is granted to the service whose code reads it, and a name several services read gets one table for all of them. A read is required only when the code fails without it (`os.environ[...]`); `os.getenv`, `process.env`, `import.meta.env` and settings fields get `required = false`. A name that sounds secret is marked secret and scoped. `core/init_suggestions.py`.
 
 ### BL-176 — `init` doesn't register a present Docker Compose file, so manifest checks start out invisible
 
-Type: `UX` / `PRODUCT` · Evidence: `CONFIRMED` (first-run trial, 2026-10-14) · Priority: **P2** · Status: **open**
+Type: `UX` / `PRODUCT` · Evidence: `CONFIRMED` (first-run trial, 2026-10-14) · Priority: **P2** · Status: **fixed by V2-3 ([#44](https://github.com/rabbilyasar/envshield/issues/44)), branch `rabbilyasar/v2-3-init-seeds-contract`, unmerged**
 Component: `init`, `envshield.yml` generation
 
 - **Current behavior:** with `docker-compose.yml` at the root, `init` registered no manifest. `explain STRIPE_SECRET_KEY` reported "No deployment manifest registered for this service", and `doctor` ran no deployment check. `init` also created one service (`trial`) for a repository with `api/` and `web/` directories. As a result, `check docker-compose.yml` reported the web-only `API_URL` as missing from the `api` container: correct for the one-service contract `init` built, but wrong for the real layout.
@@ -995,6 +996,7 @@ Component: `init`, `envshield.yml` generation
 - **Impact:** both differentiators (deployment checks and multi-service contracts) need hand configuration before a user ever sees them.
 - **Relationships:** V2-2 ([#19](https://github.com/rabbilyasar/envshield/issues/19)), `BL-175`.
 - **Issue:** V2-3 [#44](https://github.com/rabbilyasar/envshield/issues/44).
+- **Fix (#44, 2026-10-29):** `init` proposes every Compose file (at the root or in a service's directory) and Kubernetes manifest (under `k8s/`, `kubernetes/`, `deploy/`, `deployment/`, `manifests/`, `.k8s/`, `helm/`) that maps at least one container, with a `containers:` map: a Compose service maps to the EnvShield service whose directory is its build context, else to the one with its name; a Kubernetes container maps by name. Registered on confirmation, with `--yes`, or without a terminal (as a name-matched Compose file always was). The multi-directory layout half was fixed by #19.
 
 ### BL-177 — First-run and generated text is off-message or wrong
 
@@ -1037,7 +1039,7 @@ The entries below come from a real-repository trial on 2026-10-14. v4.8.0 (`main
 
 ### BL-180 — `init` declares variables the code never reads (framework templates) and misdetects the project type
 
-Type: `BUG` / `UX` · Evidence: `CONFIRMED` (real-repo trial, 2026-10-14) · Priority: **P2** · Status: **open**
+Type: `BUG` / `UX` · Evidence: `CONFIRMED` (real-repo trial, 2026-10-14) · Priority: **P2** · Status: **fixed by V2-3 ([#44](https://github.com/rabbilyasar/envshield/issues/44)), branch `rabbilyasar/v2-3-init-seeds-contract`, unmerged**
 Component: `init` framework detection and templates
 
 - **Current behavior:** with no config file to read, `init` writes a framework template. bazaardor got `DATABASE_URL` and `LOG_LEVEL`, and neither name appears anywhere in its tracked `.py`/`.ts` files. `check` then demands them. issuebear (622 `.py` files, 49 JS/TS) and issuebear-management were reported as "Detected a nodejs project".
@@ -1045,10 +1047,11 @@ Component: `init` framework detection and templates
 - **Impact:** the first contract invents requirements, so the first `check` fails for reasons the user didn't create, the opposite of the product's honesty principle.
 - **Relationships:** `BL-175` (the same fix: seed `init` from discovery), V2-2 (#19).
 - **Issue:** V2-3 [#44](https://github.com/rabbilyasar/envshield/issues/44).
+- **Fix (#44, 2026-10-29):** no framework template is written: with no config file the contract starts empty and is filled from the code's reads, so every variable in a fresh contract comes from a config file, a manifest or a code read. Framework detection weighs languages: when `package.json` sits beside Python markers, the language with more source files wins (`inspector._count_sources`, capped at 20,000 files).
 
 ### BL-181 — Multi-service Compose checks work only through a registration that nothing guides users to
 
-Type: `UX` / `PRODUCT` · Evidence: `CONFIRMED` (real-repo trial and demo project, 2026-10-14) · Priority: **P2** (deployment-led direction, amendment A1) · Status: **open**
+Type: `UX` / `PRODUCT` · Evidence: `CONFIRMED` (real-repo trial and demo project, 2026-10-14) · Priority: **P2** (deployment-led direction, amendment A1) · Status: **fixed by V2-3 ([#44](https://github.com/rabbilyasar/envshield/issues/44)), branch `rabbilyasar/v2-3-init-seeds-contract`, unmerged**
 Component: `check <file>` ad-hoc path, `init`, `doctor`
 
 - **Current behavior:** the ad-hoc `check docker-compose.yml` errors with "declares multiple services (…) -- pass --container to pick one" on kemonchilo (2 services) and zeus (7: athena, athenalambda, cache, db, hermes, hermeslambda, playwright). The capability does exist: registering the file under `manifests:` with a `containers:` map (`api: api`, `worker: worker`) makes plain `check` and `doctor` validate every mapped container against its own service projection. This was verified on a two-service demo project, where a variable scoped to `api` was reported missing from the `api` container while `worker` stayed clean. But `init` never writes that registration (`BL-176`), and the ad-hoc error never mentions it.
@@ -1056,6 +1059,7 @@ Component: `check <file>` ad-hoc path, `init`, `doctor`
 - **Impact:** the deployment stage, now the lead story, looks impossible on a real multi-container project unless the user has read the README's union section. This may be what CLAUDE.md §19's deferred "3.10 batch/all-container check" referred to; its original content was never located.
 - **Relationships:** `BL-176`, V4-1 (#23, environment-tagged manifests).
 - **Issue:** V2-3 [#44](https://github.com/rabbilyasar/envshield/issues/44).
+- **Fix (#44, 2026-10-29):** the ad-hoc `check <file>` error for a multi-container Compose file or Kubernetes manifest now adds "To check every container, register this file in envshield.yml under 'manifests:' with a 'containers:' map (container: service), then run 'envshield check'." `init` proposes that registration (`BL-176`); unmapped infrastructure containers are listed, not declared.
 
 ### BL-182 — Discovery echoes the user's source lines (including secret literals) through Python `SyntaxWarning`s
 
@@ -1097,13 +1101,14 @@ Component: `schema diff` classification when the base revision has no contract
 
 ### BL-185 — `doctor` passes "Template Sync" when the example file is git-ignored
 
-Type: `BUG` / `UX` · Evidence: `CONFIRMED` (real-repo trial, 2026-10-14) · Priority: **P2** · Status: **open**
+Type: `BUG` / `UX` · Evidence: `CONFIRMED` (real-repo trial, 2026-10-14) · Priority: **P2** · Status: **fixed by V2-3 ([#44](https://github.com/rabbilyasar/envshield/issues/44)), branch `rabbilyasar/v2-3-init-seeds-contract`, unmerged**
 Component: `doctor` template check, `init`'s `.gitignore` handling
 
 - **Current behavior:** rabbil-portfolio's `.gitignore` has `.env*` (create-next-app's default), which ignores `.env.example`. `scan` notes "Skipping 1 git-ignored file(s): ./.env.example", yet `doctor` reports "✓ Template Sync". The template EnvShield generates for teammates can never be committed.
 - **Expected behavior:** `doctor` fails Template Sync with "'.env.example' is git-ignored (`.gitignore:34 .env*`), so teammates won't receive it", and `init` warns or adds `!.env.example` with confirmation.
 - **Impact:** every Next.js project created with defaults hits this.
 - **Issue:** V2-3 [#44](https://github.com/rabbilyasar/envshield/issues/44).
+- **Fix (#44, 2026-10-29):** `doctor`'s Template Sync fails when the template is git-ignored, naming the rule ("'.env.example' is git-ignored (.gitignore:2 .env*), so teammates won't receive it ...", `git_utils.ignore_rule`, `git check-ignore -v`). Only `doctor`: `schema sync --check` (the pre-commit hook) still asks only whether the template is in sync. `init` warns and offers to append `!<template>` to the file holding the rule (or the repository's `.gitignore` for a global rule), then checks Git no longer ignores it; with `--yes` it's added, without a terminal it only warns.
 
 ### BL-186 — Flask `config` "may be read" notes flood `check` output
 
@@ -2102,6 +2107,16 @@ A fifth real-repository trial on 2026-10-29, for V2-2 (#19, branch `rabbilyasar/
 - **Legacy projects** (jossjobs, kemonchilo, phurut, which already had per-service schemas): unchanged layout, one tip line per command.
 - **Secret safety:** no canary or real value (kemonchilo's `.env`) in any output; no trial secret or credential URL written as a default (observed defaults from `init --from`/`--import` aren't written without a terminal to confirm them).
 - **Timing:** Twenty's recorded `check --json` time (37,245 s) was the machine suspending mid-run; re-timed at 57 s, as in earlier trials.
+
+A sixth real-repository trial on 2026-10-29, for V2-3 (#44, branch `rabbilyasar/v2-3-init-seeds-contract`): the same 13 repositories, fresh shallow clones under `~/envshield-trials/2026-10-29-v2-3`, read-only toward every remote, `.env` canaries as before. **Acceptance repositories (maintainer decision, 2026-10-29):** #44's criterion names the 2026-10-14 trial's zeus, issuebear, phineas and bazaardor; those 13 repositories stand in for them, and bazaardor is now dorjachai. The ten unconfigured ones got `init --yes`, then each ran `check --json`, `doctor --json` and `scan`. A first run found two bugs (below); the clones were reset and the whole trial re-run on the fixed code. Results of the second run:
+- **Acceptance:** right after `init --yes`, `check` reported **no undeclared code read on any of the ten** (single services: cal.com, Documenso, dorjachai, Formbricks, Langfuse, n8n, Plane, PostHog; multi-service: Dify 4 services, Twenty 5). Code reads added: PostHog 946, n8n 284, cal.com 133, Formbricks 132, Plane 110, Documenso 16, dorjachai 8. The three configured Kriyonix repositories weren't re-initialized; jossjobs' 2 undeclared reads predate #44.
+- **No invented variable:** every fresh contract holds only config-file variables and code reads; no framework template anywhere.
+- **Manifests:** Dify's `docker/docker-compose.yaml` was registered with `api → api`, `web → web` (other containers unmapped), and `check` validated both containers. cal.com and Plane got no registration: their app containers all build from the repository root (see bug 2).
+- **A git-ignored template (BL-185) on a real project:** Langfuse's `.gitignore:48 .env*` ignores `.env.example` (it allow-lists its own `*.example` names, not this one). `init --yes` appended `!.env.example`; afterwards `.env.example` isn't ignored and `.env` still is. With the original `.gitignore`, `doctor` fails Template Sync citing `.gitignore:48 .env*`.
+- **Timing of `init` (it now reads the code):** PostHog 134 s (about one full `check` there), n8n 46 s, Twenty 43 s, Dify 21 s, the rest under 14 s.
+- **Secret safety:** no canary or real value (kemonchilo's `.env`) in any output; no credential URL written as a default; no traceback.
+- **Bug 1, found and fixed (first run, Twenty):** three reads stayed undeclared because a name one service's config file declared (`NODE_ENV`, granted to `twenty-server`) was also read by other services' code, and `init` didn't offer an already-declared name. In a multi-service `init` the config variables and the code reads are now appended as one batch, so the one new table is granted to every service that reads it; a code read adds a reader but never changes the config file's default (`contract_writer.FROM_CODE`).
+- **Bug 2, found and fixed (first run, Plane and cal.com):** several app containers building from the repository root (Plane's `web`, `admin`, `space`) were all mapped to the single root service, and `check` reported 32 false "missing" per container (each checked against the whole project's contract). A container building from the project root now maps to the root service only when it's the only one doing so (or by name); containers building from a specific service directory still all map to that service.
 
 ### BL-210 — Legacy `service discover` registers a directory that has only a `.env.example` but never seeds its schema
 

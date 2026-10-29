@@ -2,7 +2,7 @@
 import os
 import subprocess
 import sys
-from typing import List
+from typing import List, Optional
 
 import questionary
 import typer
@@ -255,6 +255,38 @@ def _check_union_completeness(service_name: str):
     if result.is_clean:
         return True, "Schema is satisfied by the combined union of registered sources."
     return False, result.summary()
+
+
+def template_ignore_message(example_file: str) -> Optional[str]:
+    """Why teammates won't receive `example_file`, or None (BL-185)."""
+    rule = git_utils.ignore_rule(example_file)
+    if rule is None:
+        return None
+    source, line, pattern = rule
+    return (
+        f"'{example_file}' is git-ignored ({source}:{line} {pattern}), so "
+        "teammates won't receive it. Add '!"
+        f"{os.path.basename(example_file)}' after that rule, or force-add it "
+        f"with 'git add -f {example_file}'."
+    )
+
+
+def _check_template_for_doctor(service_name: str):
+    """
+    Template Sync as 'doctor' reports it: the template must match the schema
+    and be committable (BL-185). 'schema sync --check' (the pre-commit hook)
+    keeps only the sync half: an ignored template isn't out of sync.
+    """
+    try:
+        paths = config_manager.get_env_paths(service_name=service_name)
+    except EnvShieldException as e:
+        return False, str(e)
+    example_file = paths["example_file"]
+    if not paths["local_file"].endswith(".py") and os.path.exists(example_file):
+        ignored = template_ignore_message(example_file)
+        if ignored:
+            return False, ignored
+    return _check_example_file_sync(service_name)
 
 
 def _check_example_file_sync(service_name: str):
@@ -581,7 +613,7 @@ def _build_checks(
     checks.append(
         HealthCheck(
             "Template Sync",
-            lambda: _check_example_file_sync(service_name),
+            lambda: _check_template_for_doctor(service_name),
             fix_func=lambda: schema_manager.sync_schema(service_name=service_name),
             fix_description="Template is missing or out of sync. Generate/update it from the schema?",
         )
