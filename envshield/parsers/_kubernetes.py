@@ -13,6 +13,7 @@ from ._base import (
     ValueState,
     ValueStates,
     legacy_text,
+    read_value,
 )
 
 _POD_TEMPLATE_KINDS = {"Deployment", "StatefulSet", "DaemonSet", "Job", "ReplicaSet"}
@@ -173,7 +174,7 @@ class KubernetesParser(BaseParser):
             if not name:
                 continue
             if "value" in env_entry:
-                variables[name] = Concrete(str(env_entry["value"]))
+                variables[name] = read_value(str(env_entry["value"]))
                 continue
 
             value_from = env_entry.get("valueFrom") or {}
@@ -214,7 +215,7 @@ class KubernetesParser(BaseParser):
             if cm_ref:
                 if cm_ref in config_maps:
                     for key, value in config_maps[cm_ref].items():
-                        variables.setdefault(prefix + key, Concrete(value))
+                        variables.setdefault(prefix + key, read_value(value))
                 else:
                     unbound.append(External(cm_ref, "configMapRef"))
             secret_ref = (env_from.get("secretRef") or {}).get("name")

@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from ..config import manager as config_manager
-from ..parsers._base import Concrete, ValueStates, not_inspected_names
+from ..parsers._base import ValueStates, not_inspected_names, read_value
 from ..parsers.factory import get_manifest_parser_and_states
 from ..utils import git_utils
 from . import discovery, schema_manager, schema_types, source_files, verdicts
@@ -152,7 +152,7 @@ def evaluate_source(
             local_values, environment, schema
         )
 
-    # Overlaid names are Concrete now, so never among these.
+    # Overlaid names are read values now: Concrete, or Referenced.
     source.not_inspected = tuple(sorted(not_inspected_names(local_values)))
     diff = schema_manager.diff_against_schema(schema, local_values, env)
     # An undeclared requiredIf trigger taken from the environment decides
@@ -690,7 +690,7 @@ def evaluate_runtime(
         kind="process_environment", path=RUNTIME_SOURCE, service=service_name
     )
     names = schema_manager.environment_overlay_names(environment, schema)
-    values = ValueStates({name: Concrete(environment[name]) for name in names})
+    values = ValueStates({name: read_value(environment[name]) for name in names})
     source.overlaid = tuple(names)
     diff = schema_manager.diff_against_schema(schema, values, env)
     # A requiredIf trigger the contract doesn't declare decides requiredness

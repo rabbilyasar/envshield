@@ -7,11 +7,11 @@ import yaml
 from ..core.exceptions import EnvShieldException
 from ._base import (
     BaseParser,
-    Concrete,
     Forwarded,
     ValueState,
     ValueStates,
     legacy_text,
+    read_value,
 )
 from ._deployment import ensure_within_project, safe_yaml_error_message
 from ._dotenv import DotenvParser
@@ -269,7 +269,7 @@ class DockerComposeParser(BaseParser):
         """
         names = _references(value)
         if not names:
-            return key, Concrete(value.replace("$$", "$"))
+            return key, read_value(value.replace("$$", "$"))
         match = _INTERPOLATION_RE.match(value.strip())
         if match and not _closes_early(match.group(3) or ""):
             var_name, operator, text = match.groups()
