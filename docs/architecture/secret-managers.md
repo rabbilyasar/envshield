@@ -147,7 +147,7 @@ by default elsewhere: `--runtime` and CI need the values.
   (a URL field reported them INVALID instead). EnvShield never saw the real
   value. They are now COULD NOT VERIFY `external_reference`, naming the
   form ("a 1Password reference"), in every source.
-- **`BL-214` (#104):** `check` and `doctor` block forever on a `.env` that is a
+- **`BL-214` (#104), fixed:** `check` and `doctor` blocked forever on a `.env` that is a
   named pipe nobody is serving: a 1Password Environments mount while
   1Password is locked or not running. A pipe is read with a timeout
   (default 10 s); unserved, its variables are COULD NOT VERIFY

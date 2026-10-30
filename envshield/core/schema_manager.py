@@ -13,6 +13,7 @@ from envshield.core.exceptions import (
     SharedSchemaWriteRefusedError,
 )
 from envshield.parsers._base import (
+    UNSERVED_PIPE,
     ValueState,
     ValueStates,
     as_states,
@@ -116,6 +117,9 @@ class SchemaDiff:
         # service (see mark_out_of_scope). Reporting only: an out-of-scope
         # variable is still `extra`.
         self.system_only: set = set()
+        # Local files that are named pipes nobody served (BL-214): the
+        # reason `unresolved` holds names, not an external reference.
+        self.unserved_files: Tuple[str, ...] = ()
 
     @property
     def out_of_scope(self) -> set:
@@ -162,7 +166,13 @@ class SchemaDiff:
                 f"({OUT_OF_SCOPE_HINT})"
             )
         external = self.unresolved - set(self.unresolved_triggers)
-        if external:
+        if external and self.unserved_files:
+            messages.append(
+                f"Cannot confirm: {', '.join(sorted(external))} "
+                f"('{self.unserved_files[0]}' is a mounted file that wasn't "
+                "served; is your secret manager unlocked?)"
+            )
+        elif external:
             messages.append(
                 f"Cannot confirm: {', '.join(sorted(external))} "
                 "(required, but this manifest references an external ConfigMap/Secret "
@@ -306,6 +316,9 @@ def diff_against_schema(
     )
     diff.present = local_vars & schema_vars_all
     diff.unresolved_triggers = unresolved_triggers
+    diff.unserved_files = tuple(
+        u.ref for u in states.unbound if u.kind == UNSERVED_PIPE
+    )
     return diff
 
 

@@ -7,6 +7,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, Mapping, Optional, Set, Tuple, Union
 
+from ..core.exceptions import PipeNotServedError
+
 # --- Value states (v5 plan §4) ---------------------------------------------
 # What one source says about one key. A key missing from a ValueStates
 # mapping is Absent: the source doesn't bind it. Only Concrete carries a
@@ -45,10 +47,15 @@ class External:
     The value lives in an object outside the manifest. `kind` is the
     Kubernetes field that points at it (secretKeyRef, configMapKeyRef,
     fieldRef, resourceFieldRef, secretRef, configMapRef); `ref` names it.
+    As an unbound entry, kind UNSERVED_PIPE: `ref` is a local file that is
+    a named pipe nobody served, so none of its keys could be read (BL-214).
     """
 
     ref: str
     kind: str
+
+
+UNSERVED_PIPE = "unservedPipe"
 
 
 @dataclass(frozen=True)
@@ -189,4 +196,8 @@ class BaseParser(ABC):
     def get_states(self, file_path: str) -> ValueStates:
         """Each key's ValueState. A local file reads every value: Concrete, or
         Referenced for a reference or an encrypted value."""
-        return as_states(self.get_vars(file_path, get_values=True))
+        try:
+            return as_states(self.get_vars(file_path, get_values=True))
+        except PipeNotServedError:
+            # Nothing was read, so no key is knowably absent (BL-214).
+            return ValueStates(unbound=[External(file_path, UNSERVED_PIPE)])

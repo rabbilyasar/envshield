@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 from ..parsers._base import (
+    UNSERVED_PIPE,
     Concrete,
     External,
     Forwarded,
@@ -221,6 +222,14 @@ def judge_variable(
         unbound = tuple(unbound)
         if need == OPTIONAL:
             return Verdict(NOT_REQUIRED)
+        unserved = [u for u in unbound if u.kind == UNSERVED_PIPE]
+        if unserved:
+            return Verdict(
+                UNVERIFIED,
+                "value_not_inspected",
+                f"'{unserved[0].ref}' is a mounted file that wasn't served; "
+                "is your secret manager unlocked?",
+            )
         if unbound:
             ref = unbound[0]
             return Verdict(

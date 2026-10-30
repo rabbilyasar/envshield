@@ -5,6 +5,7 @@ import re
 from typing import Dict, Set, Union
 
 from ._base import BaseParser
+from ._local_read import read_local_lines
 
 _INLINE_COMMENT_RE = re.compile(r"\s+#.*$")
 
@@ -40,19 +41,18 @@ class DotenvParser(BaseParser):
             raise FileNotFoundError(f"File not found: {file_path}")
 
         variables = {}
-        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                if line.startswith("export "):
-                    line = line[len("export ") :].strip()
-                if "=" not in line:
-                    continue
-                key, value = line.split("=", 1)
-                key = key.strip()
-                if key:
-                    variables[key] = self._parse_value(value.strip())
+        for line in read_local_lines(file_path):
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("export "):
+                line = line[len("export ") :].strip()
+            if "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            if key:
+                variables[key] = self._parse_value(value.strip())
 
         return variables if get_values else set(variables.keys())
 
@@ -103,14 +103,13 @@ class DotenvParser(BaseParser):
             return 0
 
         count = 0
-        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
-            for line in f:
-                line = line.strip()
-                if not line.startswith("#"):
-                    continue
-                candidate = line.lstrip("#").strip()
-                if candidate.startswith("export "):
-                    candidate = candidate[len("export ") :].strip()
-                if _COMMENTED_ASSIGNMENT_RE.match(candidate):
-                    count += 1
+        for line in read_local_lines(file_path):
+            line = line.strip()
+            if not line.startswith("#"):
+                continue
+            candidate = line.lstrip("#").strip()
+            if candidate.startswith("export "):
+                candidate = candidate[len("export ") :].strip()
+            if _COMMENTED_ASSIGNMENT_RE.match(candidate):
+                count += 1
         return count

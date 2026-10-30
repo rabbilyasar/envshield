@@ -286,3 +286,20 @@ class UnknownEnvironmentError(EnvShieldException):
             "(add others under 'environments:' in envshield.yml)."
         )
         super().__init__(self.message)
+
+
+class PipeNotServedError(EnvShieldException):
+    """
+    A local file that is a named pipe (a secret manager's mounted .env,
+    such as 1Password Environments) wasn't served before the read timed
+    out, or stopped mid-read (BL-214). Nothing it held was read.
+    """
+
+    def __init__(self, path: str, timeout: float):
+        self.path = path
+        self.timeout = timeout
+        self.message = (
+            f"'{path}' is a mounted file that wasn't served within "
+            f"{timeout:g} s; is your secret manager unlocked?"
+        )
+        super().__init__(self.message)

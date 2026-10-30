@@ -2155,7 +2155,7 @@ Component: `core/setup_manager.py::run_setup`, `cli.py::setup`
 
 ### BL-213 — A reference or encrypted value in a local file is reported VALID
 
-Type: `BUG` (false-clean) · Evidence: `CONFIRMED` (live, 2026-10-30, while testing the #22 design) · Priority: **P1** · Status: **fixed 2026-10-30 ([#103](https://github.com/rabbilyasar/envshield/issues/103), branch `fix/103-external-references`)**
+Type: `BUG` (false-clean) · Evidence: `CONFIRMED` (live, 2026-10-30, while testing the #22 design) · Priority: **P1** · Status: **fixed 2026-10-30 ([#103](https://github.com/rabbilyasar/envshield/issues/103), merged `db27b73`, PR #108)**
 Component: `core/verdicts.py`, `parsers/_base.py` value states
 
 - **Reproduction:** `.env` values that point at or encrypt a secret are judged as the value itself. For a string field all of these are VALID; for `type = "url"`, `op://`, `sm://` and `bws://` are VALID and `vault:`, dotenvx `encrypted:` and SOPS `ENC[...]` are INVALID: `op://dev/postgres/url` (1Password, as used by `op run --env-file`), `sm://project/secret` (Berglas), `bws://abc-123`, `vault:secret/data/db#url`, `encrypted:BD...`, `ENC[AES256_GCM,data:...]`.
@@ -2170,13 +2170,16 @@ Component: `core/verdicts.py`, `parsers/_base.py` value states
 
 ### BL-214 — `check` and `doctor` hang forever on a mounted `.env` (a named pipe nobody serves)
 
-Type: `BUG` · Evidence: `CONFIRMED` (live, 2026-10-30) · Priority: **P1** (a hang in a command the hooks and agents run) · Status: **open ([#104](https://github.com/rabbilyasar/envshield/issues/104))**
+Type: `BUG` · Evidence: `CONFIRMED` (live, 2026-10-30) · Priority: **P1** (a hang in a command the hooks and agents run) · Status: **fixed 2026-10-31 ([#104](https://github.com/rabbilyasar/envshield/issues/104), branch `fix/104-unserved-pipe`)**
 Component: local-file reading in `evaluator` / `parsers`, `doctor`
 
 - **Reproduction:** `mkfifo .env`, then `envshield check --json` and `envshield doctor --json`: both still blocked after 8 s. A 1Password Developer Environments mount is exactly this while 1Password is locked or not running. `scan` and `setup` finish. A *served* pipe (a writer streaming `.env` content) is read and validated correctly, with no value printed.
 - **Expected:** open a pipe without blocking and read it with a timeout (10 s); unserved, its variables are COULD NOT VERIFY `value_not_inspected` with a hint to unlock the secret manager; never write to a pipe.
 - **Relationships:** #22 design, `BL-174`.
 - **Issue:** [#104](https://github.com/rabbilyasar/envshield/issues/104).
+- **Fix (2026-10-31):** `parsers/_local_read.py` reads every local file the dotenv and Python parsers open. A regular file is read as before (byte-identical `check --json` on the 13 configured trial repositories). A named pipe is opened `O_RDONLY | O_NONBLOCK` and polled until its writer closes, with a 10 s deadline (`PIPE_READ_TIMEOUT`); no writer by then, or a writer that hasn't finished (stopped mid-read, partial text discarded), raises `PipeNotServedError`. Each pipe is read once per process: later reads get the same text or the same error without waiting again, so `doctor` waits 10 s, not once per check. Nothing opens a pipe for writing (tested with an `os.open` spy). `BaseParser.get_states` turns the error into no keys plus an unbound `External(path, "unservedPipe")`, so the existing "a key may be supplied from somewhere EnvShield can't see" handling applies everywhere: requiredness, the older diff (`unresolved`), union completeness. Its verdict is COULD NOT VERIFY `value_not_inspected` ("'.env' is a mounted file that wasn't served; is your secret manager unlocked?"), accepted with `--accept-unverified value_not_inspected`; `doctor`'s Local Environment Sync names the same cause.
+- **Tests:** `envshield/tests/test_unserved_pipe.py` (14): unserved (times out once, then fails fast), served (read once, validated, value never printed), served invalid, stopped mid-read, newline handling unchanged, never opened for writing, Python config module, `check`, `check --json`, accept flag, `doctor`, `setup --non-interactive` (refuses at once, as before), union completeness, and a real subprocess. Full suite 2623 passed.
+- **Left open:** (1) a Compose `env_file:` that is an unserved pipe still contributes nothing, so its required variables report INVALID `missing` (fails closed, with the wrong reason); (2) `setup` refuses a pipe `.env` with "replace it with a regular file", wrong advice for a secret manager's mount (for #22's `setup` work); (3) tested on Linux only; macOS polls a pipe the same way in principle, not yet verified.
 
 ---
 
