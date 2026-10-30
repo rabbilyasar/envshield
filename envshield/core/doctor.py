@@ -16,6 +16,7 @@ from . import (
     hooks_manager,
     schema_manager,
     schema_types,
+    secret_manager,
     service_discovery,
     setup_manager,
 )
@@ -715,7 +716,40 @@ def _build_checks(
             )
         )
 
+    if "secrets" in config_manager.load_config():
+        checks.append(
+            HealthCheck("Secret Manager", _check_secret_manager, fix_func=None)
+        )
+
     return checks
+
+
+def _check_secret_manager():
+    """
+    Whether the project's secrets command is approved and installed (V3-3).
+    Never runs it: approving and running are 'check --with-secrets' and
+    'envshield secrets allow'.
+    """
+    config = secret_manager.get_config()
+    if not config.run:
+        return (
+            True,
+            "No 'secrets.run': vault values are checked only when EnvShield runs "
+            "inside your secret manager's run command.",
+        )
+    if not secret_manager.command_on_path(config):
+        return (
+            False,
+            f"'{config.argv[0]}' isn't installed or isn't on PATH: install your "
+            "secret manager's CLI.",
+        )
+    if secret_manager.is_approved(os.getcwd(), config.run):
+        return True, f"'{config.run}' is approved for 'check --with-secrets'."
+    return (
+        True,
+        f"'{config.run}' isn't approved yet: 'envshield check --with-secrets' asks "
+        "once, or run 'envshield secrets allow'.",
+    )
 
 
 def run_health_check(fix: bool, service_name: str, env: str = schema_types.LOCAL):

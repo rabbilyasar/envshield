@@ -34,6 +34,7 @@ from .core import (
     schema_manager,
     schema_snapshot,
     schema_types,
+    secret_manager,
     service_discovery,
     service_manager,
     setup_manager,
@@ -128,6 +129,15 @@ agent_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(agent_app, name="agent", rich_help_panel=_DEV_AND_DEPLOY)
+secrets_app = typer.Typer(
+    name="secrets",
+    help=(
+        "Approve or revoke running the project's secret manager command "
+        "('secrets.run' in envshield.yml)."
+    ),
+    no_args_is_help=True,
+)
+app.add_typer(secrets_app, name="secrets", rich_help_panel=_ONBOARDING)
 
 
 def _seed_schema_from_file(
@@ -932,8 +942,17 @@ def check(
         help=(
             "Let the check pass when the only problems are values it could not "
             "verify for these reasons: host_forward, external_reference, "
-            "value_not_inspected. Repeatable. The verdict and every unverified "
-            "line are still reported."
+            "value_not_inspected, secret_manager. Repeatable. The verdict and "
+            "every unverified line are still reported."
+        ),
+    ),
+    with_secrets: bool = typer.Option(
+        False,
+        "--with-secrets",
+        help=(
+            "Also check the values your secret manager supplies, by running "
+            "the project's 'secrets.run' command (approved once; values are "
+            "checked in a child process and never shown)."
         ),
     ),
     env: Optional[str] = typer.Option(
@@ -1009,12 +1028,19 @@ def check(
             ("--process-env", process_env),
             ("--runtime", runtime),
             ("--accept-unverified", accept_unverified is not None),
+            ("--with-secrets", with_secrets),
         ):
             if given:
                 # Code-only reads no values, so these have nothing to apply to.
                 raise typer.BadParameter(
                     f"doesn't work with {flag}", param_hint="--code-only"
                 )
+    if runtime and with_secrets:
+        raise typer.BadParameter(
+            "doesn't work with --runtime (wrap the command in your secret "
+            "manager's run command instead)",
+            param_hint="--with-secrets",
+        )
     if runtime:
         _runtime_preflight(file, container, process_env, accept_unverified, project)
     elif project is not None:
@@ -1066,6 +1092,20 @@ def check(
     env_name = _resolve_env(env, machine)
     if not machine and env_name != schema_types.LOCAL:
         console.print(f"[bold]Environment:[/bold] {escape(env_name)}")
+    secret_inputs = None
+    auto_accept = False
+    if not runtime and not code_only:
+        try:
+            secret_inputs, auto_accept = _secret_inputs(
+                targets, env_name, with_secrets, machine
+            )
+        except EnvShieldException as e:
+            if json_output:
+                print(json.dumps({"success": False, "error": str(e)}, indent=2))
+            else:
+                console.print(f"[bold red]Error:[/bold red] {e}")
+            raise typer.Exit(code=1)
+
     evaluations = []
     for target in targets:
         if not machine:
@@ -1084,6 +1124,7 @@ def check(
                 code=True,
                 env=env_name,
                 code_files=changed,
+                secrets=secret_inputs,
             )
         if (
             changed is not None
@@ -1103,9 +1144,16 @@ def check(
     # doesn't count undeclared reads that existed at REV (D-13).
     verdict = verdicts.worst(e.verdict() for e in evaluations).verdict
     gate_verdict = verdicts.worst(e.gate_verdict() for e in evaluations).verdict
-    gate = verdicts.gate(
-        gate_verdict, [f for r in reports for f in r["unverified"]], accepted
-    )
+    unverified = [f for r in reports for f in r["unverified"]]
+    if (
+        auto_accept
+        and "secret_manager" not in accepted
+        and any(f["reason_code"] == "secret_manager" for f in unverified)
+    ):
+        # Daily 'check' stays fast: vault values it didn't check don't fail
+        # it in 'local' (V3-3). Elsewhere, and with --with-secrets, they do.
+        accepted = sorted(accepted + ["secret_manager"])
+    gate = verdicts.gate(gate_verdict, unverified, accepted)
     if since_rev is not None:
         gate["undeclared_before"] = sorted(
             {
@@ -1200,6 +1248,118 @@ def _resolve_env(env: Optional[str], json_output: bool) -> str:
         else:
             console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(code=1)
+
+
+def _secret_inputs(
+    targets: List[str], env_name: str, with_secrets: bool, machine: bool
+):
+    """
+    What 'check' knows about vault-supplied variables (V3-3), and whether
+    `secret_manager` is accepted by default. Runs the secrets command only
+    with --with-secrets, an approval of that exact command, and a terminal.
+    """
+    config = secret_manager.get_config()
+    if config is None:
+        if with_secrets:
+            raise typer.BadParameter(
+                "needs a 'secrets:' section with 'run' in envshield.yml",
+                param_hint="--with-secrets",
+            )
+        # A field may still say source = "secret-manager".
+        return secret_manager.SecretInputs(environ=os.environ), (
+            env_name == schema_types.LOCAL
+        )
+    if not with_secrets:
+        return secret_manager.SecretInputs(environ=os.environ), (
+            env_name == schema_types.LOCAL
+        )
+    if not config.run:
+        raise typer.BadParameter(
+            "needs 'secrets.run' in envshield.yml: the command that starts a "
+            'process with your secrets, like "bws run --"',
+            param_hint="--with-secrets",
+        )
+
+    def pending(reason: str):
+        detail = secret_manager.pending_detail(config, reason)
+        return secret_manager.SecretInputs(environ=os.environ, pending=detail), False
+
+    if not secret_manager.stdin_is_terminal():
+        return pending(
+            "no terminal: EnvShield never runs your secrets command without one"
+        )
+    root = os.getcwd()
+    if not secret_manager.is_approved(root, config.run):
+        if machine:
+            return pending("not approved yet: run 'envshield secrets allow'")
+        if not _confirm_secrets_command(config.run):
+            return pending("you didn't allow your secrets command")
+        secret_manager.approve(root, config.run)
+    if not machine:
+        console.print(f"[dim]Checking your secrets with: {escape(config.run)}[/dim]")
+    outcome = secret_manager.run_probe(config, targets)
+    return secret_manager.SecretInputs(environ=os.environ, outcome=outcome), False
+
+
+def _confirm_secrets_command(command: str) -> bool:
+    console.print(
+        f"This project gets its secrets with:  [bold]{escape(command)}[/bold]"
+    )
+    return typer.confirm(
+        "Allow EnvShield to run this command? It runs again without asking "
+        "until it changes.",
+        default=False,
+    )
+
+
+@secrets_app.command("allow")
+def secrets_allow():
+    """Approve the project's 'secrets.run' command, without running it."""
+    config = _secrets_config_or_exit()
+    secret_manager.approve(os.getcwd(), config.run)
+    console.print(
+        f"Allowed: [bold]{escape(config.run)}[/bold]\n"
+        "'check --with-secrets' runs it until it changes. Revoke with "
+        "'envshield secrets revoke'."
+    )
+
+
+@secrets_app.command("revoke")
+def secrets_revoke():
+    """Forget this project's approval of its secrets command."""
+    if secret_manager.revoke(os.getcwd()):
+        console.print("Revoked. EnvShield will ask before running it again.")
+    else:
+        console.print("Nothing to revoke: no command is approved for this project.")
+
+
+@secrets_app.command("probe", hidden=True)
+def secrets_probe(
+    nonce: str = typer.Option(..., "--nonce"),
+    service: List[str] = typer.Option([], "--service"),
+):
+    """Internal: run by the secrets command; prints name-only statuses."""
+    try:
+        payload = secret_manager.probe(service, os.environ)
+    except EnvShieldException as e:
+        payload = {"error": str(e)}
+    print(secret_manager.probe_line(nonce, payload))
+
+
+def _secrets_config_or_exit() -> secret_manager.SecretsConfig:
+    try:
+        config = secret_manager.get_config()
+    except EnvShieldException as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
+        raise typer.Exit(code=1)
+    if config is None or not config.run:
+        console.print(
+            "[bold red]Error:[/bold red] envshield.yml has no 'secrets.run': "
+            "add the command that starts a process with your secrets, like\n"
+            '  secrets:\n    run: "bws run --project-id <id> --"'
+        )
+        raise typer.Exit(code=1)
+    return config
 
 
 def _render_gate(

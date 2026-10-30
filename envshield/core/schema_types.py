@@ -42,6 +42,7 @@ FIELD_KEYS = frozenset(
         "secret",
         "description",
         "services",
+        "source",
     }
 )
 _REQUIREDIF_KEYS = frozenset({"var", "equals"})
@@ -108,6 +109,11 @@ def field_problems(name: str, field_schema: Any) -> list[str]:
     for key in ("required", "secret"):
         if key in field_schema and not isinstance(field_schema[key], bool):
             problems.append(f"'{name}'.{key} must be true or false")
+    if "source" in field_schema and field_schema["source"] not in (
+        "local",
+        "secret-manager",
+    ):
+        problems.append(f'\'{name}\'.source must be "local" or "secret-manager"')
     if "enum" in field_schema and not isinstance(field_schema["enum"], list):
         problems.append(f"'{name}'.enum must be a list")
     condition = field_schema.get("requiredIf")

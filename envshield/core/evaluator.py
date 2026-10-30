@@ -18,10 +18,23 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from ..config import manager as config_manager
-from ..parsers._base import ValueStates, not_inspected_names, read_value
+from ..parsers._base import (
+    SUPPLIED_STATUSES,
+    FromSecretManager,
+    ValueStates,
+    not_inspected_names,
+    read_value,
+)
 from ..parsers.factory import get_manifest_parser_and_states
 from ..utils import git_utils
-from . import discovery, schema_manager, schema_types, source_files, verdicts
+from . import (
+    discovery,
+    schema_manager,
+    schema_types,
+    secret_manager,
+    source_files,
+    verdicts,
+)
 from . import since as since_check
 from .exceptions import EnvShieldException
 from .verdicts import Verdict
@@ -97,6 +110,7 @@ def evaluate_source(
     kind: str = "local_file",
     union: bool = False,
     env: str = schema_types.LOCAL,
+    secrets: Optional[secret_manager.SecretInputs] = None,
 ) -> SourceEvaluation:
     """
     Evaluates one source against `service_name`'s contract.
@@ -144,13 +158,23 @@ def evaluate_source(
     file_names = set(local_values)
     if parser.is_deployment_manifest:
         source.kind = "manifest"
-    elif environment is not None:
-        source.overlaid = tuple(
-            schema_manager.environment_overlay_names(environment, schema)
-        )
-        local_values = schema_manager.overlay_environment(
-            local_values, environment, schema
-        )
+    else:
+        if environment is not None:
+            source.overlaid = tuple(
+                schema_manager.environment_overlay_names(environment, schema)
+            )
+            local_values = schema_manager.overlay_environment(
+                local_values, environment, schema
+            )
+        try:
+            local_values = _overlay_secret_manager(
+                local_values,
+                secret_manager.secret_states(service_name, schema, secrets),
+            )
+        except EnvShieldException as e:
+            source.status, source.error = "error", str(e)
+            source.error_reason = "topology_error"
+            return source
 
     # Overlaid names are read values now: Concrete, or Referenced.
     source.not_inspected = tuple(sorted(not_inspected_names(local_values)))
@@ -185,6 +209,26 @@ def evaluate_source(
     if diff.unresolved:
         source.status = "unresolved"
     return source
+
+
+def _overlay_secret_manager(local_values: ValueStates, states) -> ValueStates:
+    """
+    `local_values` with what's known about vault-supplied variables (V3-3):
+    a value the secret manager supplied (read from the environment, or a
+    probe status saying what it was) replaces the file's, as it does for
+    the running app; "didn't supply it", "not checked" and "the command
+    failed" apply only where the file has no value of its own.
+    """
+    if not states:
+        return local_values
+    merged = dict(local_values)
+    for name, state in states.items():
+        supplied = not isinstance(state, FromSecretManager) or (
+            state.status in SUPPLIED_STATUSES
+        )
+        if supplied or name not in merged:
+            merged[name] = state
+    return ValueStates(merged, local_values.unbound, local_values.missing_files)
 
 
 @dataclass
@@ -352,6 +396,8 @@ class ServiceEvaluation:
     # The service's contract; None when it failed to load (schema_error).
     view: Optional[Any] = None
     schema_error: Optional[str] = None
+    # The secrets command failed for 'check --with-secrets' (V3-3).
+    secret_manager_error: Optional[str] = None
     # A failure resolving the service itself (its paths, its manifests, or
     # the union step) -- the evaluation stopped there.
     error: Optional[str] = None
@@ -472,6 +518,17 @@ class ServiceEvaluation:
             found.append(
                 (verdicts.Verdict(verdicts.ERROR, "topology_error", self.error), None)
             )
+        if self.secret_manager_error is not None:
+            found.append(
+                (
+                    verdicts.Verdict(
+                        verdicts.ERROR,
+                        "secret_manager_error",
+                        self.secret_manager_error,
+                    ),
+                    None,
+                )
+            )
         if self.schema_error is None:
             for source in self.sources:
                 if source.status == "error":
@@ -550,6 +607,7 @@ def evaluate_service(
     code: bool = False,
     env: str = schema_types.LOCAL,
     code_files: Optional[List[str]] = None,
+    secrets: Optional[secret_manager.SecretInputs] = None,
 ) -> ServiceEvaluation:
     """
     Evaluates one service in environment `env` (plan §7). In 'local', the
@@ -603,8 +661,17 @@ def evaluate_service(
                 schema=schema,
                 union=evaluation.is_union,
                 env=env,
+                secrets=secrets,
                 **kwargs,
             )
+
+        failure = secrets.outcome.failure if secrets and secrets.outcome else None
+        if failure and evaluation.view is not None:
+            enabled = secret_manager.get_config() is not None
+            if secret_manager.vault_names(evaluation.view.fields, enabled):
+                evaluation.secret_manager_error = (
+                    f"couldn't check the values from your secret manager: {failure}"
+                )
 
         if local or file:
             evaluation.sources.append(

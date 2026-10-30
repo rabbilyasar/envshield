@@ -180,9 +180,9 @@ This section applies to `check`. `doctor`, `scan`, `undeclared` and `schema diff
 | Verdict | Reason codes | Acceptable with `--accept-unverified`? |
 |---|---|---|
 | INVALID | `missing`, `blank`, `invalid_value`, `file_not_found`, `invalid_fallback`, `extra`, `out_of_scope`, `undeclared_reference` | never |
-| COULD NOT VERIFY | `host_forward`, `external_reference`, `value_not_inspected` | yes, each named explicitly |
+| COULD NOT VERIFY | `host_forward`, `external_reference`, `value_not_inspected`, `secret_manager` (V3-3: a vault-supplied variable `check` didn't check; accepted by default in `local` unless `--with-secrets` was asked for) | yes, each named explicitly |
 | COULD NOT VERIFY | `ambiguous_requirement` | **never**: the requirement itself is unknown |
-| ERROR | `contract_error`, `topology_error`, `source_parse_error`, `source_unreadable`, `internal_error` | **never** |
+| ERROR | `contract_error`, `topology_error`, `source_parse_error`, `source_unreadable`, `secret_manager_error` (V3-3: the secrets command failed, timed out or isn't installed), `internal_error` | **never** |
 
 ### Source matrix
 
@@ -251,7 +251,7 @@ Compared with v4 the exit contract is unchanged (v4 already exits 0 only when ev
 
 ### `--accept-unverified=REASON[,REASON]` [Approved]
 
-- **Closed set:** `host_forward`, `external_reference`, `value_not_inspected`. Repeatable. No `all`.
+- **Closed set:** `host_forward`, `external_reference`, `value_not_inspected`, `secret_manager`. Repeatable. No `all`.
 - **Usage errors (exit 2):** an unknown reason, `ambiguous_requirement`, any ERROR reason, `all`, and any use together with `--runtime`.
 - **The verdict never changes.** Only the gate does. Scope is the whole invocation.
 - **Human output** never prints VALID for an accepted run. It lists every `?` line and ends with "PASSED WITH UNVERIFIED VALUES", naming the accepted reasons.
