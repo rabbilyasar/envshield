@@ -8,6 +8,7 @@ from typing import Dict, Set, Union
 from ..core.discovery import parse_python
 from ..core.exceptions import EnvShieldException
 from ._base import BaseParser
+from ._local_read import read_local_text
 
 
 class PythonParser(BaseParser):
@@ -26,30 +27,29 @@ class PythonParser(BaseParser):
             raise FileNotFoundError(f"File not found: {file_path}")
 
         variables: Dict[str, str] = {}
-        with open(file_path, "r") as f:
-            try:
-                # Parse the file content into an AST
-                tree = parse_python(f.read(), file_path)
+        try:
+            # Parse the file content into an AST
+            tree = parse_python(read_local_text(file_path, errors="strict"), file_path)
 
-                # Walk through the top-level nodes in the tree
-                for node in tree.body:
-                    # We are only interested in assignment statements
-                    if isinstance(node, ast.Assign):
-                        # An assignment can have multiple targets (e.g., a = b = 10)
-                        for target in node.targets:
-                            # We only care about simple name assignments (e.g., VAR = ...)
-                            if isinstance(target, ast.Name):
-                                variables[target.id] = self._resolve_value(node.value)
-            except (SyntaxError, TypeError, UnicodeDecodeError) as e:
-                # A malformed or non-UTF-8 file can never safely be treated
-                # as "declares nothing" -- every caller that diffs this
-                # result against a schema would silently read that as a
-                # false-clean (see BL-002/BL-092). Raise instead, matching
-                # DockerComposeParser.get_vars's existing pattern for the
-                # equivalent case. str(e) only -- never an attribute like
-                # SyntaxError.text -- so the file's actual content, which
-                # may contain a secret value, is never echoed here.
-                raise EnvShieldException(f"Could not parse '{file_path}': {e}")
+            # Walk through the top-level nodes in the tree
+            for node in tree.body:
+                # We are only interested in assignment statements
+                if isinstance(node, ast.Assign):
+                    # An assignment can have multiple targets (e.g., a = b = 10)
+                    for target in node.targets:
+                        # We only care about simple name assignments (e.g., VAR = ...)
+                        if isinstance(target, ast.Name):
+                            variables[target.id] = self._resolve_value(node.value)
+        except (SyntaxError, TypeError, UnicodeDecodeError) as e:
+            # A malformed or non-UTF-8 file can never safely be treated
+            # as "declares nothing" -- every caller that diffs this
+            # result against a schema would silently read that as a
+            # false-clean (see BL-002/BL-092). Raise instead, matching
+            # DockerComposeParser.get_vars's existing pattern for the
+            # equivalent case. str(e) only -- never an attribute like
+            # SyntaxError.text -- so the file's actual content, which
+            # may contain a secret value, is never echoed here.
+            raise EnvShieldException(f"Could not parse '{file_path}': {e}")
 
         return variables if get_values else set(variables.keys())
 
