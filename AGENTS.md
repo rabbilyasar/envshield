@@ -909,10 +909,22 @@ introduced through a different code path.
 
 ## 16. PR requirements
 
-Every PR: focused, independently understandable, testable, reversible where
-practical. Description includes Problem, Why, Design, Alternatives,
-Security, Compatibility, Tests, Product impact, Market impact (does this
-differentiate EnvShield or is it table-stakes?).
+Every PR: one change, independently understandable, testable, reversible
+where practical.
+
+Keep the description short and about the changes, in the shape of
+[.github/pull_request_template.md](.github/pull_request_template.md):
+
+- the issue it closes or belongs to;
+- a one- or two-line summary;
+- Before/After: the command and its output before and after, as text;
+  a screenshot only for something visual;
+- the changes;
+- how it was verified.
+
+The reasoning (problem, alternatives, security, product and market
+impact) belongs in the issue and its BACKLOG.md entry; link them instead
+of repeating them. No AI attribution in a PR description (§22).
 
 ---
 
@@ -1295,7 +1307,7 @@ Codex must NOT:
 
 - add `Co-authored-by:` trailers
 - add Codex/Anthropic as a co-author
-- add AI attribution to commit messages
+- add AI attribution to commit messages or PR descriptions
 - change the repository owner's Git identity
 - configure a different global or local Git user
 - amend commits authored by the repository owner unless explicitly instructed
