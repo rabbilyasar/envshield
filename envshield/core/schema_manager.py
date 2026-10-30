@@ -13,12 +13,12 @@ from envshield.core.exceptions import (
     SharedSchemaWriteRefusedError,
 )
 from envshield.parsers._base import (
-    Concrete,
     ValueState,
     ValueStates,
     as_states,
     legacy_text,
     not_inspected_names,
+    read_value,
 )
 from envshield.parsers._deployment import looks_like_unrendered_helm_template
 from envshield.parsers.factory import get_manifest_parser_and_states, get_parser
@@ -592,7 +592,7 @@ def overlay_environment(
     local_values: ValueStates, environment: Dict[str, str], schema: Dict[str, Any]
 ) -> ValueStates:
     """
-    `local_values` with the process environment laid over it, as Concrete
+    `local_values` with the process environment laid over it, as read
     values, for the names environment_overlay_names picks -- the
     environment wins, even when it's empty, as a dotenv loader never
     overrides an already-set variable. Returns new ValueStates; the
@@ -600,7 +600,7 @@ def overlay_environment(
     """
     names = environment_overlay_names(environment, schema)
     return ValueStates(
-        {**local_values, **{name: Concrete(environment[name]) for name in names}},
+        {**local_values, **{name: read_value(environment[name]) for name in names}},
         local_values.unbound,
         local_values.missing_files,
     )

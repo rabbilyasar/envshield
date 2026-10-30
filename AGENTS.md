@@ -1051,7 +1051,9 @@ reports READY / SET YOURSELF / OPTIONAL per variable, never prompts
 without a terminal (`--non-interactive`), and exits 1 while a required
 variable isn't ready (`BL-212`; merged `c83d386`, PR #102). #22's design is
 approved ([secret-managers.md](docs/architecture/secret-managers.md)); it
-found `BL-213` (#103) and `BL-214` (#104), both P1. The full order is
+found `BL-213` (#103) and `BL-214` (#104), both P1. #103: a reference
+or an encrypted value (`op://…`, SOPS `ENC[…]`, …) is COULD NOT VERIFY
+`external_reference`, never VALID. The full order is
 ROADMAP.md's "v5 — in progress". Nothing since `v4.9.1` is released.
 
 **Previous phase (updated 2026-10-15): `v4.9.1` released; v5 V1 next.**

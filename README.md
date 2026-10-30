@@ -170,7 +170,7 @@ Invalid
 INVALID: 2 invalid, 1 valid.
 ```
 
-Every variable gets one verdict: valid, invalid, could not verify, not required, or error. `check` never calls a value valid unless it read it. A manifest often only *points* at a value (a Kubernetes Secret, a Compose `${VAR}` from the deploy host), so those variables are "could not verify", and `check` exits 1. When that's expected, accept the specific reason: `envshield check k8s/prod.yaml --accept-unverified=external_reference` exits 0, still lists every unverified variable, and ends with `PASSED WITH UNVERIFIED VALUES`. The reasons you can accept are `host_forward`, `external_reference` and `value_not_inspected`. In `--json`, `success` stays `false` for an accepted run.
+Every variable gets one verdict: valid, invalid, could not verify, not required, or error. `check` never calls a value valid unless it read it. A manifest often only *points* at a value (a Kubernetes Secret, a Compose `${VAR}` from the deploy host), and a `.env` can hold a secret manager's reference or an encrypted value (`op://...`, SOPS `ENC[...]`, dotenvx `encrypted:...`), so those variables are "could not verify", and `check` exits 1. When that's expected, accept the specific reason: `envshield check k8s/prod.yaml --accept-unverified=external_reference` exits 0, still lists every unverified variable, and ends with `PASSED WITH UNVERIFIED VALUES`. The reasons you can accept are `host_forward`, `external_reference` and `value_not_inspected`. In `--json`, `success` stays `false` for an accepted run.
 
 **Environments.** A variable can be optional on a laptop and required in production. Declare the environments in `envshield.yml` and say where each variable is required:
 

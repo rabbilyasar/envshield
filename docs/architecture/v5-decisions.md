@@ -189,6 +189,7 @@ This section applies to `check`. `doctor`, `scan`, `undeclared` and `schema diff
 | Source / case | Value state | v5 verdict (reason) |
 |---|---|---|
 | `.env` / Python config / process environment: value | `Concrete` | VALID / INVALID (`invalid_value`) |
+| Same sources, or a literal in a manifest: a reference or an encrypted value (`op://`, `sm://`, `berglas://`, `vault:`, dotenvx `encrypted:`, SOPS `ENC[...]`) | `Referenced` | COULD NOT VERIFY (`external_reference`), whatever the field's type: "a 1Password reference" (`BL-213`, #103) |
 | Same sources: empty | `Concrete("")` | §7 empty rule: INVALID (`blank` or `invalid_value`) or VALID |
 | Same sources: absent | `Absent` | INVALID (`missing`) if required; NOT REQUIRED otherwise |
 | Configured local file doesn't exist | — | INVALID (`file_not_found`) for required variables (keeps today's exit 1) |

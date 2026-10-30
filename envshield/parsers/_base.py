@@ -2,6 +2,7 @@
 # Defines the abstract base class for all file parsers, and the typed value
 # states every parser reports per key.
 
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, Mapping, Optional, Set, Tuple, Union
@@ -57,7 +58,50 @@ class KeyPresent:
     ref: str
 
 
-ValueState = Union[Concrete, Forwarded, External, KeyPresent]
+@dataclass(frozen=True)
+class Referenced:
+    """
+    The text read is a secret manager's reference or an encrypted value
+    (BL-213): 'op://...', SOPS 'ENC[...]', ... The real value is resolved
+    or decrypted elsewhere, so EnvShield never sees it. `form` names the
+    kind ("a 1Password reference"); the text itself is never kept.
+    """
+
+    form: str
+
+
+ValueState = Union[Concrete, Forwarded, External, KeyPresent, Referenced]
+
+# Whole-value forms that stand for a value EnvShield can't see (BL-213).
+# Only distinctive prefixes or shapes: an ordinary URL ('https://...') or
+# string never matches.
+_REFERENCE_FORMS = (
+    (re.compile(r"op://\S+"), "a 1Password reference"),
+    (re.compile(r"(?:sm|berglas)://\S+"), "a Berglas (Google Cloud) reference"),
+    # bank-vaults' 'vault:secret/data/db#key'; a path, so an image tag
+    # such as 'vault:1.15' isn't one.
+    (re.compile(r"vault:[^\s/]+/\S*"), "a Vault reference"),
+    (re.compile(r"encrypted:[A-Za-z0-9+/=_-]{16,}"), "a dotenvx-encrypted value"),
+    (re.compile(r"ENC\[[A-Za-z0-9_]+,data:.*\]", re.DOTALL), "a SOPS-encrypted value"),
+)
+
+
+def reference_form(text: str) -> Optional[str]:
+    """What kind of reference or encrypted value `text` is, or None."""
+    for pattern, form in _REFERENCE_FORMS:
+        if pattern.fullmatch(text):
+            return form
+    return None
+
+
+def read_value(text: str) -> ValueState:
+    """
+    The state of a value read from a source: Concrete, unless the text is
+    a reference or an encrypted value (Referenced). Every parser and
+    caller that reads a value goes through this.
+    """
+    form = reference_form(text)
+    return Referenced(form) if form else Concrete(text)
 
 
 class ValueStates(Dict[str, ValueState]):
@@ -82,11 +126,11 @@ class ValueStates(Dict[str, ValueState]):
 
 
 def as_states(values: Mapping[str, Union[str, ValueState]]) -> ValueStates:
-    """`values` as ValueStates; a plain string is a Concrete value."""
+    """`values` as ValueStates; a plain string is read with read_value."""
     if isinstance(values, ValueStates):
         return values
     return ValueStates(
-        {k: Concrete(v) if isinstance(v, str) else v for k, v in values.items()}
+        {k: read_value(v) if isinstance(v, str) else v for k, v in values.items()}
     )
 
 
@@ -143,5 +187,6 @@ class BaseParser(ABC):
         pass
 
     def get_states(self, file_path: str) -> ValueStates:
-        """Each key's ValueState. A local file reads every value: all Concrete."""
+        """Each key's ValueState. A local file reads every value: Concrete, or
+        Referenced for a reference or an encrypted value."""
         return as_states(self.get_vars(file_path, get_values=True))

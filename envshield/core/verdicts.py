@@ -17,6 +17,7 @@ from ..parsers._base import (
     External,
     Forwarded,
     KeyPresent,
+    Referenced,
     ValueState,
     ValueStates,
 )
@@ -65,6 +66,9 @@ REASONS = {
 ACCEPTABLE = ("host_forward", "external_reference", "value_not_inspected")
 
 REQUIRED, OPTIONAL, AMBIGUOUS = "required", "optional", "ambiguous"
+
+# The detail of a reference or encrypted value (BL-213); next_step keys on it.
+_REFERENCE_SUFFIX = "EnvShield can't see the value it stands for"
 
 # A required local variable that is absent but has a schema default.
 HAS_DEFAULT = "required; has a default"
@@ -283,6 +287,13 @@ def judge_variable(
             "outside this manifest",
         )
 
+    if isinstance(state, Referenced):
+        # Never VALID, and never INVALID either: the text isn't the value
+        # the application gets (BL-213).
+        return Verdict(
+            UNVERIFIED, "external_reference", f"{state.form}; {_REFERENCE_SUFFIX}"
+        )
+
     if isinstance(state, KeyPresent):
         return Verdict(
             UNVERIFIED,
@@ -445,6 +456,17 @@ def next_step(
     if reason == "host_forward":
         return human(
             f"Confirm the deploy host sets {var}; a static check can't see it."
+        )
+    if reason == "external_reference" and (detail or "").endswith(_REFERENCE_SUFFIX):
+        form = detail.split(";", 1)[0]
+        if runtime_env is not None:
+            return human(
+                f"{var} is {form}{where}: start the app and this check through "
+                "the secret manager that resolves it."
+            )
+        return human(
+            f"{var} is {form}{where}: to check its value, run 'envshield check "
+            "--process-env' through your secret manager's run command."
         )
     if reason == "external_reference":
         return human(f"Confirm {var} is supplied by the cluster: {detail}.")

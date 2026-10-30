@@ -2155,14 +2155,18 @@ Component: `core/setup_manager.py::run_setup`, `cli.py::setup`
 
 ### BL-213 — A reference or encrypted value in a local file is reported VALID
 
-Type: `BUG` (false-clean) · Evidence: `CONFIRMED` (live, 2026-10-30, while testing the #22 design) · Priority: **P1** · Status: **open ([#103](https://github.com/rabbilyasar/envshield/issues/103))**
-Component: `core/verdicts.py`, `parsers/_dotenv.py` value states
+Type: `BUG` (false-clean) · Evidence: `CONFIRMED` (live, 2026-10-30, while testing the #22 design) · Priority: **P1** · Status: **fixed 2026-10-30 ([#103](https://github.com/rabbilyasar/envshield/issues/103), branch `fix/103-external-references`)**
+Component: `core/verdicts.py`, `parsers/_base.py` value states
 
 - **Reproduction:** `.env` values that point at or encrypt a secret are judged as the value itself. For a string field all of these are VALID; for `type = "url"`, `op://`, `sm://` and `bws://` are VALID and `vault:`, dotenvx `encrypted:` and SOPS `ENC[...]` are INVALID: `op://dev/postgres/url` (1Password, as used by `op run --env-file`), `sm://project/secret` (Berglas), `bws://abc-123`, `vault:secret/data/db#url`, `encrypted:BD...`, `ENC[AES256_GCM,data:...]`.
 - **Why it matters:** "never report VALID for something unchecked" (§1); `check` passes while the real value was never seen, a silent false-clean.
 - **Expected:** COULD NOT VERIFY `external_reference`, naming the form, whatever the field type; accepted with `--accept-unverified external_reference`.
 - **Relationships:** #22 design (`docs/architecture/secret-managers.md`), `BL-199` (Compose embedded references), D-10.
 - **Issue:** [#103](https://github.com/rabbilyasar/envshield/issues/103).
+- **Fix (2026-10-30):** a new value state, `Referenced(form)` (`parsers/_base.py`), holds only the kind of reference, never the text. Every place a value is read goes through one classifier, `read_value()`: local files (`.env`, Python config), Compose literals and `env_file`, Kubernetes literals and in-file ConfigMaps, the process environment (`--process-env`, `--runtime`). `judge_variable` makes it COULD NOT VERIFY `external_reference` ("a 1Password reference; EnvShield can't see the value it stands for"); the older diff treats it as a value it can't see, so `results[].invalid` no longer lists a `vault:` URL either. The next step says to run `envshield check --process-env` through the secret manager's run command (at `--runtime`: start the app and the check through the secret manager), which validates the resolved value (tested). Forms matched as the whole value: `op://`, `sm://`, `berglas://`, `vault:` with a path (`vault:1.15`, an image tag, isn't one), dotenvx `encrypted:` (16+ base64 characters), SOPS `ENC[<cipher>,data:...]`. `bws://` from the original report is dropped: Bitwarden has no such reference format.
+- **Tests:** `envshield/tests/test_external_reference_values.py` (99): each form for string, URL, port, enum and secret fields, required and optional; ordinary values (`https://…/op://x`, a DSN, a partial match) stay judged; `--accept-unverified external_reference` exits 0; runtime; `--process-env` with resolved values is VALID; Compose, Kubernetes and Python sources; a reference as a `requiredIf` trigger is ambiguous; no reference text in any output. Full suite 2609 passed.
+- **False-positive check:** 0 of 5,816 values in 88 `.env*` files across the 15 trial clones (`~/envshield-trials/2026-10-29-v2-3`) match a form.
+- **Not changed (left to #22):** `setup` still treats a reference in `.env` as text (a `vault:` value for a URL field is SET YOURSELF). How `setup` reports vault-supplied values is #22's design.
 
 ### BL-214 — `check` and `doctor` hang forever on a mounted `.env` (a named pipe nobody serves)
 
