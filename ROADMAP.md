@@ -126,9 +126,11 @@ issue.
    [#44](https://github.com/rabbilyasar/envshield/issues/44))
 8. **Onboarding that works with your vault** — `setup` reports exactly what
    is ready, what needs access and what you must set yourself, never hangs
-   without a terminal, and never overwrites a value without asking. Secret
-   provider support (1Password first) is being redesigned to work with what
-   providers already offer rather than copying secret values to disk.
+   without a terminal, and never overwrites a value without asking. It works
+   with whatever secret manager the team uses (Bitwarden, 1Password, Doppler,
+   Infisical, Vault, SOPS, ...): their own run command supplies the secrets
+   and EnvShield checks them against the contract, never copying a value to
+   disk ([design](docs/architecture/secret-managers.md)).
    ([#20](https://github.com/rabbilyasar/envshield/issues/20),
    [#21](https://github.com/rabbilyasar/envshield/issues/21),
    [#22](https://github.com/rabbilyasar/envshield/issues/22))

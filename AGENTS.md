@@ -224,6 +224,11 @@ and amendment A2 sent its design back to planning: it should validate or
 reference what the provider supplies against the schema, not copy secret
 values into a plaintext `.env`. Provider references are `setup` inputs only,
 never `check` sources. The boundary below is unchanged.
+**Redesigned 2026-10-30:** EnvShield works with any secret manager through
+the team's own run command (`bws run`, `op run`, `doppler run`, ...), which
+runs EnvShield the way it runs the app; EnvShield checks what is injected
+and never fetches, stores or copies a value
+([docs/architecture/secret-managers.md](docs/architecture/secret-managers.md)).
 
 EnvShield may eventually let a schema field describe *where* a secret is
 expected to come from — a provider reference (1Password, HashiCorp Vault,
@@ -1032,7 +1037,9 @@ secret from the template, and writes each file once, atomically, in place
 ([#21](https://github.com/rabbilyasar/envshield/issues/21)): `setup`
 reports READY / SET YOURSELF / OPTIONAL per variable, never prompts
 without a terminal (`--non-interactive`), and exits 1 while a required
-variable isn't ready (`BL-212`; branch, not yet merged). The full order is
+variable isn't ready (`BL-212`; merged `c83d386`, PR #102). #22's design is
+approved ([secret-managers.md](docs/architecture/secret-managers.md)); it
+found `BL-213` (#103) and `BL-214` (#104), both P1. The full order is
 ROADMAP.md's "v5 — in progress". Nothing since `v4.9.1` is released.
 
 **Previous phase (updated 2026-10-15): `v4.9.1` released; v5 V1 next.**
