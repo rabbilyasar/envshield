@@ -2201,12 +2201,13 @@ Component: `core/secret_manager.py` (`run_probe`)
 
 ### BL-217 — `schema diff` doesn't report a changed `source`
 
-Type: `GAP` · Evidence: `CONFIRMED` (code reading, 2026-10-31) · Priority: **P3** · Status: **open**
+Type: `GAP` · Evidence: `CONFIRMED` (code reading, 2026-10-31) · Priority: **P3** · Status: **fixed 2026-10-31 ([#113](https://github.com/rabbilyasar/envshield/issues/113))**
 Component: `core/contract_diff.py`
 
 - **Problem:** `source = "local" | "secret-manager"` (#22) changes where a variable comes from, but `schema diff` compares no `source` key, so the change isn't listed.
 - **Expected:** a non-breaking "source changed" entry.
 - **Relationships:** #22.
+- **Fix:** `schema diff` lists a `source` change as **informational** ("'K' source changed from unset to 'local': where developers get its value changes"), with `detail: {before, after}`. Informational rather than non-breaking: moving a variable from the secret manager to `local` makes a developer's plain `check` report it missing, and whether `source` matters at all depends on envshield.yml's `secrets:`, which a schema diff doesn't see. Not blocking by default. Tests in `tests/core/test_contract_diff.py::TestSourceChanges` (5).
 
 ---
 
