@@ -299,3 +299,78 @@ def test_check_subprocess_finishes(tmp_path):
     assert json.loads(result.stdout)["reports"][0]["summary"]["verdict"] == (
         "unverified"
     )
+
+
+# --- A Compose env_file that is a pipe (#114) -------------------------------
+
+COMPOSE_CONFIG = """project_name: t
+schema: env.schema.toml
+services:
+  app:
+    dir: "."
+manifests:
+  - file: docker-compose.yml
+    containers:
+      app: app
+"""
+
+COMPOSE = """services:
+  app:
+    image: x
+    env_file: app.env
+    environment:
+      PORT: "8080"
+"""
+
+
+def _compose_project():
+    subprocess.run(["git", "init", "-q"], check=True)
+    for path, content in {
+        "env.schema.toml": SCHEMA,
+        "envshield.yml": COMPOSE_CONFIG,
+        "docker-compose.yml": COMPOSE,
+    }.items():
+        with open(path, "w") as f:
+            f.write(content)
+    os.mkfifo("app.env")
+
+
+def _manifest_findings(payload):
+    return {
+        f["variable"]: f
+        for f in payload["reports"][0]["findings"]
+        if f["variable"] and f["location"] and f["location"]["file"].endswith(".yml")
+    }
+
+
+def test_compose_env_file_unserved(tmp_path):
+    from envshield.parsers._docker_compose import DockerComposeParser
+
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _compose_project()
+        states = DockerComposeParser().get_states("docker-compose.yml")
+        start = time.monotonic()
+        result = runner.invoke(app, ["check", "docker-compose.yml", "--json"])
+        elapsed = time.monotonic() - start
+    assert [(u.ref, u.kind) for u in states.unbound] == [("app.env", UNSERVED_PIPE)]
+    # environment: still supplies its own key.
+    assert states["PORT"].value == "8080"
+    assert elapsed < TIMEOUT + 3
+    variables = _variables(json.loads(result.stdout))
+    assert variables["DATABASE_URL"]["reason_code"] == "value_not_inspected"
+    assert variables["PORT"]["verdict"] == "valid"
+    finding = _manifest_findings(json.loads(result.stdout))["DATABASE_URL"]
+    assert "'app.env' is a mounted file" in finding["detail"]
+
+
+def test_compose_env_file_served(tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _compose_project()
+        thread = _serve("app.env", [f"DATABASE_URL=postgres://u:{CANARY}@db/x\n"])
+        result = runner.invoke(app, ["check", "docker-compose.yml", "--json"])
+        thread.join(2)
+        _unblock("app.env")
+    assert CANARY not in result.stdout
+    variables = _variables(json.loads(result.stdout))
+    assert variables["DATABASE_URL"]["verdict"] == "valid"
+    assert variables["PORT"]["verdict"] == "valid"
