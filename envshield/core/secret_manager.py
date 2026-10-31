@@ -359,17 +359,23 @@ class SecretInputs:
 
 
 def pending_detail(
-    config: Optional[SecretsConfig], reason: Optional[str] = None
+    config: Optional[SecretsConfig],
+    reason: Optional[str] = None,
+    command: str = "check",
 ) -> str:
-    """The detail for a vault-supplied variable EnvShield didn't check."""
+    """The detail for a vault-supplied variable EnvShield didn't check.
+    `command` is the EnvShield command to suggest wrapping ('check' or
+    'setup')."""
     wrapped = (
-        f"'{config.run} envshield check'"
+        f"'{config.run} envshield {command}'"
         if config is not None and config.run
-        else "your secret manager's run command (e.g. 'op run -- envshield check')"
+        else (
+            f"your secret manager's run command (e.g. 'op run -- envshield {command}')"
+        )
     )
     if reason:
         return f"from your secret manager, not checked ({reason}); or run {wrapped}"
-    if config is not None and config.run:
+    if command == "check" and config is not None and config.run:
         return (
             "from your secret manager; check it with 'envshield check --with-secrets'"
         )

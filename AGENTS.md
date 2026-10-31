@@ -1059,7 +1059,9 @@ mount) no longer hangs `check` or `doctor`; it is read with a 10 s
 deadline, and its variables are COULD NOT VERIFY `value_not_inspected`
 (merged `1b36c90`, PR #109). #22 part 1 adds the `check` half of working
 with a secret manager: `secrets:`, `source =`, the per-developer approval,
-`check --with-secrets` and `doctor`'s report. The full order is
+`check --with-secrets` and `doctor`'s report (merged `1ee7ac1`, PR #110).
+Part 2: `setup` reports vault variables READY / NEEDS ACCESS / SET
+YOURSELF and never asks for or writes them. The full order is
 ROADMAP.md's "v5 — in progress". Nothing since `v4.9.1` is released.
 
 **Previous phase (updated 2026-10-15): `v4.9.1` released; v5 V1 next.**

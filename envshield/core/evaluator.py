@@ -25,7 +25,7 @@ from ..parsers._base import (
     not_inspected_names,
     read_value,
 )
-from ..parsers.factory import get_manifest_parser_and_states
+from ..parsers.factory import get_manifest_parser_and_states, get_parser
 from ..utils import git_utils
 from . import (
     discovery,
@@ -133,8 +133,15 @@ def evaluate_source(
             prefer=service_name,
         )
     except FileNotFoundError as e:
-        source.status, source.error = "missing", str(e)
-        return source
+        parser = _missing_local_file_parser(
+            file_path, paths, service_name, schema, secrets
+        )
+        if parser is None:
+            source.status, source.error = "missing", str(e)
+            return source
+        # The secret manager supplies some of its variables (BL-215): each
+        # is judged from it; the rest are `file_not_found`.
+        local_values = ValueStates(missing_files=[file_path])
     except (ValueError, EnvShieldException) as e:
         source.status, source.error = "error", str(e)
         source.error_reason = "source_parse_error"
@@ -209,6 +216,26 @@ def evaluate_source(
     if diff.unresolved:
         source.status = "unresolved"
     return source
+
+
+def _missing_local_file_parser(file_path, paths, service_name, schema, secrets):
+    """
+    For a local file that doesn't exist: its parser when the secret
+    manager supplies some of the service's variables (V3-3, BL-215), so
+    the check goes on without the file. None otherwise: a missing file is
+    reported as it always was.
+    """
+    if paths is not None or schema is None:
+        return None
+    parser = get_parser(file_path, prefer=service_name)
+    if parser is None or parser.is_deployment_manifest:
+        return None
+    try:
+        if not secret_manager.secret_states(service_name, schema, secrets):
+            return None
+    except EnvShieldException:
+        return None
+    return parser
 
 
 def _overlay_secret_manager(local_values: ValueStates, states) -> ValueStates:
