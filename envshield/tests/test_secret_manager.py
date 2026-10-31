@@ -726,3 +726,83 @@ def test_without_secrets_a_missing_file_is_unchanged(tmp_path):
     payload = json.loads(result.stdout)
     assert result.exit_code == 1
     assert payload["results"][0].get("error")  # the source itself is missing
+
+
+# --- A {command} placeholder (BL-216, #112) ---------------------------------
+
+
+class TestPlaceholder:
+    def test_appended_without_one(self):
+        config = secret_manager.SecretsConfig(run="bws run --")
+        assert config.wrap(["python", "-m", "x"]) == [
+            "bws",
+            "run",
+            "--",
+            "python",
+            "-m",
+            "x",
+        ]
+        assert config.display("envshield check") == "bws run -- envshield check"
+
+    def test_one_argument(self):
+        config = secret_manager.SecretsConfig(run="sops exec-env s.env '{command}'")
+        assert config.wrap(
+            ["/usr/bin/python3", "-m", "envshield", "--service", "a b"]
+        ) == [
+            "sops",
+            "exec-env",
+            "s.env",
+            "/usr/bin/python3 -m envshield --service 'a b'",
+        ]
+        assert (
+            config.display("envshield check") == "sops exec-env s.env 'envshield check'"
+        )
+
+    def test_inside_an_argument(self):
+        config = secret_manager.SecretsConfig(run="tool --exec='{command} --flag'")
+        assert config.wrap(["a", "b"]) == ["tool", "--exec=a b --flag"]
+
+    def test_a_hostile_service_name_stays_one_word(self):
+        config = secret_manager.SecretsConfig(run="sh -c '{command}'")
+        line = config.wrap(["probe", "--service", "x; touch pwned"])[2]
+        assert line == "probe --service 'x; touch pwned'"
+
+    @pytest.mark.parametrize(
+        "run", ["sops '{command}' '{command}'", "'{command}' sops"]
+    )
+    def test_invalid(self, tmp_path, monkeypatch, run):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "envshield.yml").write_text(
+            f"project_name: t\nsecrets:\n  run: {json.dumps(run)}\n"
+        )
+        with pytest.raises(ConfigParseError):
+            secret_manager.get_config()
+
+
+def _one_argument_fake(path, supplied):
+    """Like 'sops exec-env FILE CMD': the command is one argument, run by sh."""
+    lines = ["#!/bin/sh", 'touch "$(dirname "$0")/ran.marker"']
+    for name, value in supplied.items():
+        lines.append(f"export {name}='{value}'")
+    lines.append('exec sh -c "$2"')
+    with open(path, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    os.chmod(path, 0o755)
+
+
+def test_placeholder_end_to_end(tmp_path, terminal):
+    run = "./onearg secrets.env '{command}'"
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _project(config=_config(run=run))
+        _one_argument_fake("onearg", SUPPLIED)
+        plain = runner.invoke(app, ["check", "--json"])
+        secret_manager.approve(os.getcwd(), run)
+        result = runner.invoke(app, ["check", "--with-secrets", "--json"])
+        ran = os.path.exists("ran.marker")
+    _no_canary(plain.stdout, result.stdout)
+    assert ran
+    assert result.exit_code == 0, result.stdout
+    for name in SUPPLIED:
+        assert _variables(json.loads(result.stdout))[name]["verdict"] == "valid"
+    detail = _findings(json.loads(plain.stdout))["API_KEY"]["detail"]
+    assert "--with-secrets" in detail
