@@ -549,3 +549,260 @@ def test_explain_shows_no_value(tmp_path):
         _project()
         result = runner.invoke(app, ["explain", "DATABASE_URL", "--json"], env=SUPPLIED)
     _no_canary(result.stdout)
+
+
+# --- setup (part 2) ---------------------------------------------------------
+
+
+def _outcomes(stdout):
+    """{name: (category, detail)} from setup's report lines."""
+    found = {}
+    for line in stdout.splitlines():
+        for category in ("READY", "NEEDS ACCESS", "SET YOURSELF", "OPTIONAL"):
+            if line.strip().startswith(category):
+                rest = line.strip()[len(category) :].split(None, 1)
+                if rest:
+                    found[rest[0]] = (category, rest[1] if len(rest) > 1 else "")
+    return found
+
+
+def _setup(tmp_path, args=(), input=None, approve=True, env=None, **project):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _project(**project)
+        if approve:
+            secret_manager.approve(os.getcwd(), "./fakevault --")
+        result = runner.invoke(
+            app, ["setup", *args], input=input, env={"COLUMNS": "250", **(env or {})}
+        )
+        ran = os.path.exists("ran.marker")
+        written = open(".env").read() if os.path.exists(".env") else ""
+    _no_canary(result.stdout, written)
+    return result, ran, written
+
+
+def test_setup_reports_vault_values_and_never_writes_them(tmp_path, terminal):
+    result, ran, written = _setup(tmp_path, input="8080\n", env_file=None)
+    assert ran
+    assert result.exit_code == 0, result.stdout
+    outcomes = _outcomes(result.stdout)
+    for name in ("DATABASE_URL", "API_KEY", "SENTRY_DSN"):
+        assert outcomes[name] == ("READY", "from your secret manager"), name
+        assert name not in written
+    assert outcomes["PORT"][0] == "READY"
+    assert "PORT=8080" in written
+    # A personal secret stays the developer's own.
+    assert outcomes["PERSONAL_TOKEN"] == ("OPTIONAL", "not required locally")
+
+
+def test_setup_withheld_needs_access(tmp_path, terminal):
+    supplied = {k: v for k, v in SUPPLIED.items() if k != "API_KEY"}
+    result, _, written = _setup(tmp_path, supplied=supplied)
+    assert result.exit_code == 1
+    category, detail = _outcomes(result.stdout)["API_KEY"]
+    assert category == "NEEDS ACCESS"
+    assert "you may lack access" in detail
+    assert "Ask for access, or add them to it" in result.stdout
+    assert "API_KEY" not in written
+
+
+def test_setup_invalid_vault_value(tmp_path, terminal):
+    result, _, _ = _setup(
+        tmp_path, supplied={**SUPPLIED, "DATABASE_URL": "VAULT_CANARY_1"}
+    )
+    assert result.exit_code == 1
+    category, detail = _outcomes(result.stdout)["DATABASE_URL"]
+    assert category == "SET YOURSELF"
+    assert "must be a valid URL" in detail and "fix it there" in detail
+
+
+def test_setup_asks_first_and_declining_runs_nothing(tmp_path, terminal):
+    result, ran, _ = _setup(tmp_path, input="n\n", approve=False)
+    assert not ran
+    assert "Allow EnvShield to run this command?" in result.stdout
+    category, detail = _outcomes(result.stdout)["API_KEY"]
+    assert category == "NEEDS ACCESS"
+    assert "./fakevault -- envshield setup" in detail
+    assert result.exit_code == 1
+
+
+def test_setup_without_a_terminal_never_runs_it(tmp_path, monkeypatch):
+    # Scenario 10: whatever the approval, no terminal means no run.
+    monkeypatch.setattr(secret_manager, "stdin_is_terminal", lambda: False)
+    result, ran, _ = _setup(tmp_path, args=("--non-interactive",))
+    assert not ran
+    category, detail = _outcomes(result.stdout)["API_KEY"]
+    assert category == "NEEDS ACCESS"
+    assert "no terminal" in detail
+
+
+def test_setup_changed_command_asks_again(tmp_path, terminal):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _project(config=_config(run="./fakevault --verbose --"))
+        secret_manager.approve(os.getcwd(), "./fakevault --")
+        result = runner.invoke(app, ["setup"], input="n\n")
+        ran = os.path.exists("ran.marker")
+    assert not ran
+    assert "--verbose" in result.stdout and "Allow EnvShield" in result.stdout
+
+
+def test_setup_wrapped_by_hand(tmp_path, monkeypatch):
+    monkeypatch.setattr(secret_manager, "stdin_is_terminal", lambda: False)
+    result, ran, written = _setup(
+        tmp_path, args=("--non-interactive",), approve=False, env=SUPPLIED
+    )
+    assert not ran
+    assert result.exit_code == 0, result.stdout
+    assert _outcomes(result.stdout)["API_KEY"] == ("READY", "from your secret manager")
+    assert "API_KEY" not in written
+
+
+def test_setup_keeps_a_local_value_the_vault_doesnt_supply(tmp_path, terminal):
+    supplied = {k: v for k, v in SUPPLIED.items() if k != "API_KEY"}
+    result, _, written = _setup(
+        tmp_path, supplied=supplied, env_file="PORT=8080\nAPI_KEY=mine\n"
+    )
+    assert result.exit_code == 0, result.stdout
+    assert _outcomes(result.stdout)["API_KEY"] == ("READY", "already set locally")
+    assert written == "PORT=8080\nAPI_KEY=mine\n"
+
+
+def test_setup_command_fails(tmp_path, terminal):
+    result, _, _ = _setup(tmp_path, exit_code=3)
+    category, detail = _outcomes(result.stdout)["API_KEY"]
+    assert category == "NEEDS ACCESS"
+    assert "couldn't run your secrets command" in detail and "exit 3" in detail
+
+
+def test_setup_mounted_file(tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _project(env_file=None)
+        os.mkfifo(".env")
+        result = runner.invoke(app, ["setup"], env={"COLUMNS": "250"})
+    assert result.exit_code == 1
+    assert "mounted by your secret manager" in result.stdout
+    assert "replace it" not in result.stdout
+
+
+# --- No .env at all (BL-215) -------------------------------------------------
+
+
+def test_check_without_env_file(tmp_path, terminal):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _project(env_file=None)
+        plain = runner.invoke(app, ["check", "--json"])
+        secret_manager.approve(os.getcwd(), "./fakevault --")
+        checked = runner.invoke(app, ["check", "--with-secrets", "--json"])
+    _no_canary(plain.stdout, checked.stdout)
+    for result in (plain, checked):
+        variables = _variables(json.loads(result.stdout))
+        # The one local variable is reported against the missing file...
+        assert variables["PORT"]["reason_code"] == "file_not_found"
+    # ...and the secret manager's are judged from it.
+    variables = _variables(json.loads(checked.stdout))
+    for name in SUPPLIED:
+        assert variables[name]["verdict"] == "valid", name
+    assert _variables(json.loads(plain.stdout))["API_KEY"]["reason_code"] == (
+        "secret_manager"
+    )
+
+
+def test_check_without_env_file_all_from_the_vault(tmp_path, terminal):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _project(env_file=None)
+        with open("env.schema.toml", "w") as f:
+            f.write('[DATABASE_URL]\ntype = "url"\nsecret = true\n')
+        secret_manager.approve(os.getcwd(), "./fakevault --")
+        result = runner.invoke(app, ["check", "--with-secrets", "--json"])
+    assert result.exit_code == 0, result.stdout
+    assert json.loads(result.stdout)["verdict"] == "valid"
+
+
+def test_without_secrets_a_missing_file_is_unchanged(tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _project(env_file=None, config=_config(secrets=False))
+        with open("env.schema.toml", "w") as f:
+            f.write('[DATABASE_URL]\ntype = "url"\nsecret = true\n')
+        result = runner.invoke(app, ["check", "--json"])
+    payload = json.loads(result.stdout)
+    assert result.exit_code == 1
+    assert payload["results"][0].get("error")  # the source itself is missing
+
+
+# --- A {command} placeholder (BL-216, #112) ---------------------------------
+
+
+class TestPlaceholder:
+    def test_appended_without_one(self):
+        config = secret_manager.SecretsConfig(run="bws run --")
+        assert config.wrap(["python", "-m", "x"]) == [
+            "bws",
+            "run",
+            "--",
+            "python",
+            "-m",
+            "x",
+        ]
+        assert config.display("envshield check") == "bws run -- envshield check"
+
+    def test_one_argument(self):
+        config = secret_manager.SecretsConfig(run="sops exec-env s.env '{command}'")
+        assert config.wrap(
+            ["/usr/bin/python3", "-m", "envshield", "--service", "a b"]
+        ) == [
+            "sops",
+            "exec-env",
+            "s.env",
+            "/usr/bin/python3 -m envshield --service 'a b'",
+        ]
+        assert (
+            config.display("envshield check") == "sops exec-env s.env 'envshield check'"
+        )
+
+    def test_inside_an_argument(self):
+        config = secret_manager.SecretsConfig(run="tool --exec='{command} --flag'")
+        assert config.wrap(["a", "b"]) == ["tool", "--exec=a b --flag"]
+
+    def test_a_hostile_service_name_stays_one_word(self):
+        config = secret_manager.SecretsConfig(run="sh -c '{command}'")
+        line = config.wrap(["probe", "--service", "x; touch pwned"])[2]
+        assert line == "probe --service 'x; touch pwned'"
+
+    @pytest.mark.parametrize(
+        "run", ["sops '{command}' '{command}'", "'{command}' sops"]
+    )
+    def test_invalid(self, tmp_path, monkeypatch, run):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "envshield.yml").write_text(
+            f"project_name: t\nsecrets:\n  run: {json.dumps(run)}\n"
+        )
+        with pytest.raises(ConfigParseError):
+            secret_manager.get_config()
+
+
+def _one_argument_fake(path, supplied):
+    """Like 'sops exec-env FILE CMD': the command is one argument, run by sh."""
+    lines = ["#!/bin/sh", 'touch "$(dirname "$0")/ran.marker"']
+    for name, value in supplied.items():
+        lines.append(f"export {name}='{value}'")
+    lines.append('exec sh -c "$2"')
+    with open(path, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    os.chmod(path, 0o755)
+
+
+def test_placeholder_end_to_end(tmp_path, terminal):
+    run = "./onearg secrets.env '{command}'"
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _project(config=_config(run=run))
+        _one_argument_fake("onearg", SUPPLIED)
+        plain = runner.invoke(app, ["check", "--json"])
+        secret_manager.approve(os.getcwd(), run)
+        result = runner.invoke(app, ["check", "--with-secrets", "--json"])
+        ran = os.path.exists("ran.marker")
+    _no_canary(plain.stdout, result.stdout)
+    assert ran
+    assert result.exit_code == 0, result.stdout
+    for name in SUPPLIED:
+        assert _variables(json.loads(result.stdout))[name]["verdict"] == "valid"
+    detail = _findings(json.loads(plain.stdout))["API_KEY"]["detail"]
+    assert "--with-secrets" in detail

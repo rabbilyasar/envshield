@@ -39,6 +39,9 @@ SOURCE_SECRET_MANAGER = "secret-manager"
 SOURCES = (SOURCE_LOCAL, SOURCE_SECRET_MANAGER)
 
 PROBE_MARKER = "ENVSHIELD-PROBE"
+# Where EnvShield's own command goes in `secrets.run`, for a tool that takes
+# the command as one argument (BL-216). Without it, the command is appended.
+PLACEHOLDER = "{command}"
 # Seconds the secrets command may take, sign-in included.
 RUN_TIMEOUT = 60.0
 
@@ -57,6 +60,24 @@ class SecretsConfig:
     @property
     def argv(self) -> List[str]:
         return shlex.split(self.run) if self.run else []
+
+    def wrap(self, command: List[str]) -> List[str]:
+        """
+        The full command line: `secrets.run`'s words with `command` put
+        where `{command}` is (shell-quoted, as one argument or inside one:
+        `sops exec-env secrets.env '{command}'`, BL-216), or appended.
+        """
+        words = self.argv
+        if PLACEHOLDER not in (self.run or ""):
+            return words + list(command)
+        joined = shlex.join(command)
+        return [w.replace(PLACEHOLDER, joined) for w in words]
+
+    def display(self, command: str) -> str:
+        """How to run `command` (e.g. 'envshield check') through it, for a message."""
+        if PLACEHOLDER in (self.run or ""):
+            return (self.run or "").replace(PLACEHOLDER, command)
+        return f"{self.run} {command}"
 
 
 def _invalid(problem: str) -> ConfigParseError:
@@ -87,10 +108,17 @@ def get_config() -> Optional[SecretsConfig]:
     if any(ord(c) < 0x20 or ord(c) == 0x7F for c in run):
         raise _invalid("'run' must not contain control characters")
     try:
-        if not shlex.split(run):
+        words = shlex.split(run)
+        if not words:
             raise ValueError("empty")
     except ValueError as e:
         raise _invalid(f"'run' isn't a valid command ({e})")
+    if run.count(PLACEHOLDER) > 1:
+        raise _invalid(f"'run' may contain {PLACEHOLDER} once")
+    if PLACEHOLDER in words[0]:
+        raise _invalid(
+            f"'run' must start with the secret manager's command, not {PLACEHOLDER}"
+        )
     return SecretsConfig(run=run.strip())
 
 
@@ -298,7 +326,7 @@ def run_probe(
     """
     timeout = RUN_TIMEOUT if timeout is None else timeout
     nonce = _random.token_hex(16)
-    argv = config.argv + [
+    probe_argv = [
         sys.executable,
         "-m",
         "envshield",
@@ -308,7 +336,8 @@ def run_probe(
         nonce,
     ]
     for service in services:
-        argv += ["--service", service]
+        probe_argv += ["--service", service]
+    argv = config.wrap(probe_argv)
     name = config.argv[0]
     try:
         completed = subprocess.run(
@@ -359,17 +388,23 @@ class SecretInputs:
 
 
 def pending_detail(
-    config: Optional[SecretsConfig], reason: Optional[str] = None
+    config: Optional[SecretsConfig],
+    reason: Optional[str] = None,
+    command: str = "check",
 ) -> str:
-    """The detail for a vault-supplied variable EnvShield didn't check."""
+    """The detail for a vault-supplied variable EnvShield didn't check.
+    `command` is the EnvShield command to suggest wrapping ('check' or
+    'setup')."""
     wrapped = (
-        f"'{config.run} envshield check'"
+        f"'{config.display(f'envshield {command}')}'"
         if config is not None and config.run
-        else "your secret manager's run command (e.g. 'op run -- envshield check')"
+        else (
+            f"your secret manager's run command (e.g. 'op run -- envshield {command}')"
+        )
     )
     if reason:
         return f"from your secret manager, not checked ({reason}); or run {wrapped}"
-    if config is not None and config.run:
+    if command == "check" and config is not None and config.run:
         return (
             "from your secret manager; check it with 'envshield check --with-secrets'"
         )
