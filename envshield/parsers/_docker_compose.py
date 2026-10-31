@@ -7,6 +7,7 @@ import yaml
 from ..core.exceptions import EnvShieldException
 from ._base import (
     BaseParser,
+    External,
     Forwarded,
     ValueState,
     ValueStates,
@@ -96,8 +97,11 @@ class DockerComposeParser(BaseParser):
         service_def = services.get(container) or {}
         base_dir = os.path.dirname(os.path.abspath(file_path))
         missing: list[str] = []
-        variables = self._extract_service_environment(service_def, base_dir, missing)
-        return ValueStates(variables, missing_files=missing)
+        unbound: list[External] = []
+        variables = self._extract_service_environment(
+            service_def, base_dir, missing, unbound
+        )
+        return ValueStates(variables, unbound=unbound, missing_files=missing)
 
     def get_vars_for_layers(
         self, file_paths: list[str], get_values: bool = False
@@ -149,6 +153,7 @@ class DockerComposeParser(BaseParser):
 
         merged: dict[str, ValueState] = {}
         missing: list[str] = []
+        unbound: list[External] = []
         resolved_container: str | None = self.container
 
         for file_path in file_paths:
@@ -165,10 +170,12 @@ class DockerComposeParser(BaseParser):
             service_def = services.get(resolved_container) or {}
             base_dir = os.path.dirname(os.path.abspath(file_path))
             merged.update(
-                self._extract_service_environment(service_def, base_dir, missing)
+                self._extract_service_environment(
+                    service_def, base_dir, missing, unbound
+                )
             )
 
-        return ValueStates(merged, missing_files=missing)
+        return ValueStates(merged, unbound=unbound, missing_files=missing)
 
     def _load_yaml_document(self, file_path: str) -> dict:
         with open(file_path, "r") as f:
@@ -202,12 +209,18 @@ class DockerComposeParser(BaseParser):
         return container
 
     def _extract_service_environment(
-        self, service_def: dict, base_dir: str, missing: list[str]
+        self,
+        service_def: dict,
+        base_dir: str,
+        missing: list[str],
+        unbound: list[External] | None = None,
     ) -> dict[str, ValueState]:
         """
         The service's {var: ValueState} map. Appends to `missing` each
         required env_file that doesn't exist (Compose refuses to start);
         one marked 'required: false' is skipped, as Compose skips it.
+        Appends to `unbound` each env_file that is a named pipe nobody
+        served (BL-214): its keys can't be read, so none is knowably absent.
         """
         variables: dict[str, ValueState] = {}
 
@@ -227,9 +240,16 @@ class DockerComposeParser(BaseParser):
                 )
                 if os.path.exists(env_file_path):
                     try:
-                        variables.update(DotenvParser().get_states(env_file_path))
+                        states = DotenvParser().get_states(env_file_path)
                     except OSError:
-                        pass
+                        continue
+                    variables.update(states)
+                    if unbound is not None:
+                        # An env_file that is a named pipe nobody served
+                        # (BL-214): its keys are unknown, not absent.
+                        unbound.extend(
+                            External(env_file, u.kind) for u in states.unbound
+                        )
                 elif required:
                     missing.append(env_file)
 
