@@ -1,9 +1,11 @@
 # Working with the team's secret manager (V3-3, #22)
 
-Status: **design approved by the maintainer, 2026-10-30. `check` half
-implemented (2026-10-31): `secrets:`, `source =`, the approval,
+Status: **design approved by the maintainer, 2026-10-30; implemented
+2026-10-31.** Part 1 (`check`): `secrets:`, `source =`, the approval,
 `secrets allow`/`revoke`, the probe, `check --with-secrets` and `doctor`.
-`setup` is next.** Replaces the
+Part 2 (`setup`): vault variables reported READY / NEEDS ACCESS / SET
+YOURSELF and never prompted for or written; a missing `.env` is judged
+from the secret manager (`BL-215`); a mounted `.env` gets its own message. Replaces the
 original V3-3 plan (copy values from 1Password into `.env`), which
 amendment A2 returned to planning. Not implemented yet.
 
