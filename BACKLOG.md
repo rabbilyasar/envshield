@@ -2193,12 +2193,13 @@ Component: `core/evaluator.py` (`evaluate_source` on a missing local file)
 
 ### BL-216 — `secrets.run` is a prefix only; `sops exec-env FILE 'cmd'` needs the command as one argument
 
-Type: `LIMITATION` · Evidence: `CONFIRMED` (design, 2026-10-31) · Priority: **P3** · Status: **open**
+Type: `LIMITATION` · Evidence: `CONFIRMED` (design, 2026-10-31) · Priority: **P3** · Status: **fixed 2026-10-31 ([#112](https://github.com/rabbilyasar/envshield/issues/112))**
 Component: `core/secret_manager.py` (`run_probe`)
 
 - **Problem:** EnvShield appends its own command to `secrets.run`'s words. `sops exec-env <file> '<command>'` takes the command as one quoted argument, so it can't be a prefix (a wrapper script works).
 - **Possible fix, if asked for:** a `{command}` placeholder in `secrets.run`.
 - **Relationships:** #22.
+- **Fix:** `secrets.run` may contain `{command}` once (not as its first word): EnvShield's command is shell-quoted (`shlex.join`) into that word, so a service name like `x; touch pwned` stays one quoted word inside a `sh -c` string; without it, the command is appended as before. Messages that suggest the wrapped command substitute the same way (`sops exec-env secrets.env 'envshield check'`). Tests in `test_secret_manager.py` (7): appended, one argument, inside an argument, a hostile service name, invalid placements, and end to end with a fake one-argument tool.
 
 ### BL-217 — `schema diff` doesn't report a changed `source`
 

@@ -26,7 +26,7 @@ the secrets set as environment variables:
 | Doppler | `doppler run --` |
 | Infisical | `infisical run --env=<env> --` |
 | HashiCorp Vault | `envconsul -secret=<path>`, Vault Agent's process supervisor |
-| SOPS | `sops exec-env <file> '<cmd>'` |
+| SOPS | `sops exec-env <file> '<cmd>'`: in `secrets.run`, `sops exec-env <file> '{command}'` (BL-216) |
 | dotenvx | `dotenvx run --` |
 | Google Cloud / AWS | `berglas exec --`, `chamber exec <service> --` |
 
