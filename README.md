@@ -170,7 +170,17 @@ Invalid
 INVALID: 2 invalid, 1 valid.
 ```
 
-Every variable gets one verdict: valid, invalid, could not verify, not required, or error. `check` never calls a value valid unless it read it. A manifest often only *points* at a value (a Kubernetes Secret, a Compose `${VAR}` from the deploy host), and a `.env` can hold a secret manager's reference or an encrypted value (`op://...`, SOPS `ENC[...]`, dotenvx `encrypted:...`), so those variables are "could not verify", and `check` exits 1. When that's expected, accept the specific reason: `envshield check k8s/prod.yaml --accept-unverified=external_reference` exits 0, still lists every unverified variable, and ends with `PASSED WITH UNVERIFIED VALUES`. The reasons you can accept are `host_forward`, `external_reference` and `value_not_inspected`. In `--json`, `success` stays `false` for an accepted run.
+Every variable gets one verdict: valid, invalid, could not verify, not required, or error. `check` never calls a value valid unless it read it. A manifest often only *points* at a value (a Kubernetes Secret, a Compose `${VAR}` from the deploy host), and a `.env` can hold a secret manager's reference or an encrypted value (`op://...`, SOPS `ENC[...]`, dotenvx `encrypted:...`), so those variables are "could not verify", and `check` exits 1. When that's expected, accept the specific reason: `envshield check k8s/prod.yaml --accept-unverified=external_reference` exits 0, still lists every unverified variable, and ends with `PASSED WITH UNVERIFIED VALUES`. The reasons you can accept are `host_forward`, `external_reference`, `value_not_inspected` and `secret_manager`. In `--json`, `success` stays `false` for an accepted run.
+
+**Secret managers.** EnvShield works with whatever secret manager the team uses (Bitwarden, 1Password, Doppler, Infisical, Vault, SOPS, dotenvx, ...) without fetching from it. Name the command that starts a process with your secrets, and every `secret = true` variable is expected from it (`source = "local"` on a field opts it out; `source = "secret-manager"` opts a non-secret in):
+
+```yaml
+# envshield.yml
+secrets:
+  run: "bws run --project-id 1234 --"
+```
+
+A plain `check` doesn't contact the vault: those variables are "could not verify" (`secret_manager`), accepted by default locally, with a line telling you how to check them. `envshield check --with-secrets` runs that command (after you approve it once; a changed command asks again, and it never runs without a terminal) with EnvShield as the child process, which checks the injected values and reports only names and verdicts back: values never reach the output, and the command's own output is never shown. Running EnvShield inside the command by hand (`bws run -- envshield check`) reads the injected values directly. `envshield secrets allow` / `revoke` manage the approval; `doctor` reports it. In CI and at deploy, wrap the check yourself: `bws run -- envshield check --runtime --env staging`.
 
 **Environments.** A variable can be optional on a laptop and required in production. Declare the environments in `envshield.yml` and say where each variable is required:
 

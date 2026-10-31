@@ -1056,8 +1056,10 @@ or an encrypted value (`op://…`, SOPS `ENC[…]`, …) is COULD NOT VERIFY
 `external_reference`, never VALID (merged `db27b73`, PR #108). #104: a
 `.env` that is a named pipe nobody serves (a locked secret manager's
 mount) no longer hangs `check` or `doctor`; it is read with a 10 s
-deadline, and its variables are COULD NOT VERIFY `value_not_inspected`.
-The full order is
+deadline, and its variables are COULD NOT VERIFY `value_not_inspected`
+(merged `1b36c90`, PR #109). #22 part 1 adds the `check` half of working
+with a secret manager: `secrets:`, `source =`, the per-developer approval,
+`check --with-secrets` and `doctor`'s report. The full order is
 ROADMAP.md's "v5 — in progress". Nothing since `v4.9.1` is released.
 
 **Previous phase (updated 2026-10-15): `v4.9.1` released; v5 V1 next.**

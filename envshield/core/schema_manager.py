@@ -14,6 +14,7 @@ from envshield.core.exceptions import (
 )
 from envshield.parsers._base import (
     UNSERVED_PIPE,
+    FromSecretManager,
     ValueState,
     ValueStates,
     as_states,
@@ -262,7 +263,34 @@ def diff_against_schema(
     and compares as usual.
     """
     states = as_states(local_values)
-    text = {key: legacy_text(state) for key, state in states.items()}
+    # What the secrets probe found (V3-3): a variable it didn't find is
+    # absent; an empty or invalid one is judged as such; the rest are
+    # present, not visible.
+    supplied_invalid: Dict[str, str] = {}
+    secret_manager = {
+        k: s for k, s in states.items() if isinstance(s, FromSecretManager)
+    }
+    if secret_manager:
+        states = ValueStates(
+            {
+                k: s
+                for k, s in states.items()
+                if not (isinstance(s, FromSecretManager) and s.status == "missing")
+            },
+            states.unbound,
+            states.missing_files,
+        )
+        supplied_invalid = {
+            k: f"the secret manager's value {s.detail}"
+            for k, s in secret_manager.items()
+            if s.status == "invalid"
+        }
+    text = {
+        key: ""
+        if isinstance(state, FromSecretManager) and state.status == "blank"
+        else legacy_text(state)
+        for key, state in states.items()
+    }
     local_vars = set(states)
     schema_vars_all = set(schema.keys())
 
@@ -304,6 +332,8 @@ def diff_against_schema(
             error = schema_types.validate_value(value, schema[key])
             if error:
                 invalid[key] = error
+
+    invalid.update(supplied_invalid)
 
     extra = local_vars - schema_vars_all
 

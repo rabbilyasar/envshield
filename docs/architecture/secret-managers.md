@@ -1,6 +1,9 @@
 # Working with the team's secret manager (V3-3, #22)
 
-Status: **design approved by the maintainer, 2026-10-30.** Replaces the
+Status: **design approved by the maintainer, 2026-10-30. `check` half
+implemented (2026-10-31): `secrets:`, `source =`, the approval,
+`secrets allow`/`revoke`, the probe, `check --with-secrets` and `doctor`.
+`setup` is next.** Replaces the
 original V3-3 plan (copy values from 1Password into `.env`), which
 amendment A2 returned to planning. Not implemented yet.
 

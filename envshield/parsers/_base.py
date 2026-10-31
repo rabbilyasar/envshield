@@ -77,7 +77,29 @@ class Referenced:
     form: str
 
 
-ValueState = Union[Concrete, Forwarded, External, KeyPresent, Referenced]
+@dataclass(frozen=True)
+class FromSecretManager:
+    """
+    A variable that comes from the team's secret manager (V3-3, #22), as
+    the secrets probe found it, with no value: `status` is "valid",
+    "invalid", "blank", "missing" or "referenced" (what the injected value
+    was), "unchecked" (the probe didn't run) or "failed" (the secrets
+    command failed). `detail` is value-free: a constraint, a reference's
+    form, or why it wasn't checked.
+    """
+
+    status: str
+    detail: Optional[str] = None
+
+
+# Statuses that say what the secret manager supplies, so they override the
+# local file's value; the others leave a local value in place.
+SUPPLIED_STATUSES = ("valid", "invalid", "blank", "referenced")
+
+
+ValueState = Union[
+    Concrete, Forwarded, External, KeyPresent, Referenced, FromSecretManager
+]
 
 # Whole-value forms that stand for a value EnvShield can't see (BL-213).
 # Only distinctive prefixes or shapes: an ordinary URL ('https://...') or

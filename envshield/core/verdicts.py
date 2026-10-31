@@ -17,6 +17,7 @@ from ..parsers._base import (
     Concrete,
     External,
     Forwarded,
+    FromSecretManager,
     KeyPresent,
     Referenced,
     ValueState,
@@ -50,6 +51,7 @@ REASONS = {
         "host_forward",
         "external_reference",
         "value_not_inspected",
+        "secret_manager",
         "ambiguous_requirement",
     ),
     ERROR: (
@@ -57,6 +59,7 @@ REASONS = {
         "topology_error",
         "source_parse_error",
         "source_unreadable",
+        "secret_manager_error",
         "internal_error",
     ),
 }
@@ -64,9 +67,20 @@ REASONS = {
 # The COULD NOT VERIFY reasons `check --accept-unverified` may accept (plan
 # §10). Never `ambiguous_requirement` (the requirement itself is unknown),
 # never an ERROR or INVALID reason, and no `all`.
-ACCEPTABLE = ("host_forward", "external_reference", "value_not_inspected")
+ACCEPTABLE = (
+    "host_forward",
+    "external_reference",
+    "value_not_inspected",
+    "secret_manager",
+)
 
 REQUIRED, OPTIONAL, AMBIGUOUS = "required", "optional", "ambiguous"
+
+# A required variable the secret manager didn't supply (V3-3); next_step
+# keys on it.
+NOT_SUPPLIED = (
+    "not supplied by your secret manager: you may lack access, or it hasn't been added"
+)
 
 # The detail of a reference or encrypted value (BL-213); next_step keys on it.
 _REFERENCE_SUFFIX = "EnvShield can't see the value it stands for"
@@ -303,6 +317,9 @@ def judge_variable(
             UNVERIFIED, "external_reference", f"{state.form}; {_REFERENCE_SUFFIX}"
         )
 
+    if isinstance(state, FromSecretManager):
+        return _judge_secret_manager(field_schema, state, need)
+
     if isinstance(state, KeyPresent):
         return Verdict(
             UNVERIFIED,
@@ -311,6 +328,43 @@ def judge_variable(
         )
 
     raise TypeError(f"unknown value state {type(state).__name__}")
+
+
+def _judge_secret_manager(
+    field_schema: Dict[str, Any], state: FromSecretManager, need: str
+) -> Verdict:
+    """A vault-supplied variable, from the secrets probe's status (V3-3)."""
+    status, detail = state.status, state.detail
+    if status == "valid":
+        return Verdict(VALID)
+    if status == "invalid":
+        return Verdict(INVALID, "invalid_value", f"the secret manager's value {detail}")
+    if status == "blank":
+        if need == REQUIRED:
+            return Verdict(INVALID, "blank", "your secret manager supplies it empty")
+        if detail:
+            return Verdict(
+                INVALID, "invalid_value", f"the secret manager's value {detail}"
+            )
+        return Verdict(VALID)
+    if status == "referenced":
+        return Verdict(
+            UNVERIFIED,
+            "external_reference",
+            f"{detail}, from your secret manager; {_REFERENCE_SUFFIX}",
+        )
+    if need == OPTIONAL:
+        return Verdict(NOT_REQUIRED)
+    if status == "missing":
+        return Verdict(INVALID, "missing", NOT_SUPPLIED)
+    if status == "failed":
+        # The service-level ERROR names the failure; the variable is unchecked.
+        return Verdict(
+            UNVERIFIED,
+            "secret_manager",
+            f"from your secret manager, not checked ({detail})",
+        )
+    return Verdict(UNVERIFIED, "secret_manager", detail)
 
 
 def judge_source(
@@ -427,6 +481,12 @@ def next_step(
     def agent(text: str) -> Dict[str, str]:
         return {"by": "agent", "text": text}
 
+    if reason == "missing" and detail == NOT_SUPPLIED:
+        return human(f"Add {var} to your secret manager, or ask for access to it.")
+    if reason == "secret_manager":
+        return human(f"{var} comes {detail}.")
+    if reason == "secret_manager_error":
+        return human(f"Fix your secrets command: {detail}.")
     if reason in ("missing", "blank"):
         state = "missing" if reason == "missing" else "empty"
         if manifest:

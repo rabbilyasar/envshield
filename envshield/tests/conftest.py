@@ -71,3 +71,10 @@ def setup_sees_a_terminal(monkeypatch):
     from envshield.core import setup_manager
 
     monkeypatch.setattr(setup_manager, "stdin_is_terminal", lambda: True)
+
+
+@pytest.fixture(autouse=True)
+def isolated_secrets_approvals(tmp_path_factory, monkeypatch):
+    """Approvals of a secrets command (V3-3) live under XDG_CONFIG_HOME:
+    never the developer's real one in a test."""
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path_factory.mktemp("xdg")))
