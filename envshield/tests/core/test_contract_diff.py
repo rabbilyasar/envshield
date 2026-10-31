@@ -487,3 +487,48 @@ class TestBlockingChanges:
         result = contract_diff.diff_schemas(a, b)
 
         assert result.has_blocking_changes(frozenset({"breaking"})) is False
+
+
+class TestSourceChanges:
+    """BL-217 (#113): `source` (V3-3) changes where a value comes from."""
+
+    BASE = {"description": "x", "secret": True}
+
+    def test_added(self):
+        result = contract_diff.diff_schemas(
+            {"K": dict(self.BASE)}, {"K": {**self.BASE, "source": "local"}}
+        )
+        change = _change_for(result, "K")
+        assert change.category == "informational"
+        assert change.detail == {"before": None, "after": "local"}
+        assert "from unset to 'local'" in change.description
+        assert result.has_breaking_changes is False
+        assert not result.has_blocking_changes()
+
+    def test_changed(self):
+        result = contract_diff.diff_schemas(
+            {"K": {**self.BASE, "source": "local"}},
+            {"K": {**self.BASE, "source": "secret-manager"}},
+        )
+        assert _change_for(result, "K").detail == {
+            "before": "local",
+            "after": "secret-manager",
+        }
+
+    def test_removed(self):
+        result = contract_diff.diff_schemas(
+            {"K": {**self.BASE, "source": "secret-manager"}}, {"K": dict(self.BASE)}
+        )
+        assert _change_for(result, "K").detail["after"] is None
+
+    def test_unchanged_is_silent(self):
+        same = {"K": {**self.BASE, "source": "local"}}
+        assert contract_diff.diff_schemas(same, same).changes == []
+
+    def test_json_shape(self):
+        result = contract_diff.diff_schemas(
+            {"K": dict(self.BASE)}, {"K": {**self.BASE, "source": "local"}}
+        )
+        entry = result.to_dict()["changes"][0]
+        assert entry["variable"] == "K"
+        assert entry["category"] == "informational"
