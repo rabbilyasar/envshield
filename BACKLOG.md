@@ -2208,6 +2208,48 @@ Component: `core/contract_diff.py`
 - **Expected:** a non-breaking "source changed" entry.
 - **Relationships:** #22.
 
+**Real secret-manager trial (2026-11-01): Bitwarden Secrets Manager on kemonchilo.** The #22 acceptance run with a real provider. `bws` 2.1.0 (checksum verified), a free-tier Secrets Manager project holding 8 made-up values for kemonchilo's 11 secret variables (3 left out on purpose: `TEST_DATABASE_URL`, `WHATSAPP_APP_SECRET`, `WHATSAPP_WEBHOOK_VERIFY_TOKEN`), a read-write machine-account token in a 0600 file. A throwaway clone of kemonchilo (`e70484c`, no `.env`) with `secrets: {run: "bws run --project-id <id> --"}`, and EnvShield from PR #117's branch (`aaa5ad8`, which includes #110 and #111). Run on Linux (Fedora 44); macOS untested.
+- **Worked as designed:** plain `check` reports the 11 secret variables COULD NOT VERIFY `secret_manager` and names `--with-secrets`. `--with-secrets` with no terminal never runs the command; on a terminal it asks once (the approval is stored 0600), and answering no runs nothing. With the token, it validates the 8 vault values as VALID and reports the 3 absent ones as INVALID "not supplied by your secret manager" (about 2 s). With no token or an invalid one, `check` shows one service-level error ("your secrets command didn't run EnvShield (exit 1)") and leaves every vault variable COULD NOT VERIFY. `bws run … -- envshield check` validates the injected values too. `doctor` reports the approved command. `setup` marks the 8 vault variables READY "from your secret manager", the 3 absent ones NEEDS ACCESS, and writes no vault value to `.env`.
+- **Secret safety:** every output, the written `.env`, `envshield.yml` and the approval file were compared with the 8 vault values and the token: none appears anywhere.
+- **Found:** `BL-218` (JSON fields disagree for a vault value), `BL-219` (`setup --non-interactive` still offers hooks at a terminal), `BL-220` (Rich markup in a `description` crashes `setup`/`explain`), `BL-221` (circular advice inside the secret manager's run command).
+
+### BL-218 — `check --with-secrets --json`: a VALID vault value is `valid: null` and listed in `summary.unverified`
+
+Type: `BUG` · Evidence: `CONFIRMED` (real secret-manager trial, 2026-11-01) · Priority: **P2** (machine-readable output contradicts itself; errs toward "not verified", so never a false-clean) · Status: **open, [#118](https://github.com/rabbilyasar/envshield/issues/118)**
+Component: `core/evaluator.py` (report building: the v1 `valid`/`present` fields and `summary.unverified`)
+
+- **Current behavior:** for a variable the secret manager supplied and EnvShield validated, the variable's `verdict` is `valid`, but its v1 field `valid` is `null`, its source's `status` is `not_visible`, and its name is in `summary.unverified` ("valid-looking values EnvShield never saw"), while `summary.counts.unverified` is 0. kemonchilo: all 8 vault values.
+- **Expected:** the v1 fields follow the verdict: `valid: true`, not in `summary.unverified`. The legacy computation reads the `.env` diff statuses, where a `FromSecretManager` value isn't `ok`.
+- **Fix direction:** derive the v1 fields from the shared verdict instead of recomputing them (Target architecture: one computation, consumed by both shapes).
+- **Relationships:** #22 (`BL-174`), R0-5 (`summary.unverified`).
+
+### BL-219 — `setup --non-interactive` at a terminal still asks "Install git hooks?"
+
+Type: `BUG` · Evidence: `CONFIRMED` (real secret-manager trial, 2026-11-01; same code on `main`) · Priority: **P2** (the flag's help says "Never prompt"; a script that runs `setup --non-interactive` in a terminal waits forever) · Status: **open, [#119](https://github.com/rabbilyasar/envshield/issues/119)**
+Component: `cli.py::setup` → `HooksManager.install_hooks_if_needed(auto=True)`
+
+- **Current behavior:** after writing, `setup` offers to install the git hooks whenever stdin is a terminal (`hooks_manager._is_interactive`), whatever `--non-interactive` says. Without a terminal it's skipped, which is why `BL-212`'s tests didn't catch it.
+- **Expected:** `--non-interactive` skips the offer (or prints a one-line hint to run `envshield hook install`).
+- **Relationships:** `BL-212` (#21), `BL-118`.
+
+### BL-220 — Rich markup in a schema `description` crashes `setup` and `explain`
+
+Type: `BUG` / `ROBUSTNESS` · Evidence: `CONFIRMED` (real secret-manager trial, 2026-11-01; reproduced on `main`) · Priority: **P2** (a committed, PR-editable string crashes two commands with a traceback; no value appears in it, since Typer's tracebacks show no locals by default) · Status: **open, [#120](https://github.com/rabbilyasar/envshield/issues/120)**
+Component: `cli.py` (`explain`, `setup`'s SET YOURSELF hint), any Rich output of a `description`
+
+- **Current behavior:** a description is printed as Rich markup. `[branchId]` in kemonchilo's `TELEGRAM_BOT_USERNAME` description (a Next.js route path) silently disappears from `setup`'s output; `description = "see [/admin]"` makes `explain A` and `setup` (when it prints the hint) exit with `MarkupError: closing tag '[/admin]' … doesn't match any open tag`. `check` doesn't print descriptions and is unaffected.
+- **Expected:** every description (untrusted configuration text, §4 item 12) is escaped before it reaches Rich; the class to test is "any schema or config string printed through Rich", not only `description` (compare the `example_file` markup note under `BL-136`).
+- **Relationships:** `BL-212`, `BL-136`.
+
+### BL-221 — Inside the secret manager's run command, `check` still says "check it with `--with-secrets`"
+
+Type: `UX` · Evidence: `CONFIRMED` (real secret-manager trial, 2026-11-01) · Priority: **P3** · Status: **open, [#121](https://github.com/rabbilyasar/envshield/issues/121)**
+Component: `core/verdicts.py::next_step` (`secret_manager`)
+
+- **Current behavior:** the no-terminal message suggests `bws run … -- envshield check`. Run that way, the injected values are VALID, but the 3 the vault doesn't hold are COULD NOT VERIFY with "check it with 'envshield check --with-secrets'", which runs the same command again and then reports them as not supplied.
+- **Expected:** a next step that says the value wasn't in the environment the command provided (e.g. "not supplied: add it to your secret manager, or run `check --with-secrets`"). EnvShield can't tell it's inside the run command, so the wording must fit both cases.
+- **Relationships:** #22.
+
 ---
 
 ## Part 7 — Performance / Scalability (research, not yet benchmarked)

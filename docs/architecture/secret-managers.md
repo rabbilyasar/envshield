@@ -201,7 +201,9 @@ on #22 (34 cases of today's behavior pass). New tests must cover:
   exit 1; (10) a commit changes `secrets.run`: `setup` asks again before
   running it, and without a terminal never runs it;
 - a manual run with a real secret manager on one Kriyonix project,
-  recorded on #22.
+  recorded on #22. Done 2026-11-01 with Bitwarden Secrets Manager on
+  kemonchilo (BACKLOG.md, the trial block above `BL-218`); 1Password
+  (`op run`, a mounted Environments `.env`) and macOS are still untried.
 
 ## Edge cases already checked (2026-10-30, today's code)
 
