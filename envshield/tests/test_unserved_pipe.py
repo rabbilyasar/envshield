@@ -227,7 +227,7 @@ def test_setup_refuses_and_never_waits(tmp_path):
         elapsed = time.monotonic() - start
     assert result.exit_code != 0
     assert elapsed < TIMEOUT + 3
-    assert "not a regular file" in result.stdout
+    assert "mounted by your secret manager" in result.stdout
 
 
 def test_check_served_is_validated(tmp_path):

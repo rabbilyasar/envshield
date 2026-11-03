@@ -1280,9 +1280,32 @@ def _secret_inputs(
             param_hint="--with-secrets",
         )
 
+    inputs = _run_secrets_command(
+        config, targets, command="check", can_prompt=not machine, show=not machine
+    )
+    return inputs, False
+
+
+def _run_secrets_command(
+    config: "secret_manager.SecretsConfig",
+    targets: List[str],
+    *,
+    command: str,
+    can_prompt: bool,
+    show: bool,
+) -> "secret_manager.SecretInputs":
+    """
+    Runs the approved secrets command with the probe as its child (V3-3):
+    only on a terminal, and only once the developer has approved this
+    exact command (asked here when `can_prompt`). Otherwise says why the
+    vault values weren't checked.
+    """
+
     def pending(reason: str):
-        detail = secret_manager.pending_detail(config, reason)
-        return secret_manager.SecretInputs(environ=os.environ, pending=detail), False
+        return secret_manager.SecretInputs(
+            environ=os.environ,
+            pending=secret_manager.pending_detail(config, reason, command),
+        )
 
     if not secret_manager.stdin_is_terminal():
         return pending(
@@ -1290,15 +1313,15 @@ def _secret_inputs(
         )
     root = os.getcwd()
     if not secret_manager.is_approved(root, config.run):
-        if machine:
+        if not can_prompt:
             return pending("not approved yet: run 'envshield secrets allow'")
         if not _confirm_secrets_command(config.run):
             return pending("you didn't allow your secrets command")
         secret_manager.approve(root, config.run)
-    if not machine:
+    if show:
         console.print(f"[dim]Checking your secrets with: {escape(config.run)}[/dim]")
     outcome = secret_manager.run_probe(config, targets)
-    return secret_manager.SecretInputs(environ=os.environ, outcome=outcome), False
+    return secret_manager.SecretInputs(environ=os.environ, outcome=outcome)
 
 
 def _confirm_secrets_command(command: str) -> bool:
@@ -2055,6 +2078,7 @@ def setup(
         )
 
     try:
+        secrets = _setup_secret_inputs(targets, interactive)
         results: List[setup_manager.SetupResult] = []
         for target in targets:
             _print_service_header(targets, target)
@@ -2063,6 +2087,7 @@ def setup(
                     service_name=target,
                     output_file=output_file,
                     interactive=interactive,
+                    secrets=secrets,
                 )
             )
 
@@ -2075,7 +2100,14 @@ def setup(
             hm.install_hooks_if_needed(auto=True, force=False)
             total_configured = sum(r.configured_count for r in completed)
             left = [(r, name) for r in completed for name in r.to_set_yourself]
-            if not left:
+            access = sorted({n for r in completed for n in r.needing_access})
+            if access:
+                console.print(
+                    f"\n[bold yellow]{len(access)} variable(s) your secret manager "
+                    f"should supply aren't available:[/bold yellow] "
+                    f"{', '.join(access)}. Ask for access, or add them to it."
+                )
+            if not left and not access:
                 if len(results) > 1:
                     console.print(
                         f"\n[bold green]✓ Configuration complete[/bold green] for "
@@ -2087,7 +2119,7 @@ def setup(
                         f"\n[bold green]✓ Configuration complete[/bold green] "
                         f"({total_configured} variable(s) set)."
                     )
-            else:
+            elif left:
                 names = ", ".join(sorted({name for _, name in left}))
                 console.print(
                     f"\n[bold yellow]{len(left)} required variable(s) still need a "
@@ -2111,6 +2143,22 @@ def setup(
     except (KeyboardInterrupt, TypeError):
         console.print("\n[yellow]Setup cancelled by user.[/yellow]")
         raise typer.Exit()
+
+
+def _setup_secret_inputs(
+    targets: List[str], interactive: bool
+) -> Optional["secret_manager.SecretInputs"]:
+    """What setup knows about vault-supplied variables (V3-3): the
+    environment, and the probe when the secrets command may run."""
+    config = secret_manager.get_config()
+    if config is None or not config.run:
+        return secret_manager.SecretInputs(
+            environ=os.environ,
+            pending=secret_manager.pending_detail(config, command="setup"),
+        )
+    return _run_secrets_command(
+        config, targets, command="setup", can_prompt=interactive, show=True
+    )
 
 
 @schema_app.command("sync")

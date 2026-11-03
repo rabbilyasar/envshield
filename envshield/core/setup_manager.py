@@ -4,6 +4,7 @@
 import dataclasses
 import datetime
 import os
+import stat
 import sys
 from typing import Any, Dict, List, Optional
 
@@ -12,8 +13,15 @@ from rich.console import Console
 from rich.prompt import Prompt
 
 from ..config import manager as config_manager
+from ..parsers._base import Concrete, Referenced
 from ..parsers.factory import get_parser
-from . import file_updater, schema_manager, schema_types, service_discovery
+from . import (
+    file_updater,
+    schema_manager,
+    schema_types,
+    secret_manager,
+    service_discovery,
+)
 from .exceptions import EnvShieldException, SchemaNotFoundError
 from .importer import key_contains_secret_keyword
 
@@ -21,8 +29,8 @@ console = Console()
 EXAMPLE_FILE = ".env.example"
 
 
-# Outcome categories (V3-2, #21). NEEDS ACCESS is produced once provider
-# references exist (V3-3, #22).
+# Outcome categories (V3-2, #21). NEEDS ACCESS is a variable the secret
+# manager should supply but didn't, or that wasn't checked (V3-3, #22).
 READY = "READY"
 NEEDS_ACCESS = "NEEDS ACCESS"
 SET_YOURSELF = "SET YOURSELF"
@@ -73,6 +81,10 @@ class SetupResult:
     @property
     def to_set_yourself(self) -> List[str]:
         return [o.name for o in self.outcomes if o.category == SET_YOURSELF]
+
+    @property
+    def needing_access(self) -> List[str]:
+        return [o.name for o in self.outcomes if o.category == NEEDS_ACCESS]
 
 
 def stdin_is_terminal() -> bool:
@@ -178,6 +190,67 @@ def _secret(key: str, field_schema: Dict[str, Any], declared: bool = True) -> bo
     return _is_secret_key(key)
 
 
+def _vault_outcome(
+    field_schema: Dict[str, Any],
+    state: Any,
+    local_value: Optional[str],
+    required: bool,
+):
+    """
+    (category, detail) for a variable the secret manager supplies (V3-3).
+    Never prompted for, never written: a value from the secret manager is
+    reported, one it didn't supply needs access, and a value already in
+    the local file is reported as it is. Value-free.
+    """
+    if isinstance(state, Concrete):
+        status = secret_manager.probe_status(field_schema, state.value)
+    elif isinstance(state, Referenced):
+        status = {"status": "referenced", "detail": state.form}
+    else:
+        status = {"status": state.status, "detail": state.detail}
+    kind, detail = status["status"], status.get("detail")
+    if kind == "valid":
+        return READY, "from your secret manager"
+    if kind == "invalid":
+        return (
+            SET_YOURSELF,
+            f"your secret manager's value is invalid ({detail}): fix it there",
+        )
+    if kind == "blank":
+        if required:
+            return SET_YOURSELF, "your secret manager supplies it empty: fix it there"
+        if detail:
+            return OPTIONAL, f"supplied empty, and empty isn't valid ({detail})"
+        return OPTIONAL, "supplied empty"
+    if kind == "referenced":
+        return (
+            SET_YOURSELF,
+            f"your secret manager supplies {detail} that wasn't resolved",
+        )
+    # Not supplied, not checked, or the command failed: a value the local
+    # file already has is what the app gets.
+    if local_value is not None:
+        error = schema_types.validate_value(local_value, field_schema)
+        if local_value == "" and required:
+            return SET_YOURSELF, "not from your secret manager, and set but empty"
+        if error:
+            return (
+                SET_YOURSELF if required else OPTIONAL,
+                f"not from your secret manager, and invalid locally ({error})",
+            )
+        return READY, "already set locally"
+    if not required:
+        return OPTIONAL, "from your secret manager; not required locally"
+    if kind == "missing":
+        return NEEDS_ACCESS, (
+            "not supplied by your secret manager: you may lack access, or it "
+            "hasn't been added"
+        )
+    if kind == "failed":
+        return NEEDS_ACCESS, f"couldn't run your secrets command: {detail}"
+    return NEEDS_ACCESS, detail
+
+
 class _Skip(Exception):
     """The developer left a prompt blank: the variable stays as it is."""
 
@@ -256,7 +329,10 @@ def _prompt_value(
 
 
 def run_setup(
-    service_name: str, output_file: Optional[str] = None, interactive: bool = True
+    service_name: str,
+    output_file: Optional[str] = None,
+    interactive: bool = True,
+    secrets: Optional["secret_manager.SecretInputs"] = None,
 ) -> SetupResult:
     """
     Guides a developer through creating or completing their local
@@ -276,6 +352,12 @@ def run_setup(
     `interactive=False` (--non-interactive, or no terminal) never prompts:
     whatever can be resolved without asking is written, the rest is
     reported, and every existing line stays as it is.
+
+    A variable the team's secret manager supplies (V3-3, #22) is never
+    prompted for and never written: `secrets` says what the secret
+    manager supplied (the probe's statuses, or the environment when
+    EnvShield runs inside its command), and the variable is READY, NEEDS
+    ACCESS or SET YOURSELF from that.
     """
     paths = config_manager.get_env_paths(service_name=service_name)
     example_file = paths["example_file"]
@@ -283,6 +365,17 @@ def run_setup(
     is_python_target = local_file.endswith(".py")
 
     console.print(f"[bold]{local_file}[/bold]")
+    try:
+        mounted = stat.S_ISFIFO(os.lstat(local_file).st_mode)
+    except OSError:
+        mounted = False
+    if mounted:
+        # A secret manager's mounted file (BL-214): it owns the content.
+        raise EnvShieldException(
+            f"'{local_file}' is mounted by your secret manager (a named pipe), "
+            "so setup doesn't write it. Add missing values in your secret "
+            "manager, then run 'envshield check' to see what's still missing."
+        )
     # Refuse an unsafe target before asking for any value (BL-154).
     file_updater.assert_safe_write_target(local_file)
 
@@ -319,12 +412,21 @@ def run_setup(
             f"[bold yellow]Warning:[/bold yellow] {missing_schema} Values are taken "
             "from the existing files as they are, without validation."
         )
+    if secrets is None:
+        secrets = secret_manager.SecretInputs(
+            pending=secret_manager.pending_detail(
+                secret_manager.get_config(), command="setup"
+            )
+        )
+    vault = secret_manager.secret_states(service_name, schema, secrets)
     if schema and interactive:
-        # An overview before prompting; empties are reported.
+        # An overview before prompting; empties are reported. Variables
+        # from the secret manager are reported on their own below.
+        local_schema = {k: v for k, v in schema.items() if k not in vault}
         _print_drift_summary(
-            schema,
+            local_schema,
             schema_manager.diff_against_schema(
-                schema, _fill_schema_defaults(schema, local)
+                local_schema, _fill_schema_defaults(local_schema, local)
             ),
         )
 
@@ -346,7 +448,7 @@ def run_setup(
     # sibling's default or template value.
     for key in keys:
         field_schema = schema.get(key, {})
-        if key in local:
+        if key in local or key in vault:
             continue
         if not schema:
             # No schema: the template's values are taken as they are (the
@@ -380,6 +482,12 @@ def run_setup(
         required = False
         try:
             required = schema_types.should_be_present(field_schema, resolved)
+            if key in vault:
+                category, detail = _vault_outcome(
+                    field_schema, vault[key], local.get(key), required
+                )
+                outcome(key, category, detail, required)
+                continue
             if key in local:
                 value = local[key]
                 error = (
