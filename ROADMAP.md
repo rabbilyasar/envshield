@@ -158,7 +158,7 @@ authoritative order):
 | 3a | Scanner fix: every skipped file is reported (BL-095, P1) | #77 | none |
 | 4 | CLI consolidation (V0-2b, V6-2, V6-3) | #42, #45, #85 (done), #63 | Phase 1; #63 after #42 |
 | 5 | Phase 2: one project contract | #18, #19, #44 | V0-1 (#14) |
-| 6 | Phase 3: onboarding with your vault | #20, #21, #22 (back in planning, A2) | Phase 2 (soft) |
+| 6 | Phase 3: onboarding with your vault | #20, #21, #22 (done) | Phase 2 (soft) |
 | 7 | Phase 6: migration | #26 | Phase 2 |
 | 8 | Phase 7: acceptance, documentation, release | #27, #46, #28, #29 | all of the above |
 

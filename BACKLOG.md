@@ -2228,11 +2228,14 @@ Component: `core/evaluator.py` (report building: the v1 `valid`/`present` fields
 
 ### BL-219 — `setup --non-interactive` at a terminal still asks "Install git hooks?"
 
-Type: `BUG` · Evidence: `CONFIRMED` (real secret-manager trial, 2026-11-01; same code on `main`) · Priority: **P2** (the flag's help says "Never prompt"; a script that runs `setup --non-interactive` in a terminal waits forever) · Status: **open, [#119](https://github.com/rabbilyasar/envshield/issues/119)**
+Type: `BUG` · Evidence: `CONFIRMED` (real secret-manager trial, 2026-11-01; same code on `main`) · Priority: **P2** (the flag's help says "Never prompt"; a script that runs `setup --non-interactive` in a terminal waits forever) · Status: **fixed 2026-11-05, [#119](https://github.com/rabbilyasar/envshield/issues/119)**
 Component: `cli.py::setup` → `HooksManager.install_hooks_if_needed(auto=True)`
 
 - **Current behavior:** after writing, `setup` offers to install the git hooks whenever stdin is a terminal (`hooks_manager._is_interactive`), whatever `--non-interactive` says. Without a terminal it's skipped, which is why `BL-212`'s tests didn't catch it.
 - **Expected:** `--non-interactive` skips the offer (or prints a one-line hint to run `envshield hook install`).
+- **Fix (2026-11-05):** `setup` offers the hooks only when it may prompt (the same `interactive` it uses for every other question: no `--non-interactive`, and a terminal). Otherwise, after the "Git Hooks" status it already prints, it names the command: "Run 'envshield hook install' to add the git hooks." (only while a hook is missing). Interactive `setup` is unchanged.
+- **Tests:** `envshield/tests/core/test_setup_report.py`: `--non-interactive` on a terminal in a git repo without hooks (no prompt, hint, exit 1, no hook written), no terminal (hint), interactive (still offers), hooks installed (no hint). Also run in a real pseudo-terminal: no prompt, exit 1. Full suite 2707 passed.
+- **Sibling:** `init --yes` and `service discover --yes` have the same gap, which needs a decision on what `--yes` means: `BL-222`.
 - **Relationships:** `BL-212` (#21), `BL-118`.
 
 ### BL-220 — Rich markup in a schema `description` crashes `setup` and `explain`
@@ -2252,6 +2255,17 @@ Component: `core/verdicts.py::next_step` (`secret_manager`)
 - **Current behavior:** the no-terminal message suggests `bws run … -- envshield check`. Run that way, the injected values are VALID, but the 3 the vault doesn't hold are COULD NOT VERIFY with "check it with 'envshield check --with-secrets'", which runs the same command again and then reports them as not supplied.
 - **Expected:** a next step that says the value wasn't in the environment the command provided (e.g. "not supplied: add it to your secret manager, or run `check --with-secrets`"). EnvShield can't tell it's inside the run command, so the wording must fit both cases.
 - **Relationships:** #22.
+
+---
+
+### BL-222 — `init --yes` and `service discover --yes` still ask "Install git hooks?" on a terminal
+
+Type: `BUG` · Evidence: `CONFIRMED` (reproduced 2026-11-05 under a pseudo-terminal while fixing `BL-219`) · Priority: **P2** (a script that runs either command in a terminal waits; never a false-clean or a leak) · Status: **open, proposed [#123](https://github.com/rabbilyasar/envshield/issues/123)**
+Component: `cli.py::init`, `_init_service_directories`, `service_discover`, `_discover_onto_contract` → `HooksManager.install_hooks_if_needed(auto=True)`; `_offer_agent_setup`
+
+- **Current behavior:** the hook offer (and in `init`, the agent-setup offer) checks only for a terminal, whatever `--yes` says. `init --yes` in a git repo, in a pseudo-terminal, was still waiting at "Install git hooks?" after 15 s.
+- **Expected:** `--yes` never waits. Whether it accepts these offers or skips them and names the command is undecided: `init --yes` says "accept every suggestion without asking"; `service discover --yes` says "for scripting/CI".
+- **Relationships:** `BL-219` (same root shape: a no-prompt flag that a later offer doesn't see).
 
 ---
 
