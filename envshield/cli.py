@@ -533,8 +533,8 @@ def _init_service_directories(
     for c in candidates:
         schema_manager.sync_schema(service_name=c["name"])
     _offer_template_unignore([c["name"] for c in candidates], yes)
-    hooks_manager.HooksManager().install_hooks_if_needed(auto=True, force=False)
-    _offer_agent_setup()
+    _offer_git_hooks(yes)
+    _offer_agent_setup(yes)
     console.print("\n[bold green]✨ Setup Complete! ✨[/bold green]")
     console.print(
         "Contract created. Review 'env.schema.toml': descriptions are "
@@ -871,11 +871,8 @@ def init(
         schema_manager.sync_schema(service_name=service_name)
         _offer_template_unignore([service_name], yes)
 
-        # Offer to install git hooks
-        hm = hooks_manager.HooksManager()
-        hm.install_hooks_if_needed(auto=True, force=False)
-
-        _offer_agent_setup()
+        _offer_git_hooks(yes)
+        _offer_agent_setup(yes)
 
     except EnvShieldException as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
@@ -3918,7 +3915,7 @@ def service_discover(
 
     contract = contract_writer.project_contract()
     if contract:
-        _discover_onto_contract(selected, contract)
+        _discover_onto_contract(selected, contract, yes)
         return
 
     registered_count = 0
@@ -3958,15 +3955,15 @@ def service_discover(
     )
     console.print(f"[dim]{contract_writer.LEGACY_TIP}[/dim]")
 
-    # Offer to install git hooks
-    hm = hooks_manager.HooksManager()
-    hm.install_hooks_if_needed(auto=True, force=False)
+    _offer_git_hooks(yes)
 
     console.print("\n[bold cyan]Next step:[/bold cyan]")
     console.print("  envshield setup    # Configure your local environment")
 
 
-def _discover_onto_contract(selected: List[dict], contract: str) -> None:
+def _discover_onto_contract(
+    selected: List[dict], contract: str, yes: bool = False
+) -> None:
     """'service discover' in a project with a contract (#19): every selected
     directory is registered with its 'dir', then its variables appended."""
     registered = []
@@ -4000,7 +3997,7 @@ def _discover_onto_contract(selected: List[dict], contract: str) -> None:
     console.print(
         f"\n[bold green]✨ Added {len(registered)} service(s) to envshield.yml.[/bold green]"
     )
-    hooks_manager.HooksManager().install_hooks_if_needed(auto=True, force=False)
+    _offer_git_hooks(yes)
     console.print("\n[bold cyan]Next step:[/bold cyan]")
     console.print("  envshield setup    # Configure your local environment")
 
@@ -4065,11 +4062,28 @@ def _print_agent_notes(agents: List[str]) -> None:
         )
 
 
-def _offer_agent_setup() -> None:
-    """'init' offers agent setup on a terminal, and names the command otherwise."""
+def _offer_git_hooks(yes: bool = False) -> None:
+    """
+    Offers the git hooks on a terminal. With --yes, or without a terminal,
+    names the command instead while a hook is missing: --yes never waits,
+    and doesn't install hooks it didn't list (BL-222).
+    """
+    hm = hooks_manager.HooksManager()
+    if hm.git_root and (yes or not hooks_manager._is_interactive()):
+        if hm.should_prompt_for_installation():
+            console.print("Run 'envshield hook install' to add the git hooks.")
+        return
+    hm.install_hooks_if_needed(auto=True, force=False)
+
+
+def _offer_agent_setup(yes: bool = False) -> None:
+    """
+    'init' offers agent setup on a terminal, and names the command with
+    --yes or without one (BL-222).
+    """
     if agent_setup.is_installed(os.getcwd()):
         return
-    if not hooks_manager._is_interactive():
+    if yes or not hooks_manager._is_interactive():
         console.print(
             "To set up coding agents (Claude Code, Codex), run "
             "'[bold]envshield agent install[/bold]'."
