@@ -441,7 +441,33 @@ def _value_changes(
     if secret_a != secret_b:
         changes.append(_classify_secret_change(key, secret_a, secret_b))
 
+    source_a, source_b = a.get("source"), b.get("source")
+    if source_a != source_b:
+        changes.append(_source_change(key, source_a, source_b))
+
     return changes
+
+
+def _source_change(key: str, before: Any, after: Any) -> ContractChange:
+    """
+    Where a variable comes from changed (`source`, V3-3; BL-217).
+    Informational: whether developers must now set it themselves, or get
+    it from the secret manager, depends on envshield.yml's `secrets:`,
+    which a schema diff doesn't have.
+    """
+
+    def show(value: Any) -> str:
+        return "unset" if value is None else repr(value)
+
+    return ContractChange(
+        variable=key,
+        category="informational",
+        description=(
+            f"'{key}' source changed from {show(before)} to {show(after)}: "
+            "where developers get its value changes."
+        ),
+        detail={"before": before, "after": after},
+    )
 
 
 def _defaults_differ(default_a: Any, default_b: Any, type_a: str, type_b: str) -> bool:

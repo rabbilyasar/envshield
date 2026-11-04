@@ -2203,12 +2203,13 @@ Component: `core/secret_manager.py` (`run_probe`)
 
 ### BL-217 — `schema diff` doesn't report a changed `source`
 
-Type: `GAP` · Evidence: `CONFIRMED` (code reading, 2026-10-31) · Priority: **P3** · Status: **open**
+Type: `GAP` · Evidence: `CONFIRMED` (code reading, 2026-10-31) · Priority: **P3** · Status: **fixed 2026-10-31 ([#113](https://github.com/rabbilyasar/envshield/issues/113))**
 Component: `core/contract_diff.py`
 
 - **Problem:** `source = "local" | "secret-manager"` (#22) changes where a variable comes from, but `schema diff` compares no `source` key, so the change isn't listed.
 - **Expected:** a non-breaking "source changed" entry.
 - **Relationships:** #22.
+- **Fix:** `schema diff` lists a `source` change as **informational** ("'K' source changed from unset to 'local': where developers get its value changes"), with `detail: {before, after}`. Informational rather than non-breaking: moving a variable from the secret manager to `local` makes a developer's plain `check` report it missing, and whether `source` matters at all depends on envshield.yml's `secrets:`, which a schema diff doesn't see. Not blocking by default. Tests in `tests/core/test_contract_diff.py::TestSourceChanges` (5).
 
 **Real secret-manager trial (2026-11-01): Bitwarden Secrets Manager on kemonchilo.** The #22 acceptance run with a real provider. `bws` 2.1.0 (checksum verified), a free-tier Secrets Manager project holding 8 made-up values for kemonchilo's 11 secret variables (3 left out on purpose: `TEST_DATABASE_URL`, `WHATSAPP_APP_SECRET`, `WHATSAPP_WEBHOOK_VERIFY_TOKEN`), a read-write machine-account token in a 0600 file. A throwaway clone of kemonchilo (`e70484c`, no `.env`) with `secrets: {run: "bws run --project-id <id> --"}`, and EnvShield from PR #117's branch (`aaa5ad8`, which includes #110 and #111). Run on Linux (Fedora 44); macOS untested.
 - **Worked as designed:** plain `check` reports the 11 secret variables COULD NOT VERIFY `secret_manager` and names `--with-secrets`. `--with-secrets` with no terminal never runs the command; on a terminal it asks once (the approval is stored 0600), and answering no runs nothing. With the token, it validates the 8 vault values as VALID and reports the 3 absent ones as INVALID "not supplied by your secret manager" (about 2 s). With no token or an invalid one, `check` shows one service-level error ("your secrets command didn't run EnvShield (exit 1)") and leaves every vault variable COULD NOT VERIFY. `bws run … -- envshield check` validates the injected values too. `doctor` reports the approved command. `setup` marks the 8 vault variables READY "from your secret manager", the 3 absent ones NEEDS ACCESS, and writes no vault value to `.env`.
