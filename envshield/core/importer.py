@@ -111,6 +111,16 @@ def _is_conventionally_public(key: str) -> bool:
     return key.upper().startswith(PUBLIC_KEY_PREFIXES)
 
 
+def _describe_value(value: str, inferred_type: Optional[str]) -> str:
+    """What '--interactive' shows instead of a value: its shape, never its text."""
+    if not value:
+        return "empty"
+    parts = [f"{len(value)} chars"]
+    if inferred_type:
+        parts.append(f"type: {inferred_type}")
+    return ", ".join(parts)
+
+
 def _classify_variable(key: str, value: str) -> Tuple[bool, Any]:
     """
     Intelligently classifies a variable as a secret and suggests a default value.
@@ -345,21 +355,36 @@ def generate_schema_from_file(
         inferred_type = _infer_type(key, value)
 
         if interactive:
+            # Never the value itself (BL-224): what deciding needs is the
+            # name, its shape and its length.
             console.print(
-                f"\nVariable [bold cyan]{key}[/bold cyan] = [dim]'{escape(value)}'[/dim]"
+                f"\nVariable [bold cyan]{key}[/bold cyan] "
+                f"[dim]({_describe_value(value, inferred_type)})[/dim]"
             )
-            is_secret = questionary.confirm(
-                "  Mark as a secret?", default=is_secret
-            ).ask()
-            if not is_secret:
-                use_default = questionary.confirm(
-                    f"  Use '{value}' as the default value?",
-                    default=(default_value is not None),
+            if value_embeds_credential(value):
+                # No answer would be safe: a password is a secret, and a
+                # schema default holding one fails to load (BL-208, BL-209).
+                console.print(
+                    "  [dim]Its value holds a password (in a URL or "
+                    "connection string), so it's a secret.[/dim]"
+                )
+                is_secret = True
+            else:
+                is_secret = questionary.confirm(
+                    "  Mark as a secret?", default=is_secret
                 ).ask()
-                if use_default:
-                    default_value = value
-                else:
-                    default_value = None
+            if not is_secret:
+                use_default = (
+                    bool(value)
+                    and questionary.confirm(
+                        f"  Use its value in {os.path.basename(file_path)} as "
+                        f"{key}'s default?",
+                        default=(default_value is not None),
+                    ).ask()
+                )
+                default_value = value if use_default else None
+            else:
+                default_value = None
 
         schema_dict[key] = {"description": schema_types.PLACEHOLDER_DESCRIPTION}
         if is_secret:
