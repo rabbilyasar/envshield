@@ -2235,7 +2235,7 @@ Component: `cli.py::setup` → `HooksManager.install_hooks_if_needed(auto=True)`
 - **Expected:** `--non-interactive` skips the offer (or prints a one-line hint to run `envshield hook install`).
 - **Fix (2026-11-05):** `setup` offers the hooks only when it may prompt (the same `interactive` it uses for every other question: no `--non-interactive`, and a terminal). Otherwise, after the "Git Hooks" status it already prints, it names the command: "Run 'envshield hook install' to add the git hooks." (only while a hook is missing). Interactive `setup` is unchanged.
 - **Tests:** `envshield/tests/core/test_setup_report.py`: `--non-interactive` on a terminal in a git repo without hooks (no prompt, hint, exit 1, no hook written), no terminal (hint), interactive (still offers), hooks installed (no hint). Also run in a real pseudo-terminal: no prompt, exit 1. Full suite 2707 passed.
-- **Sibling:** `init --yes` and `service discover --yes` have the same gap, which needs a decision on what `--yes` means: `BL-222`.
+- **Sibling:** `init --yes` and `service discover --yes` have the same gap, fixed by `BL-222` (#123): `--yes` skips the offers and names the commands.
 - **Relationships:** `BL-212` (#21), `BL-118`.
 
 ### BL-220 — Rich markup in a schema `description` crashes `setup` and `explain`
@@ -2260,11 +2260,14 @@ Component: `core/verdicts.py::next_step` (`secret_manager`)
 
 ### BL-222 — `init --yes` and `service discover --yes` still ask "Install git hooks?" on a terminal
 
-Type: `BUG` · Evidence: `CONFIRMED` (reproduced 2026-11-05 under a pseudo-terminal while fixing `BL-219`) · Priority: **P2** (a script that runs either command in a terminal waits; never a false-clean or a leak) · Status: **open, proposed [#123](https://github.com/rabbilyasar/envshield/issues/123)**
+Type: `BUG` · Evidence: `CONFIRMED` (reproduced 2026-11-05 under a pseudo-terminal while fixing `BL-219`) · Priority: **P2** (a script that runs either command in a terminal waits; never a false-clean or a leak) · Status: **fixed 2026-11-07, [#123](https://github.com/rabbilyasar/envshield/issues/123)**
 Component: `cli.py::init`, `_init_service_directories`, `service_discover`, `_discover_onto_contract` → `HooksManager.install_hooks_if_needed(auto=True)`; `_offer_agent_setup`
 
 - **Current behavior:** the hook offer (and in `init`, the agent-setup offer) checks only for a terminal, whatever `--yes` says. `init --yes` in a git repo, in a pseudo-terminal, was still waiting at "Install git hooks?" after 15 s.
-- **Expected:** `--yes` never waits. Whether it accepts these offers or skips them and names the command is undecided: `init --yes` says "accept every suggestion without asking"; `service discover --yes` says "for scripting/CI".
+- **Expected:** `--yes` never waits.
+- **Decision (maintainer, 2026-11-05, on #123): skip.** `--yes` lists what it accepts and these offers aren't on it; the same command gives the same result on a terminal and in CI; agent setup writes committed files.
+- **Fix:** one helper, `cli.py::_offer_git_hooks(yes)`, used by `init` (single directory and service directories) and both `service discover` paths. With `--yes` or without a terminal it names `envshield hook install` (only while a hook is missing) instead of asking; `_offer_agent_setup(yes)` likewise names `envshield agent install`. Without `--yes`, a terminal still gets both offers.
+- **Tests:** `envshield/tests/test_yes_never_prompts.py`: `init --yes` (one directory, service directories) and `service discover --yes` (onto the contract, legacy) on a terminal never prompt and write no hook; no hint once hooks exist; `init` without `--yes` still offers both. Also run in a real pseudo-terminal: no prompt, both hints, exit 0, no hook written. Full suite 2713 passed, 1 skipped; `ruff check .` clean.
 - **Relationships:** `BL-219` (same root shape: a no-prompt flag that a later offer doesn't see).
 
 ---
