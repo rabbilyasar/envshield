@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
@@ -1032,7 +1033,7 @@ def _collect_files_to_scan(
         console.print(
             f"[dim]ℹ️  Skipping {len(skipped_symlinks)} symlink(s) -- not "
             "followed, to avoid reading a file outside the scanned "
-            f"directory: {', '.join(sorted(skipped_symlinks))}[/dim]"
+            f"directory: {escape(', '.join(sorted(skipped_symlinks)))}[/dim]"
         )
 
     # A git-ignored file (a real '.env', chief among them) is never going
@@ -1047,7 +1048,7 @@ def _collect_files_to_scan(
         console.print(
             f"[dim]ℹ️  Skipping {len(ignored)} git-ignored file(s) -- not "
             "committable, so not scanned: "
-            f"{', '.join(sorted(ignored))}[/dim]"
+            f"{escape(', '.join(sorted(ignored)))}[/dim]"
         )
         files_to_scan = [f for f in files_to_scan if f not in ignored]
 
@@ -1139,7 +1140,8 @@ def _build_undeclared_var_resolver(service_name: Optional[str]):
             # A's working tree silently blocked every commit touching
             # service B, even though B was never involved.
             console.print(
-                f"[yellow]Warning: Could not load schema for service '{name}': {e} "
+                f"[yellow]Warning: Could not load schema for service "
+                f"'{escape(name)}': {escape(str(e))} "
                 f"Skipping its undeclared-variable check.[/yellow]"
             )
             continue
@@ -1383,12 +1385,13 @@ def _scan_files(
                     if new_lines_only is not None:
                         # File is excluded, but scan only newly-added lines
                         console.print(
-                            f"[dim]ℹ️  {os.path.basename(file_path)} (excluded; diffs only: {len(new_lines_only)} new line(s))[/dim]"
+                            f"[dim]ℹ️  {escape(os.path.basename(file_path))} (excluded; diffs only: {len(new_lines_only)} new line(s))[/dim]"
                         )
                     else:
                         # Brand new file - scan all lines despite exclusion
                         console.print(
-                            f"[yellow]ℹ️  Scanning new file {os.path.basename(file_path)} (despite exclusion)[/yellow]"
+                            f"[yellow]ℹ️  Scanning new file "
+                            f"{escape(os.path.basename(file_path))} (despite exclusion)[/yellow]"
                         )
 
                 secrets, undeclared = _scan_single_file(
@@ -1460,7 +1463,7 @@ def run_scan(
                 f"\n[bold yellow]⚠️  Skipped {len(skipped_paths)} file(s) {label} (not scanned -- coverage is incomplete for these):[/bold yellow]"
             )
             for skipped_path in skipped_paths:
-                console.print(f"    [dim]{skipped_path}[/dim]")
+                console.print(f"    [dim]{escape(skipped_path)}[/dim]")
 
     # M7: Enforcement mode (Git hook with interactive override)
     if enforce_mode:
@@ -1502,9 +1505,9 @@ def run_scan(
                 )
                 for finding in all_undeclared_findings:
                     undeclared_table.add_row(
-                        finding["file_path"],
+                        escape(finding["file_path"]),
                         str(finding["line_num"]),
-                        finding["variable_name"],
+                        escape(finding["variable_name"]),
                     )
                 console.print(undeclared_table)
                 console.print(
@@ -1533,10 +1536,10 @@ def run_scan(
         table.add_column("Preview", style="white", overflow="fold")
         for finding in all_secret_findings:
             table.add_row(
-                finding["file_path"],
+                escape(finding["file_path"]),
                 str(finding["line_num"]),
-                finding["secret_type"],
-                finding["redacted_preview"],
+                escape(finding["secret_type"]),
+                escape(finding["redacted_preview"]),
             )
         console.print(table)
         console.print(
@@ -1558,9 +1561,9 @@ def run_scan(
         undeclared_table.add_column("Variable Name", style="white", overflow="fold")
         for finding in all_undeclared_findings:
             undeclared_table.add_row(
-                finding["file_path"],
+                escape(finding["file_path"]),
                 str(finding["line_num"]),
-                finding["variable_name"]
+                escape(finding["variable_name"])
                 + (
                     " (out of scope: defined, not granted to this service)"
                     if finding.get("scope") == "out_of_scope"

@@ -14,6 +14,7 @@ import sys
 from typing import Any, Dict, List
 
 from rich.console import Console
+from rich.markup import escape
 
 console = Console()
 
@@ -79,8 +80,8 @@ def _display_enforcement_warning(findings: List[Dict[str, Any]]) -> None:
         console.print("[bold]HIGH CONFIDENCE[/bold]")
         for finding in grouped["high_confidence"]:
             console.print(
-                f"  [cyan]{finding['file_path']}:{finding['line_num']}[/cyan]    "
-                f"[magenta]{finding['secret_type']}[/magenta]"
+                f"  [cyan]{escape(finding['file_path'])}:{finding['line_num']}[/cyan]    "
+                f"[magenta]{escape(finding['secret_type'])}[/magenta]"
             )
         console.print()
 
@@ -89,8 +90,8 @@ def _display_enforcement_warning(findings: List[Dict[str, Any]]) -> None:
         console.print("[bold]AMBIGUOUS[/bold]")
         for finding in grouped["ambiguous"] + grouped["unclassified"]:
             console.print(
-                f"  [cyan]{finding['file_path']}:{finding['line_num']}[/cyan]    "
-                f"[magenta]{finding['secret_type']}[/magenta]"
+                f"  [cyan]{escape(finding['file_path'])}:{finding['line_num']}[/cyan]    "
+                f"[magenta]{escape(finding['secret_type'])}[/magenta]"
             )
         console.print()
 

@@ -2240,11 +2240,15 @@ Component: `cli.py::setup` → `HooksManager.install_hooks_if_needed(auto=True)`
 
 ### BL-220 — Rich markup in a schema `description` crashes `setup` and `explain`
 
-Type: `BUG` / `ROBUSTNESS` · Evidence: `CONFIRMED` (real secret-manager trial, 2026-11-01; reproduced on `main`) · Priority: **P2** (a committed, PR-editable string crashes two commands with a traceback; no value appears in it, since Typer's tracebacks show no locals by default) · Status: **open, [#120](https://github.com/rabbilyasar/envshield/issues/120)**
+Type: `BUG` / `ROBUSTNESS` · Evidence: `CONFIRMED` (real secret-manager trial, 2026-11-01; reproduced on `main`) · Priority: **P2** (a committed, PR-editable string crashes two commands with a traceback; no value appears in it, since Typer's tracebacks show no locals by default) · Status: **fixed 2026-11-07, [#120](https://github.com/rabbilyasar/envshield/issues/120)**
 Component: `cli.py` (`explain`, `setup`'s SET YOURSELF hint), any Rich output of a `description`
 
 - **Current behavior:** a description is printed as Rich markup. `[branchId]` in kemonchilo's `TELEGRAM_BOT_USERNAME` description (a Next.js route path) silently disappears from `setup`'s output; `description = "see [/admin]"` makes `explain A` and `setup` (when it prints the hint) exit with `MarkupError: closing tag '[/admin]' … doesn't match any open tag`. `check` doesn't print descriptions and is unaffected.
 - **Expected:** every description (untrusted configuration text, §4 item 12) is escaped before it reaches Rich; the class to test is "any schema or config string printed through Rich", not only `description` (compare the `example_file` markup note under `BL-136`).
+- **Wider than reported (2026-11-07):** the same crash came from every string the project supplies, not only descriptions: a default, an enum value, a pattern, a `requiredIf` value, a service name, a file path such as Next.js's `app/[slug]/`, and any error message quoting one (a rejected variable name like `B[/x]`). It crashed `explain`, `setup`, `doctor`, `schema diff`, `schema sync`, `generate`, `service list` and `hook status`; `check` and `scan` dropped `[slug]` from paths silently. Root cause: those strings were interpolated into Rich markup unescaped; the fix adds about 220 `escape()` calls. The maintainer chose to fix the whole class in #120.
+- **Fix:** every such string is passed through `rich.markup.escape` where it's printed (f-strings, table cells, table titles), in `cli.py`, `setup_manager`, `doctor`, `hooks_manager`, `schema_manager`, `scanner`, `enforcement`, `importer`, `dependency_snapshot` and `config/manager`. JSON output and exception messages are unchanged: escaping happens only at Rich output. Typer's own error box already prints arguments as written.
+- **Tests:** `envshield/tests/test_rich_markup_text.py` (36): every command (`check` in each mode, `doctor`, `setup`, `explain`, `schema diff`/`sync`, `generate`, `service list`/`add`/`remove`/`discover`, `init`, `hook status`, `scan`, `scan --staged`) over a project with `[/x]` and `[red]R[/red]` in every schema and `envshield.yml` field; none may raise, and the brackets stay visible. A schema error quoting a bad name prints it as written. `scan` shows `app/[slug]/keys.py` and never the token. 23 of the 36 fail on `main`. Full suite 2743 passed, 1 skipped.
+- **Found alongside:** `BL-224` (P0, interactive import prints values), `BL-225` (P3, per-environment diff text).
 - **Relationships:** `BL-212`, `BL-136`.
 
 ### BL-221 — Inside the secret manager's run command, `check` still says "check it with `--with-secrets`"
@@ -2266,6 +2270,26 @@ Component: `cli.py::init`, `_init_service_directories`, `service_discover`, `_di
 - **Current behavior:** the hook offer (and in `init`, the agent-setup offer) checks only for a terminal, whatever `--yes` says. `init --yes` in a git repo, in a pseudo-terminal, was still waiting at "Install git hooks?" after 15 s.
 - **Expected:** `--yes` never waits. Whether it accepts these offers or skips them and names the command is undecided: `init --yes` says "accept every suggestion without asking"; `service discover --yes` says "for scripting/CI".
 - **Relationships:** `BL-219` (same root shape: a no-prompt flag that a later offer doesn't see).
+
+
+### BL-224 — `init --from FILE --interactive` prints secret values
+
+Type: `SECURITY` · Evidence: `CONFIRMED` (reproduced 2026-11-07 in a pseudo-terminal while fixing `BL-220`) · Priority: **P0** (§4: any bug that can expose a secret is P0; it prints to the developer's own terminal, behind an opt-in flag) · Status: **open, proposed [#127](https://github.com/rabbilyasar/envshield/issues/127)**
+Component: `core/importer.py::generate_schema_from_file` (`if interactive:`), reached by `init --from FILE --interactive` and the deprecated `import --interactive`
+
+- **Current behavior:** before asking how to classify each variable, it prints `Variable STRIPE_SECRET_KEY = '<value>'`, the raw value read from the file, secrets included. Reproduced with a `.env.prod` holding `STRIPE_SECRET_KEY=zzSECRETVALUEzz123`: the value appeared in the output.
+- **Expected:** the prompt never shows a value it hasn't established as non-secret: name, secret-looking or not, inferred type and length (like `scan`'s `<redacted, N chars>`). Whether a clearly non-secret value (a port, a bool) may be shown is the decision for #127.
+- **Not affected:** plain `init --from FILE` on a terminal asks only about non-secret defaults (`_confirm_observed_defaults`), by design.
+- **Relationships:** `BL-220` (found while escaping this line), `BL-208` (#94, same importer, credentials as defaults).
+
+### BL-225 — `schema diff`: a per-environment change shows one environment's reason and an empty `()`
+
+Type: `BUG` / `UX` · Evidence: `CONFIRMED` (reproduced 2026-11-07) · Priority: **P3** (the category and `blocking` are right; the text misleads) · Status: **open, proposed [#128](https://github.com/rabbilyasar/envshield/issues/128)**
+Component: `core/contract_diff.py::_per_environment`
+
+- **Current behavior:** `[A] type = "string"` → `[A] type = "string", defaultValue = "d", requiredIn = ["production"]` prints "'A' is now optional (required = false) ... This applies in local, production ()." Both environments are `non_breaking` with different details, so the first environment's text is used for both, and nothing is left for the parentheses. In production `A` is still required.
+- **Expected:** each environment's own reason, and no empty `()`.
+- **Relationships:** V4-2 (#24, environment-aware `schema diff`).
 
 ---
 

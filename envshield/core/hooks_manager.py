@@ -9,6 +9,7 @@ from typing import Dict, Iterable, List, Tuple
 import questionary
 import typer
 from rich.console import Console
+from rich.markup import escape
 
 from ..config import manager as config_manager
 from ..core.exceptions import EnvShieldException
@@ -99,7 +100,8 @@ def _warn_hooks_path_redirect(hooks_dir: str, git_root: str) -> None:
     default_dir = os.path.join(git_root, ".git", "hooks")
     if os.path.abspath(hooks_dir) != os.path.abspath(default_dir):
         console.print(
-            f"[dim]ℹ️  core.hooksPath is set -- installing into {hooks_dir} instead of .git/hooks.[/dim]"
+            f"[dim]ℹ️  core.hooksPath is set -- installing into {escape(hooks_dir)} "
+            "instead of .git/hooks.[/dim]"
         )
 
 
@@ -411,7 +413,7 @@ def run_pre_commit() -> int:
         try:
             paths = config_manager.get_env_paths(service_name=name)
         except EnvShieldException as e:
-            console.print(f"[bold red]Error:[/bold red] {e}")
+            console.print(f"[bold red]Error:[/bold red] {escape(str(e))}")
             status = 1
             continue
         # 'schema sync --check' reads the template off disk, not what's
@@ -428,7 +430,7 @@ def run_pre_commit() -> int:
             checked_templates.add(template)
             if template in unstaged:
                 console.print(
-                    f"✗ '{example_file}' has unstaged changes -- did you forget "
+                    f"✗ '{escape(example_file)}' has unstaged changes -- did you forget "
                     "'git add' after running 'envshield schema sync'?"
                 )
                 status = 1
@@ -449,7 +451,7 @@ def run_post_merge() -> int:
     except EnvShieldException as e:
         console.print(
             "[yellow]⚠️  EnvShield couldn't check this merge's configuration "
-            f"changes: {e}[/yellow]"
+            f"changes: {escape(str(e))}[/yellow]"
         )
         return 0
     for name in services:
@@ -584,7 +586,7 @@ class HooksManager:
             if not post_merge:
                 install_post_merge_hook(force=force, non_interactive=False)
         except EnvShieldException as e:
-            console.print(f"[bold yellow]⚠️  Warning:[/] {e}")
+            console.print(f"[bold yellow]⚠️  Warning:[/] {escape(str(e))}")
 
     def _hook_status_line(
         self, hooks_dir: str, filename: str, label: str, generator
@@ -604,7 +606,7 @@ class HooksManager:
             with open(path, "r") as f:
                 installed_content = f.read()
         except OSError:
-            return f"[yellow]? {label} (couldn't read {path})[/yellow]"
+            return f"[yellow]? {label} (couldn't read {escape(path)})[/yellow]"
 
         if installed_content == generator():
             return f"[green]✓ {label}[/green]"
@@ -652,7 +654,7 @@ class HooksManager:
         try:
             coverage = schema_coverage()
         except EnvShieldException as e:
-            console.print(f"  [red]Can't resolve coverage: {e}[/red]")
+            console.print(f"  [red]Can't resolve coverage: {escape(str(e))}[/red]")
             console.print()
             return
         if not coverage:
@@ -660,7 +662,7 @@ class HooksManager:
                 "  [dim]No services registered -- only secret scanning.[/dim]"
             )
         for schema, files, users in coverage:
-            console.print(f"  {schema} → {', '.join(users)}")
+            console.print(f"  {escape(schema)} → {escape(', '.join(users))}")
             for base in files[1:]:
-                console.print(f"    [dim]extends {os.path.relpath(base)}[/dim]")
+                console.print(f"    [dim]extends {escape(os.path.relpath(base))}[/dim]")
         console.print()
