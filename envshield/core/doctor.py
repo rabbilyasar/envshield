@@ -7,6 +7,7 @@ from typing import List, Optional
 import questionary
 import typer
 from rich.console import Console
+from rich.markup import escape
 
 from ..config import manager as config_manager
 from ..parsers.factory import get_manifest_parser_and_vars, get_parser
@@ -42,7 +43,9 @@ class HealthCheck:
         except EnvShieldException as e:
             self.passed, self.message = False, str(e)
         if not self.passed:
-            console.print(f"[bold red]✗ {self.description}[/bold red]: {self.message}")
+            console.print(
+                f"[bold red]✗ {self.description}[/bold red]: {escape(self.message)}"
+            )
             if fix and self.fix_func:
                 if questionary.confirm(f"{self.fix_description}").ask():
                     try:
@@ -51,7 +54,9 @@ class HealthCheck:
                         if self.passed:
                             console.print("[bold green]✓ Fixed![/bold green]")
                     except EnvShieldException as e:
-                        console.print(f"[bold red]Error during fix:[/bold red] {e}")
+                        console.print(
+                            f"[bold red]Error during fix:[/bold red] {escape(str(e))}"
+                        )
 
         else:
             console.print(f"[bold green]✓ {self.description}[/bold green]")
@@ -61,7 +66,7 @@ class HealthCheck:
             # dropped it on success, which is exactly the kind of "green
             # checkmark hiding real information" this tool exists to avoid.
             if self.message:
-                console.print(f"  [dim]{self.message}[/dim]")
+                console.print(f"  [dim]{escape(self.message)}[/dim]")
 
 
 def _check_config_files(service_name: str):

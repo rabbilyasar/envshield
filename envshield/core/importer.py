@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 import questionary
 import toml
 from rich.console import Console
+from rich.markup import escape
 
 from ..parsers._dotenv import DotenvParser
 from ..parsers.factory import get_parser
@@ -345,7 +346,7 @@ def generate_schema_from_file(
 
         if interactive:
             console.print(
-                f"\nVariable [bold cyan]{key}[/bold cyan] = [dim]'{value}'[/dim]"
+                f"\nVariable [bold cyan]{key}[/bold cyan] = [dim]'{escape(value)}'[/dim]"
             )
             is_secret = questionary.confirm(
                 "  Mark as a secret?", default=is_secret
@@ -418,7 +419,7 @@ def generate_schema_from_file(
         console.print(
             "  Their value holds a password (in a URL or connection string), "
             "so each is marked secret and gets no default: "
-            + ", ".join(sorted(credential_values))
+            + escape(", ".join(sorted(credential_values)))
         )
     console.print(f"- Suggested {defaults_found} default value(s).")
     if preserved:
@@ -437,14 +438,14 @@ def generate_schema_from_file(
         console.print(
             f"[bold yellow]Warning:[/] Skipped {len(unsafe_names)} variable(s) whose "
             "name isn't a valid environment variable name (must match "
-            "^[A-Za-z_][A-Za-z0-9_]*$): " + ", ".join(sorted(unsafe_names))
+            "^[A-Za-z_][A-Za-z0-9_]*$): " + escape(", ".join(sorted(unsafe_names)))
         )
     if oversized_defaults:
         console.print(
             f"[bold yellow]Warning:[/] Skipped {len(oversized_defaults)} value(s) "
             f"over {MAX_SCANNABLE_SIZE_BYTES // 1_000_000}MB as a suggested "
             "default (variable(s) kept without one): "
-            + ", ".join(sorted(oversized_defaults))
+            + escape(", ".join(sorted(oversized_defaults)))
         )
 
     return SCHEMA_HEADER + toml.dumps(schema_dict)

@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 
 import questionary
 from rich.console import Console
+from rich.markup import escape
 from rich.prompt import Prompt
 
 from ..config import manager as config_manager
@@ -146,16 +147,21 @@ def _print_drift_summary(
         )
         conditional = sorted(k for k in diff.missing if k not in unconditional)
         if unconditional:
-            console.print(f"  [yellow]missing:[/yellow] {', '.join(unconditional)}")
+            console.print(
+                f"  [yellow]missing:[/yellow] {escape(', '.join(unconditional))}"
+            )
         if conditional:
             console.print(
-                f"  [yellow]missing (conditionally required):[/yellow] {', '.join(conditional)}"
+                "  [yellow]missing (conditionally required):[/yellow] "
+                f"{escape(', '.join(conditional))}"
             )
     if diff.blank:
-        console.print(f"  [yellow]blank:[/yellow] {', '.join(sorted(diff.blank))}")
+        console.print(
+            f"  [yellow]blank:[/yellow] {escape(', '.join(sorted(diff.blank)))}"
+        )
     if diff.invalid:
         for key, reason in sorted(diff.invalid.items()):
-            console.print(f"  [red]invalid:[/red] {key} ({reason})")
+            console.print(f"  [red]invalid:[/red] {escape(key)} ({escape(reason)})")
 
 
 def _is_secret_key(key: str) -> bool:
@@ -258,13 +264,13 @@ class _Skip(Exception):
 def _explain(key: str, field_schema: Dict[str, Any], schema, resolved) -> None:
     description = field_schema.get("description")
     if description and not description.startswith("TODO"):
-        console.print(f"  [dim]{description}[/dim]")
+        console.print(f"  [dim]{escape(description)}[/dim]")
     if field_schema.get("requiredIf") and schema_types.is_required_now(
         field_schema, resolved
     ):
         condition_text = schema_types.requiredif_condition_text(field_schema, schema)
         if condition_text:
-            console.print(f"  [dim]Required because {condition_text}.[/dim]")
+            console.print(f"  [dim]Required because {escape(condition_text)}.[/dim]")
 
 
 def _prompt_value(
@@ -321,7 +327,7 @@ def _prompt_value(
         error = schema_types.validate_value(value, field_schema)
         if not error:
             return value
-        console.print(f"  [red]✗ {error}[/red]")
+        console.print(f"  [red]✗ {escape(error)}[/red]")
     console.print(
         f"  [yellow]{key} left unset after 3 invalid values; set it yourself.[/yellow]"
     )
@@ -364,7 +370,7 @@ def run_setup(
     local_file = output_file or paths["local_file"]
     is_python_target = local_file.endswith(".py")
 
-    console.print(f"[bold]{local_file}[/bold]")
+    console.print(f"[bold]{escape(local_file)}[/bold]")
     try:
         mounted = stat.S_ISFIFO(os.lstat(local_file).st_mode)
     except OSError:
@@ -409,7 +415,7 @@ def run_setup(
         )
     if missing_schema:
         console.print(
-            f"[bold yellow]Warning:[/bold yellow] {missing_schema} Values are taken "
+            f"[bold yellow]Warning:[/bold yellow] {escape(str(missing_schema))} Values are taken "
             "from the existing files as they are, without validation."
         )
     if secrets is None:
@@ -501,7 +507,7 @@ def run_setup(
                 elif error and value == "":
                     console.print(
                         f"\n[yellow]{key} is set but empty, and empty isn't valid "
-                        f"({error}).[/yellow]"
+                        f"({escape(error)}).[/yellow]"
                     )
                     reason = f"set but empty, and empty isn't valid ({error})"
                     if not interactive:
@@ -527,7 +533,7 @@ def run_setup(
                         continue
                 elif error:
                     console.print(
-                        f"\n[yellow]{key} has an invalid value ({error}).[/yellow]"
+                        f"\n[yellow]{key} has an invalid value ({escape(error)}).[/yellow]"
                     )
                     reason = f"invalid ({error})"
                     if (
@@ -590,7 +596,7 @@ def run_setup(
                 outcome(key, SET_YOURSELF, hint(key, "skipped"), required)
         except EnvShieldException as e:
             # One variable's problem never stops the others.
-            console.print(f"[red]✗ {key}: {e}[/red]")
+            console.print(f"[red]✗ {escape(key)}: {escape(str(e))}[/red]")
             outcome(key, SET_YOURSELF, str(e), True)
 
     # One atomic write, after everything is resolved: an interruption
@@ -629,8 +635,8 @@ def _print_report(result: SetupResult, existed: bool) -> None:
         for o in result.outcomes:
             style = styles[o.category]
             console.print(
-                f"  [{style}]{o.category:<12}[/{style}]  {o.name:<{width}}  "
-                f"[dim]{o.detail}[/dim]",
+                f"  [{style}]{o.category:<12}[/{style}]  "
+                f"{escape(f'{o.name:<{width}}')}  [dim]{escape(o.detail)}[/dim]",
                 highlight=False,
             )
     if not existed:
@@ -644,7 +650,7 @@ def _print_report(result: SetupResult, existed: bool) -> None:
         written = f"{result.local_file} unchanged"
     console.print(
         f"\n{result.required_ready} of {result.required_total} required variables "
-        f"ready. {written}."
+        f"ready. {escape(written)}."
     )
 
 
@@ -699,7 +705,7 @@ def _write_dotenv_local_file(local_file: str, final_vars: Dict[str, str]) -> Non
     except OSError as e:
         raise EnvShieldException(f"Could not write to '{local_file}': {e}")
     console.print(
-        f"\n[bold green]✓ Successfully created your [magenta]{local_file}[/magenta] file![/bold green]"
+        f"\n[bold green]✓ Successfully created your [magenta]{escape(local_file)}[/magenta] file![/bold green]"
     )
 
 
@@ -722,7 +728,7 @@ def _write_python_local_file(
         except OSError as e:
             raise EnvShieldException(f"Could not write to '{local_file}': {e}")
         console.print(
-            f"\n[bold green]✓ Successfully created your [magenta]{local_file}[/magenta] file![/bold green]"
+            f"\n[bold green]✓ Successfully created your [magenta]{escape(local_file)}[/magenta] file![/bold green]"
         )
         return
     parser = get_parser(local_file)
@@ -730,12 +736,14 @@ def _write_python_local_file(
     keys_needing_write = set(prompted_keys) | (set(final_vars) - existing_keys)
     if not keys_needing_write:
         console.print(
-            f"[green]✓ '{local_file}' already has values for every variable.[/green]"
+            f"[green]✓ '{escape(local_file)}' already has values for every variable.[/green]"
         )
         return
     updates = [{"key": key, "value": final_vars[key]} for key in keys_needing_write]
     # A local secrets file: left 0600.
     file_updater.update_variables_in_file(local_file, updates, secret=True)
     console.print(
-        f"\n[bold green]✓ Updated [magenta]{local_file}[/magenta] with {len(updates)} value(s): {', '.join(sorted(keys_needing_write))}[/bold green]"
+        f"\n[bold green]✓ Updated [magenta]{escape(local_file)}[/magenta] with "
+        f"{len(updates)} value(s): {escape(', '.join(sorted(keys_needing_write)))}"
+        "[/bold green]"
     )

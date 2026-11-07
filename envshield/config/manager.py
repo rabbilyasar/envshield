@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional
 import toml
 import yaml
 from rich.console import Console
+from rich.markup import escape
 
 from envshield.core import file_updater, schema_scope, schema_types
 from envshield.core.exceptions import (
@@ -703,8 +704,8 @@ def add_service(
         and os.path.basename(entry["local_file"]) != ".env"
     ):
         console.print(
-            f"[yellow]Note:[/yellow] service '{name}' overrides local_file to "
-            f"'{entry['local_file']}' but not example_file -- the template "
+            f"[yellow]Note:[/yellow] service '{escape(name)}' overrides local_file to "
+            f"'{escape(entry['local_file'])}' but not example_file -- the template "
             "will still default to '.env.example' in this service's "
             "directory. If this local_file follows a different naming "
             "convention (e.g. '.env.local' pairs with '.env.local.example'), "
@@ -1576,7 +1577,9 @@ def update_gitignore():
             f"[bold green]✓[/bold green] Updated [bold cyan]{GITIGNORE_FILE_NAME}[/bold cyan] with EnvShield patterns."
         )
     except IOError as e:
-        console.print(f"[bold red]Error:[/bold red] Could not update .gitignore: {e}")
+        console.print(
+            f"[bold red]Error:[/bold red] Could not update .gitignore: {escape(str(e))}"
+        )
 
 
 def write_file(file_name: str, content: str, success_message: str):
@@ -1586,5 +1589,8 @@ def write_file(file_name: str, content: str, success_message: str):
             f.write(content)
         console.print(f"[bold green]✓[/bold green] {success_message}")
     except IOError as e:
-        console.print(f"[bold red]Error:[/bold red] Failed to write {file_name}: {e}")
+        console.print(
+            f"[bold red]Error:[/bold red] Failed to write {escape(file_name)}: "
+            f"{escape(str(e))}"
+        )
         raise

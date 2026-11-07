@@ -39,6 +39,7 @@ import os
 from typing import List, Optional, Tuple
 
 from rich.console import Console
+from rich.markup import escape
 
 from envshield.config import manager as config_manager
 from envshield.utils import git_utils
@@ -172,7 +173,7 @@ def _changed_source_files(
                 console.print(
                     f"[dim]ℹ️  Skipping {len(skipped_symlinks)} symlink(s) -- not "
                     "followed, to avoid reading working-tree content from "
-                    f"outside the project: {', '.join(skipped_symlinks)}[/dim]"
+                    f"outside the project: {escape(', '.join(skipped_symlinks))}[/dim]"
                 )
 
     return files
