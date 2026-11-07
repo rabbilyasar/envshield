@@ -2257,11 +2257,14 @@ Component: `cli.py` (`explain`, `setup`'s SET YOURSELF hint), any Rich output of
 
 ### BL-221 — Inside the secret manager's run command, `check` still says "check it with `--with-secrets`"
 
-Type: `UX` · Evidence: `CONFIRMED` (real secret-manager trial, 2026-11-01) · Priority: **P3** · Status: **open, [#121](https://github.com/rabbilyasar/envshield/issues/121)**
+Type: `UX` · Evidence: `CONFIRMED` (real secret-manager trial, 2026-11-01) · Priority: **P3** · Status: **fixed 2026-11-07, [#121](https://github.com/rabbilyasar/envshield/issues/121)**
 Component: `core/verdicts.py::next_step` (`secret_manager`)
 
 - **Current behavior:** the no-terminal message suggests `bws run … -- envshield check`. Run that way, the injected values are VALID, but the 3 the vault doesn't hold are COULD NOT VERIFY with "check it with 'envshield check --with-secrets'", which runs the same command again and then reports them as not supplied.
 - **Expected:** a next step that says the value wasn't in the environment the command provided (e.g. "not supplied: add it to your secret manager, or run `check --with-secrets`"). EnvShield can't tell it's inside the run command, so the wording must fit both cases.
+- **Fix (2026-11-07):** `secret_manager.pending_detail` (with a `secrets.run`, for `check`): "from your secret manager, and isn't in this environment: if EnvShield ran inside your secrets command, add it to your secret manager; otherwise check it with 'envshield check --with-secrets'". The verdict is unchanged (COULD NOT VERIFY `secret_manager`).
+- **Tests:** `test_secret_manager.py`: run with the vault's other values injected, `API_KEY`'s next step says it isn't in this environment and to add it to the secret manager, and still names `--with-secrets`; the same text without the injected values. Full suite 2791 passed, 1 skipped.
+- **Re-run on the trial (2026-11-07):** `bws run … -- envshield check --json` on kemonchilo: the 3 variables the vault doesn't hold get the new next step; the 8 it holds are VALID; none of the 8 values in the output.
 - **Relationships:** #22.
 
 ---

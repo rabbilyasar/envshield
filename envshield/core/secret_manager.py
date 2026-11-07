@@ -405,8 +405,13 @@ def pending_detail(
     if reason:
         return f"from your secret manager, not checked ({reason}); or run {wrapped}"
     if command == "check" and config is not None and config.run:
+        # EnvShield can't tell whether it runs inside the secrets command
+        # (BL-221): inside it, rerunning with --with-secrets runs the same
+        # command again, so the wording fits both cases.
         return (
-            "from your secret manager; check it with 'envshield check --with-secrets'"
+            "from your secret manager, and isn't in this environment: if "
+            "EnvShield ran inside your secrets command, add it to your secret "
+            "manager; otherwise check it with 'envshield check --with-secrets'"
         )
     return f"from your secret manager; check it by running {wrapped}"
 
