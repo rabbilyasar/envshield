@@ -837,6 +837,8 @@ def _variable_status(name: str, source: SourceEvaluation) -> str:
 
 
 _PRESENT = ("ok", "not_visible", "blank", "invalid")
+# INVALID reasons that judge a value read (not its absence or its file).
+_VALUE_JUDGED_INVALID = ("blank", "invalid_value", "invalid_fallback")
 
 
 def _aggregate_presence(statuses: List[str], any_source_failed: bool):
@@ -936,8 +938,21 @@ def build_report(evaluation: ServiceEvaluation) -> Dict[str, Any]:
                 for s in checked
                 if name in s.diff.unresolved_triggers
             ]
+            if (
+                not invalid_reasons
+                and overall.verdict == verdicts.INVALID
+                and overall.reason in _VALUE_JUDGED_INVALID
+            ):
+                # Judged from a value no file holds, such as the secret
+                # manager's (BL-218): the verdict says so, not the diff.
+                invalid_reasons = [overall.detail or overall.reason]
             if invalid_reasons:
                 valid = False
+            elif overall.verdict == verdicts.VALID:
+                # VALID needs a value EnvShield read and validated, wherever
+                # it came from (BL-218).
+                valid = True
+                present = True
             elif present is True and "ok" in statuses:
                 valid = True
             else:

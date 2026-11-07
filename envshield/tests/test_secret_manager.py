@@ -806,3 +806,66 @@ def test_placeholder_end_to_end(tmp_path, terminal):
         assert _variables(json.loads(result.stdout))[name]["verdict"] == "valid"
     detail = _findings(json.loads(plain.stdout))["API_KEY"]["detail"]
     assert "--with-secrets" in detail
+
+
+# --- The v1 fields follow the verdict (BL-218, #118) -------------------------
+
+
+def _assert_v1_agrees_with_verdict(payload):
+    """One computation, two shapes: the v1 fields never contradict the
+    verdict a variable got."""
+    for report in payload["reports"]:
+        unverified = set(report["summary"]["unverified"])
+        for v in report["variables"]:
+            if not v["declared"]:
+                continue
+            name, verdict = v["name"], v["verdict"]
+            if verdict == "valid":
+                assert v["valid"] is True, name
+                assert v["present"] is True, name
+            # A value read and judged bad; "missing" stays v1's no claim.
+            if verdict == "invalid" and v["reason_code"] in (
+                "blank",
+                "invalid_value",
+                "invalid_fallback",
+            ):
+                assert v["valid"] is False, name
+                assert v["reason"], name
+            if name in unverified:
+                assert verdict == "unverified", name
+
+
+@pytest.mark.parametrize(
+    "project",
+    [
+        {},
+        {"supplied": {**SUPPLIED, "DATABASE_URL": "VAULT_CANARY_1"}},
+        {"supplied": {k: v for k, v in SUPPLIED.items() if k != "API_KEY"}},
+        {"env_file": "PORT=8080\nDATABASE_URL=not-a-url\n"},
+        {"env_file": None},
+    ],
+    ids=["all-supplied", "one-invalid", "one-withheld", "overrides-file", "no-file"],
+)
+def test_with_secrets_v1_fields_follow_the_verdict(tmp_path, terminal, project):
+    payload = json.loads(_approved_run(tmp_path, **project).stdout)
+    _assert_v1_agrees_with_verdict(payload)
+
+
+def test_a_valid_vault_value_is_valid_in_every_field(tmp_path, terminal):
+    payload = json.loads(_approved_run(tmp_path).stdout)
+    report = payload["reports"][0]
+    variables = _variables(payload)
+    for name in SUPPLIED:
+        assert variables[name]["verdict"] == "valid", name
+        assert variables[name]["valid"] is True, name
+        assert name not in report["summary"]["unverified"], name
+    assert report["summary"]["unverified"] == []
+
+
+def test_wrapped_by_hand_and_plain_v1_fields_follow_the_verdict(tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _project()
+        wrapped = runner.invoke(app, ["check", "--json"], env=SUPPLIED)
+        plain = runner.invoke(app, ["check", "--json"])
+    for result in (wrapped, plain):
+        _assert_v1_agrees_with_verdict(json.loads(result.stdout))

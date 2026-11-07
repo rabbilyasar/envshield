@@ -2218,12 +2218,16 @@ Component: `core/contract_diff.py`
 
 ### BL-218 — `check --with-secrets --json`: a VALID vault value is `valid: null` and listed in `summary.unverified`
 
-Type: `BUG` · Evidence: `CONFIRMED` (real secret-manager trial, 2026-11-01) · Priority: **P2** (machine-readable output contradicts itself; errs toward "not verified", so never a false-clean) · Status: **open, [#118](https://github.com/rabbilyasar/envshield/issues/118)**
+Type: `BUG` · Evidence: `CONFIRMED` (real secret-manager trial, 2026-11-01) · Priority: **P2** (machine-readable output contradicts itself; errs toward "not verified", so never a false-clean) · Status: **fixed 2026-11-07, [#118](https://github.com/rabbilyasar/envshield/issues/118)**
 Component: `core/evaluator.py` (report building: the v1 `valid`/`present` fields and `summary.unverified`)
 
 - **Current behavior:** for a variable the secret manager supplied and EnvShield validated, the variable's `verdict` is `valid`, but its v1 field `valid` is `null`, its source's `status` is `not_visible`, and its name is in `summary.unverified` ("valid-looking values EnvShield never saw"), while `summary.counts.unverified` is 0. kemonchilo: all 8 vault values.
 - **Expected:** the v1 fields follow the verdict: `valid: true`, not in `summary.unverified`. The legacy computation reads the `.env` diff statuses, where a `FromSecretManager` value isn't `ok`.
 - **Fix direction:** derive the v1 fields from the shared verdict instead of recomputing them (Target architecture: one computation, consumed by both shapes).
+- **Also found:** an invalid vault value had the same gap the other way: verdict `invalid` (`invalid_value`) but `valid: null` and `reason: null`.
+- **Fix (2026-11-07):** `evaluator.build_report` takes the v1 fields from the verdict when the `.env` diff can't see the value: VALID → `valid: true`, `present: true`, not in `summary.unverified`; INVALID because of the value (`blank`, `invalid_value`, `invalid_fallback`) → `valid: false` with the verdict's detail as `reason`. Missing and file-level reasons keep v1's `valid: null`. Every other report is unchanged (all golden reports pass).
+- **Tests:** `test_secret_manager.py`: an invariant (VALID ⇒ `valid`/`present` true; a value judged INVALID ⇒ `valid: false` with a reason; a name in `summary.unverified` ⇒ COULD NOT VERIFY) over `--with-secrets` with every value supplied, one invalid, one withheld, a vault value overriding the file, and no `.env`; the wrapped-by-hand and plain runs. 6 of them fail on `main`. `test_check_golden.py`: the same invariant over all 22 golden scenarios. Full suite 2789 passed, 1 skipped.
+- **Re-run on the trial (2026-11-07):** `check --with-secrets --json` on the kemonchilo Bitwarden trial project: the 8 vault values are `valid: true`, `summary.unverified` is empty, the 3 left out of the vault are `missing`; none of the 8 values appears in the output.
 - **Relationships:** #22 (`BL-174`), R0-5 (`summary.unverified`).
 
 ### BL-219 — `setup --non-interactive` at a terminal still asks "Install git hooks?"
