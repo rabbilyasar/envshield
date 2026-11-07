@@ -869,3 +869,36 @@ def test_wrapped_by_hand_and_plain_v1_fields_follow_the_verdict(tmp_path):
         plain = runner.invoke(app, ["check", "--json"])
     for result in (wrapped, plain):
         _assert_v1_agrees_with_verdict(json.loads(result.stdout))
+
+
+# --- Inside the secrets command (BL-221, #121) -------------------------------
+
+
+def _api_key_step(env):
+    with runner.isolated_filesystem():
+        _project()
+        result = runner.invoke(app, ["check", "--json"], env=env)
+    _no_canary(result.stdout)
+    finding = _findings(json.loads(result.stdout))["API_KEY"]
+    assert finding["reason_code"] == "secret_manager"
+    return finding["next_step"]["text"]
+
+
+def test_a_value_the_run_command_didnt_inject_says_add_it_there(tmp_path):
+    # Run as 'bws run -- envshield check' (what EnvShield suggests): the
+    # vault didn't hold API_KEY. Rerunning with --with-secrets alone runs
+    # the same command again, so it can't be the only advice.
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        step = _api_key_step({k: v for k, v in SUPPLIED.items() if k != "API_KEY"})
+    assert "isn't in this environment" in step
+    assert "add it to your secret manager" in step
+    assert "envshield check --with-secrets" in step
+
+
+def test_outside_the_run_command_the_advice_is_the_same(tmp_path):
+    # EnvShield can't tell whether it runs inside the command: one wording
+    # fits both.
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        inside = _api_key_step({k: v for k, v in SUPPLIED.items() if k != "API_KEY"})
+        outside = _api_key_step({})
+    assert inside == outside
