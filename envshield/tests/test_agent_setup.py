@@ -486,8 +486,10 @@ def test_non_utf8_file_is_reported_and_left_unchanged(tmp_path):
 def test_allow_rules_are_exactly_the_commands_the_instructions_name():
     # The AGENTS.md section names 'agent guide'; the guide names the rest.
     guide = agent_setup.guide() + agent_setup._instructions_section()
-    assert len(agent_setup.CLAUDE_ALLOW) == 4
-    for rule in agent_setup.CLAUDE_ALLOW:
+    assert len(agent_setup.CLAUDE_ALLOW) == 5
+    rules = agent_setup.claude_allow_rules(["NAME"])
+    assert rules[:5] == agent_setup.CLAUDE_ALLOW
+    for rule in rules:
         assert rule.startswith("Bash(") and rule.endswith(")")
         command = rule[len("Bash(") : -1]
         # Exact commands, never a prefix rule.
@@ -670,3 +672,109 @@ def test_guide_onboarding_matches_checks_agent_step(tmp_path):
         # The guide routes check's agent step through setup, which does it.
         assert agent_setup.SETUP_NON_INTERACTIVE in onboarding
         assert "defaultValue" in onboarding
+
+
+# --- Onboarding and deployment allow rules (#126, BL-223) --------------------
+
+
+def _with_environments(*names):
+    _write(
+        "envshield.yml",
+        f"environments: [{', '.join(names)}]\n"
+        "services:\n  api:\n    schema: env.schema.toml\n",
+    )
+
+
+def _allow():
+    return json.loads(_read(".claude/settings.json"))["permissions"]["allow"]
+
+
+def test_install_allows_setup_and_each_declared_environment(tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _project()
+        _with_environments("staging", "production")
+        assert _install("--agent", "claude").exit_code == 0
+        allow = _allow()
+        assert "Bash(envshield setup --non-interactive)" in allow
+        assert "Bash(envshield check --env staging --json)" in allow
+        assert "Bash(envshield check --env production --json)" in allow
+        # 'local' is what 'check --json' already checks.
+        assert not any("--env local" in r for r in allow)
+        assert allow == list(agent_setup.claude_allow_rules())
+
+
+def test_without_environments_only_the_fixed_rules(tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _project()
+        _install("--agent", "claude")
+        assert _allow() == list(agent_setup.CLAUDE_ALLOW)
+        assert "Bash(envshield setup --non-interactive)" in _allow()
+
+
+def test_reinstall_adds_a_newly_declared_environment(tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _project()
+        _with_environments("staging")
+        _install("--agent", "claude")
+        before = _read(".claude/settings.json")
+        assert "already up to date" in _install("--agent", "claude").stdout
+        assert _read(".claude/settings.json") == before
+        _with_environments("staging", "production")
+        result = _install("--agent", "claude")
+        assert ".claude/settings.json: updated" in result.stdout
+        allow = _allow()
+        assert allow.count("Bash(envshield check --env staging --json)") == 1
+        assert "Bash(envshield check --env production --json)" in allow
+
+
+def test_flag_for_unattended_runs_has_the_same_rules(tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _project()
+        _with_environments("production")
+        out = " ".join(_install("--agent", "claude").stdout.split())
+        flag = agent_setup.claude_allowed_tools_args()
+        assert flag in out
+        for rule in _allow():
+            assert f'"{rule}"' in flag
+
+
+def test_codex_still_gets_no_permissions_with_environments(tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _project()
+        _with_environments("production")
+        _install("--agent", "codex")
+        assert "permissions" not in json.loads(_read(".codex/hooks.json"))
+
+
+def _agent_check():
+    result = runner.invoke(app, ["doctor", "--json"])
+    checks = json.loads(result.stdout)["results"][0]["checks"]
+    found = [c for c in checks if c["name"] == "Agent Setup"]
+    return result, (found[0] if found else None)
+
+
+def test_doctor_names_rules_missing_since_an_environment_was_added(tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _project()
+        _with_environments("staging")
+        _install("--agent", "claude")
+        _, check = _agent_check()
+        assert check["passed"] is True
+        _with_environments("staging", "production")
+        result, check = _agent_check()
+        assert check["passed"] is False
+        assert "Bash(envshield check --env production --json)" in check["message"]
+        assert "envshield agent install" in check["message"]
+        assert result.exit_code == 1
+        _install("--agent", "claude")
+        _, check = _agent_check()
+        assert check["passed"] is True
+
+
+def test_doctor_has_no_agent_check_without_claude_setup(tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _project()
+        _with_environments("production")
+        assert _agent_check()[1] is None
+        _install("--agent", "codex")
+        assert _agent_check()[1] is None

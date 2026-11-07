@@ -13,6 +13,7 @@ from ..config import manager as config_manager
 from ..parsers.factory import get_manifest_parser_and_vars, get_parser
 from ..utils import git_utils
 from . import (
+    agent_setup,
     evaluator,
     hooks_manager,
     schema_manager,
@@ -726,7 +727,35 @@ def _build_checks(
             HealthCheck("Secret Manager", _check_secret_manager, fix_func=None)
         )
 
+    # Only once Claude Code's agent setup is installed (#126).
+    if agent_setup.missing_claude_rules(os.getcwd()) is not None:
+        checks.append(
+            HealthCheck(
+                "Agent Setup",
+                _check_agent_setup,
+                fix_func=lambda: agent_setup.install_hook_config(
+                    "claude", os.getcwd(), lambda _prompt: False
+                ),
+                fix_description="Add the missing allow rules to .claude/settings.json?",
+            )
+        )
+
     return checks
+
+
+def _check_agent_setup():
+    """
+    Whether Claude Code may run every command the agent guide names. An
+    environment declared after 'agent install' has no rule yet (BL-223).
+    """
+    missing = agent_setup.missing_claude_rules(os.getcwd()) or []
+    if not missing:
+        return True, "Claude Code may run every command the agent guide names."
+    return (
+        False,
+        f"Claude Code needs approval for {', '.join(missing)}: run "
+        "'envshield agent install --agent claude' to allow them.",
+    )
 
 
 def _check_secret_manager():
