@@ -34,7 +34,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from envshield import __version__
 from envshield.config import manager as config_manager
-from envshield.core import file_updater
+from envshield.core import file_updater, schema_types
 from envshield.core.exceptions import EnvShieldException, UnsafeWriteTargetError
 from envshield.utils import git_utils
 
@@ -50,13 +50,24 @@ FULL_CHECK = "envshield check --json"
 SETUP_NON_INTERACTIVE = "envshield setup --non-interactive"
 GUIDE_COMMAND = "envshield agent guide"
 SCHEMA_SYNC = "envshield schema sync"
+# The deployment check the guide names, once per declared environment.
+ENV_CHECK = "envshield check --env {env} --json"
 # Claude Code may run these without asking (#89, maintainer decision): the
 # exact commands the guide names, never a prefix. Without them an agent
 # that needs approval for Bash (headless, CI) skips the guide and the
-# check and relies on the hook alone (BL-206). Codex's approval policy is
-# per user, so nothing is set for it.
+# check and relies on the hook alone (BL-206). Every stage is covered:
+# development (the checks, schema sync), onboarding (setup) and, through
+# claude_allow_rules(), deployment (#126, BL-223). Codex's approval policy
+# is per user, so nothing is set for it.
 CLAUDE_ALLOW = tuple(
-    f"Bash({c})" for c in (GUIDE_COMMAND, POST_CHANGE_CHECK, FULL_CHECK, SCHEMA_SYNC)
+    f"Bash({c})"
+    for c in (
+        GUIDE_COMMAND,
+        POST_CHANGE_CHECK,
+        FULL_CHECK,
+        SCHEMA_SYNC,
+        SETUP_NON_INTERACTIVE,
+    )
 )
 
 # Tool names each agent uses for file edits. Codex reports every edit as
@@ -73,13 +84,62 @@ AGENT_NAMES = tuple(_AGENTS)
 _HOOK_TIMEOUT_SECONDS = 60
 
 
+def _declared_environments() -> List[str]:
+    """The environments envshield.yml declares, without the built-in 'local'
+    ('check --json' already checks it). Empty when envshield.yml can't be
+    read: the other commands report that."""
+    try:
+        environments = config_manager.get_environments()
+    except EnvShieldException:
+        return []
+    return [e for e in environments if e != schema_types.LOCAL]
+
+
+def claude_allow_rules(environments: Optional[List[str]] = None) -> Tuple[str, ...]:
+    """
+    CLAUDE_ALLOW, then 'check --env E --json' for each declared environment.
+    One exact rule each, never '--env *' (#89). Names already match
+    ENVIRONMENT_NAME_RE, so none can carry anything but a name.
+    """
+    if environments is None:
+        environments = _declared_environments()
+    return CLAUDE_ALLOW + tuple(
+        f"Bash({ENV_CHECK.format(env=e)})" for e in environments
+    )
+
+
+def missing_claude_rules(root: str) -> Optional[List[str]]:
+    """
+    The allow rules Claude Code's settings lack, or None when EnvShield's
+    Claude Code hook isn't installed there (nothing to report). An
+    environment declared after 'agent install' has no rule until it runs
+    again; 'doctor' names it (#126).
+    """
+    rel_path, _ = _AGENTS["claude"]
+    try:
+        text = _read_text(os.path.join(root, rel_path), root)
+        data = json.loads(text) if text else None
+    except (EnvShieldException, OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    hooks = data.get("hooks")
+    groups = hooks.get("PostToolUse") if isinstance(hooks, dict) else None
+    if not isinstance(groups, list) or not any(_is_ours(g) for g in groups):
+        return None
+    permissions = data.get("permissions")
+    allow = permissions.get("allow") if isinstance(permissions, dict) else None
+    allow = allow if isinstance(allow, list) else []
+    return [r for r in claude_allow_rules() if r not in allow]
+
+
 def claude_allowed_tools_args() -> str:
     """
     The same allow rules as a command-line flag. Claude Code applies a
     project's allow rules only after someone trusts the folder, which a
     'claude -p' run (CI, scripts) never does (#89); the flag needs no trust.
     """
-    return "--allowedTools " + " ".join(f'"{r}"' for r in CLAUDE_ALLOW)
+    return "--allowedTools " + " ".join(f'"{r}"' for r in claude_allow_rules())
 
 
 def guide() -> str:
@@ -472,7 +532,7 @@ def install_hook_config(
         else:
             detail = "kept the existing EnvShield hook"
     if allow is not None:
-        for rule in CLAUDE_ALLOW:
+        for rule in claude_allow_rules():
             if rule not in allow:
                 allow.append(rule)
                 changed = True
