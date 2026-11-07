@@ -561,7 +561,9 @@ def test_generate_schema_from_file_interactive_overrides_existing_declaration_fo
     '--interactive' re-classification for anything already declared.
     """
     settings = tmp_path / "settings.py"
-    settings.write_text("DATABASE_URL = 'postgres://user:pass@localhost/db'\n")
+    # No password in the URL: one with a password is always a secret and
+    # never a default (BL-208, BL-224).
+    settings.write_text("DATABASE_URL = 'postgres://localhost/db'\n")
 
     existing_schema = {
         "DATABASE_URL": {
@@ -580,7 +582,7 @@ def test_generate_schema_from_file_interactive_overrides_existing_declaration_fo
     )
     schema = toml.loads(schema_content)
 
-    assert schema["DATABASE_URL"]["defaultValue"] == "postgres://user:pass@localhost/db"
+    assert schema["DATABASE_URL"]["defaultValue"] == "postgres://localhost/db"
     # STRIPE_API wasn't in this scan at all -- still preserved unchanged.
     assert schema["STRIPE_API"] == existing_schema["STRIPE_API"]
 
@@ -932,3 +934,69 @@ class TestUnsafeNamesAreSkipped:
         assert "MY-VAR" not in schema
         assert "OK" in schema
         assert "MY-VAR" in capsys.readouterr().out
+
+
+class TestInteractiveImportNeverShowsAValue:
+    """
+    BL-224 (#127): '--interactive' printed every value before asking how to
+    classify it, secrets included. The class: a value read from the file
+    never reaches the output or a prompt, whatever the user answers.
+    """
+
+    VALUES = {
+        "STRIPE_SECRET_KEY": "zzSECRETVALUEzz123",
+        "DATABASE_URL": "postgres://app:pw_SECRET_456@db.internal/shop",
+        "APP_NAME": "shop-frontend-xyz",
+        "PORT": "8080",
+    }
+
+    def _run(self, tmp_path, mocker, capsys, secret, default):
+        env = tmp_path / ".env.prod"
+        env.write_text("".join(f"{k}={v}\n" for k, v in self.VALUES.items()))
+        prompts = []
+
+        def confirm(message, **kwargs):
+            prompts.append(message)
+            question = mocker.Mock()
+            question.ask.return_value = secret if "secret" in message else default
+            return question
+
+        mocker.patch("questionary.confirm", side_effect=confirm)
+        content = importer.generate_schema_from_file(str(env), interactive=True)
+        return toml.loads(content), capsys.readouterr().out, prompts
+
+    def test_no_value_in_the_output_or_a_prompt(self, tmp_path, mocker, capsys):
+        # "Not a secret" and "use it as the default" ask the most questions.
+        for secret, default in ((False, True), (True, True), (False, False)):
+            _, out, prompts = self._run(tmp_path, mocker, capsys, secret, default)
+            shown = out + "\n".join(prompts)
+            for name, value in self.VALUES.items():
+                assert name in out
+                assert value not in shown, (secret, default, name)
+
+    def test_the_prompt_says_what_classifying_needs(self, tmp_path, mocker, capsys):
+        _, out, _ = self._run(tmp_path, mocker, capsys, False, False)
+        assert "18 chars" in out  # STRIPE_SECRET_KEY's length
+        assert "type: port" in out
+
+    def test_a_value_with_a_password_is_always_secret(self, tmp_path, mocker, capsys):
+        schema, out, prompts = self._run(tmp_path, mocker, capsys, False, True)
+        assert schema["DATABASE_URL"]["secret"] is True
+        assert "defaultValue" not in schema["DATABASE_URL"]
+        # Not asked about at all: no answer would be safe.
+        assert not any("DATABASE_URL" in p for p in prompts)
+        assert len(prompts) == 2 * (len(self.VALUES) - 1)
+        assert "holds a password" in out
+
+    def test_the_answers_still_decide(self, tmp_path, mocker, capsys):
+        schema, _, _ = self._run(tmp_path, mocker, capsys, False, True)
+        assert schema["APP_NAME"] == {
+            "description": "TODO: Add description.",
+            "secret": False,
+            "defaultValue": "shop-frontend-xyz",
+        }
+        schema, _, _ = self._run(tmp_path, mocker, capsys, False, False)
+        assert "defaultValue" not in schema["APP_NAME"]
+        schema, _, _ = self._run(tmp_path, mocker, capsys, True, True)
+        assert schema["APP_NAME"]["secret"] is True
+        assert "defaultValue" not in schema["APP_NAME"]

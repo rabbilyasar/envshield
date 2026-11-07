@@ -2277,13 +2277,16 @@ Component: `cli.py::init`, `_init_service_directories`, `service_discover`, `_di
 
 ### BL-224 — `init --from FILE --interactive` prints secret values
 
-Type: `SECURITY` · Evidence: `CONFIRMED` (reproduced 2026-11-07 in a pseudo-terminal while fixing `BL-220`) · Priority: **P0** (§4: any bug that can expose a secret is P0; it prints to the developer's own terminal, behind an opt-in flag) · Status: **open, proposed [#127](https://github.com/rabbilyasar/envshield/issues/127)**
+Type: `SECURITY` · Evidence: `CONFIRMED` (reproduced 2026-11-07 in a pseudo-terminal while fixing `BL-220`) · Priority: **P0** (§4: any bug that can expose a secret is P0; it prints to the developer's own terminal, behind an opt-in flag) · Status: **fixed 2026-11-07, [#127](https://github.com/rabbilyasar/envshield/issues/127)**
 Component: `core/importer.py::generate_schema_from_file` (`if interactive:`), reached by `init --from FILE --interactive` and the deprecated `import --interactive`
 
 - **Current behavior:** before asking how to classify each variable, it prints `Variable STRIPE_SECRET_KEY = '<value>'`, the raw value read from the file, secrets included. Reproduced with a `.env.prod` holding `STRIPE_SECRET_KEY=zzSECRETVALUEzz123`: the value appeared in the output.
 - **Expected:** the prompt never shows a value it hasn't established as non-secret: name, secret-looking or not, inferred type and length (like `scan`'s `<redacted, N chars>`). Whether a clearly non-secret value (a port, a bool) may be shown is the decision for #127.
 - **Not affected:** plain `init --from FILE` on a terminal asks only about non-secret defaults (`_confirm_observed_defaults`), by design.
-- **Relationships:** `BL-220` (found while escaping this line), `BL-208` (#94, same importer, credentials as defaults).
+- **Second leak, same branch:** answering "not a secret" then asked `Use '<value>' as the default value?`, and accepted a value holding a password as a default, which `BL-209` then makes the schema refuse to load. An existing test (`test_generate_schema_from_file_interactive_overrides_existing_declaration_for_a_rescanned_var`) asserted that a `postgres://user:pass@…` URL became a default; its value now has no password.
+- **Fix (2026-11-07):** no value is shown, whatever the answers (the safe option of the two in #127; the maintainer didn't pick). Each variable shows `Variable NAME (18 chars, type: url)`; a value holding a password is a secret without asking, with a one-line reason; the default question is `Use its value in FILE as NAME's default?`, asked only for a non-empty value. `core/importer.py::_describe_value`.
+- **Tests:** `envshield/tests/core/test_importer.py::TestInteractiveImportNeverShowsAValue`: for every combination of answers, no value in the output or any prompt; the prompt gives length and type; a password-holding value is secret, never a default, never asked about; the answers still decide secret and default. 3 of its 4 fail on `main`. A real pseudo-terminal run of `init --from .env.prod --interactive`: no value in the output or the written schema. Full suite 2753 passed, 1 skipped.
+- **Relationships:** `BL-220` (found while escaping this line), `BL-208` (#94, same importer, credentials as defaults), `BL-209`.
 
 ### BL-225 — `schema diff`: a per-environment change shows one environment's reason and an empty `()`
 
