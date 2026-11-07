@@ -86,3 +86,28 @@ if __name__ == "__main__" and "--regenerate" in sys.argv:
         json.dump(golden, f, indent=2, sort_keys=True)
         f.write("\n")
     print(f"wrote {len(golden)} scenarios to {GOLDEN_PATH}")
+
+
+@pytest.mark.parametrize("name", sorted(SCENARIOS))
+def test_v1_fields_follow_the_verdict(name, tmp_path):
+    """BL-218 (#118): in every scenario, a variable's v1 'valid'/'present'
+    and 'summary.unverified' never contradict its verdict."""
+    scenario = SCENARIOS[name]
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _materialize(scenario["files"])
+        result = runner.invoke(app, ["check", *scenario.get("args", []), "--json"])
+    for report in json.loads(result.stdout).get("reports", []):
+        unverified = set(report["summary"]["unverified"])
+        for v in report["variables"]:
+            if not v["declared"]:
+                continue
+            if v["verdict"] == "valid":
+                assert (v["valid"], v["present"]) == (True, True), v["name"]
+            if v["verdict"] == "invalid" and v["reason_code"] in (
+                "blank",
+                "invalid_value",
+                "invalid_fallback",
+            ):
+                assert v["valid"] is False, v["name"]
+            if v["name"] in unverified:
+                assert v["verdict"] == "unverified", v["name"]
