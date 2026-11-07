@@ -1061,7 +1061,12 @@ deadline, and its variables are COULD NOT VERIFY `value_not_inspected`
 with a secret manager: `secrets:`, `source =`, the per-developer approval,
 `check --with-secrets` and `doctor`'s report (merged `1ee7ac1`, PR #110).
 Part 2: `setup` reports vault variables READY / NEEDS ACCESS / SET
-YOURSELF and never asks for or writes them. The full order is
+YOURSELF and never asks for or writes them (merged `3c3bfef`, PR #111),
+which completes #22 and Phase 3; a real Bitwarden trial passed (PR #122).
+Follow-ups merged: a `{command}` placeholder in `secrets.run` (#112, PR
+#117), `schema diff` reports a changed `source` (#113, PR #115), and an
+unserved Compose `env_file` pipe is COULD NOT VERIFY (#114, PR #116).
+Next: the trial's bugs (#118–#121, `BL-218`–`BL-221`), then #26. The full order is
 ROADMAP.md's "v5 — in progress". Nothing since `v4.9.1` is released.
 
 **Previous phase (updated 2026-10-15): `v4.9.1` released; v5 V1 next.**

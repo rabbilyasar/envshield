@@ -213,3 +213,63 @@ def test_a_known_secret_never_reaches_stdout_or_stderr(tmp_path, monkeypatch):
         assert SENTINEL not in result.stdout
         assert SENTINEL not in (result.stderr or "")
         assert "SET YOURSELF OTHER invalid" in _flat(result)
+
+
+# --- The git-hook offer (BL-219, #119) --------------------------------------------
+
+
+def _git_repo():
+    subprocess.run(["git", "init", "-q"], check=True)
+
+
+def test_non_interactive_never_offers_hooks_on_a_terminal(
+    tmp_path, mocker, never_prompt
+):
+    """--non-interactive means never prompt: not even the git-hook offer that
+    follows the report, on a terminal, in a repository without hooks."""
+    mocker.patch("envshield.core.hooks_manager._is_interactive", return_value=True)
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _git_repo()
+        _project()
+        result = runner.invoke(app, ["setup", "--non-interactive"])
+        flat = _flat(result)
+        assert result.exit_code == 1, flat
+        assert "Run 'envshield hook install' to add the git hooks." in flat
+        assert not os.path.exists(".git/hooks/pre-commit")
+        assert SENTINEL not in flat
+
+
+def test_without_a_terminal_setup_names_the_hook_command(
+    tmp_path, monkeypatch, never_prompt
+):
+    _no_terminal(monkeypatch)
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _git_repo()
+        _project()
+        result = runner.invoke(app, ["setup"])
+        assert "Run 'envshield hook install' to add the git hooks." in _flat(result)
+
+
+def test_interactive_setup_still_offers_hooks(tmp_path, mocker):
+    mocker.patch("envshield.core.hooks_manager._is_interactive", return_value=True)
+    mocker.patch("envshield.core.setup_manager.Prompt.ask", return_value="")
+    confirm = mocker.patch("questionary.confirm")
+    confirm.return_value.ask.return_value = False
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _git_repo()
+        _project()
+        result = runner.invoke(app, ["setup"])
+        asked = [c.args[0] for c in confirm.call_args_list if c.args]
+        assert any(a.startswith("Install git hooks?") for a in asked), asked
+        assert "envshield hook install" not in _flat(result)
+
+
+def test_no_hook_hint_once_hooks_are_installed(tmp_path, monkeypatch, never_prompt):
+    _no_terminal(monkeypatch)
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _git_repo()
+        _project()
+        for name in ("pre-commit", "post-merge"):
+            _write(f".git/hooks/{name}", "#!/bin/sh\n")
+        result = runner.invoke(app, ["setup", "--non-interactive"])
+        assert "envshield hook install" not in _flat(result)

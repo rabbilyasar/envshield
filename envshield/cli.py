@@ -2096,8 +2096,11 @@ def setup(
 
         if completed:
             # Offer to install git hooks: there's now something worth hooking.
+            # Only when setup may prompt: --non-interactive never asks, even
+            # on a terminal (BL-219).
             hm = hooks_manager.HooksManager()
-            hm.install_hooks_if_needed(auto=True, force=False)
+            if interactive:
+                hm.install_hooks_if_needed(auto=True, force=False)
             total_configured = sum(r.configured_count for r in completed)
             left = [(r, name) for r in completed for name in r.to_set_yourself]
             access = sorted({n for r in completed for n in r.needing_access})
@@ -2128,6 +2131,8 @@ def setup(
                     "'envshield check'."
                 )
             hm.print_hook_status()
+            if not interactive and hm.should_prompt_for_installation():
+                console.print("Run 'envshield hook install' to add the git hooks.")
 
         if skipped_count:
             console.print(
