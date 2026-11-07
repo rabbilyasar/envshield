@@ -612,3 +612,68 @@ def test_generate_marks_a_variable_not_required_everywhere_optional(lang):
         assert '"PROD_ONLY": z.string().optional()' in out
         assert '"EVERYWHERE": z.string().min(1)' in out
         assert '"LEGACY": z.string().min(1)' in out
+
+
+# --- #128 (BL-225): each environment's own reason ----------------------------
+
+
+def _requiredness(a, b, environments=("local", "production")):
+    changes = [
+        c
+        for c in contract_diff.diff_schemas(
+            {"K": a}, {"K": b}, environments=list(environments)
+        ).changes
+        # Adding a default is its own change; only requiredness is per environment.
+        if c.category != "default_changed"
+    ]
+    assert len(changes) == 1, [c.to_dict() for c in changes]
+    return changes[0]
+
+
+def test_same_category_different_reasons_names_each_environments_reason():
+    """Required -> default + requiredIn production: non-breaking in both, but
+    'now optional' is true only in local."""
+    change = _requiredness(
+        {"type": "string"},
+        {"type": "string", "defaultValue": "d", "requiredIn": ["production"]},
+    )
+    assert change.category == "non_breaking"
+    assert "()" not in change.description
+    local, production = (
+        contract_diff._requiredness_change(
+            "K",
+            {"type": "string"},
+            {"type": "string", "defaultValue": "d", "requiredIn": ["production"]},
+            env,
+        ).description
+        for env in ("local", "production")
+    )
+    assert f"In local: {local}" in change.description
+    assert f"In production: {production}" in change.description
+    assert change.detail["environments"] == {
+        "local": "non_breaking",
+        "production": "non_breaking",
+    }
+
+
+def test_no_empty_parentheses_when_nothing_is_left():
+    change = _requiredness({}, {"requiredIn": ["production"]}, ALL)
+    # Different categories: where it applies, and the rest in parentheses.
+    assert change.description.endswith(
+        "This applies in local, staging (production: unchanged)."
+    )
+    for a, b in (
+        ({}, {"requiredIn": ["production"]}),
+        (
+            {"type": "string"},
+            {"type": "string", "defaultValue": "d", "requiredIn": ["production"]},
+        ),
+    ):
+        for envs in (("local", "production"), ALL):
+            assert "()" not in _requiredness(a, b, envs).description
+
+
+def test_every_environment_agreeing_is_unchanged():
+    change = _requiredness({}, {"required": False})
+    assert "This applies" not in change.description
+    assert "In local" not in change.description

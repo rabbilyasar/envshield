@@ -2309,11 +2309,13 @@ Component: `core/importer.py::generate_schema_from_file` (`if interactive:`), re
 
 ### BL-225 — `schema diff`: a per-environment change shows one environment's reason and an empty `()`
 
-Type: `BUG` / `UX` · Evidence: `CONFIRMED` (reproduced 2026-11-07) · Priority: **P3** (the category and `blocking` are right; the text misleads) · Status: **open, proposed [#128](https://github.com/rabbilyasar/envshield/issues/128)**
+Type: `BUG` / `UX` · Evidence: `CONFIRMED` (reproduced 2026-11-07) · Priority: **P3** (the category and `blocking` are right; the text misleads) · Status: **fixed 2026-11-07, [#128](https://github.com/rabbilyasar/envshield/issues/128)**
 Component: `core/contract_diff.py::_per_environment`
 
 - **Current behavior:** `[A] type = "string"` → `[A] type = "string", defaultValue = "d", requiredIn = ["production"]` prints "'A' is now optional (required = false) ... This applies in local, production ()." Both environments are `non_breaking` with different details, so the first environment's text is used for both, and nothing is left for the parentheses. In production `A` is still required.
 - **Expected:** each environment's own reason, and no empty `()`.
+- **Fix (2026-11-07):** `_per_environment` groups the environments that share the worst category by their own reason. One reason: as before ("… This applies in X (Y: unchanged)."), without the parentheses when nothing is left. Several: "In local: … In production: …", then "Elsewhere: …" only when there is one. Category, `blocking` and `detail.environments` are unchanged.
+- **Tests:** `envshield/tests/core/test_environments.py`: the case above names each environment's reason; no `()` for either case over two and three environments; agreeing environments unchanged. Full suite 2794 passed, 1 skipped.
 - **Relationships:** V4-2 (#24, environment-aware `schema diff`).
 
 ---

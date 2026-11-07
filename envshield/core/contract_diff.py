@@ -160,19 +160,31 @@ def _per_environment(
     categories = {
         env: (c.category if c is not None else "unchanged") for env, c in by_env.items()
     }
-    where = [env for env, cat in categories.items() if cat == worst.category]
+    # The environments with the worst category, grouped by their own reason:
+    # the same category can come from different transitions (BL-225).
+    reasons: Dict[str, List[str]] = {}
+    for env, c in by_env.items():
+        if c is not None and c.category == worst.category:
+            reasons.setdefault(c.description, []).append(env)
     elsewhere = [
         f"{env}: {cat.replace('_', ' ')}"
         for env, cat in categories.items()
-        if env not in where
+        if cat != worst.category
     ]
+    rest = f" ({'; '.join(elsewhere)})" if elsewhere else ""
+    if len(reasons) == 1:
+        (envs,) = reasons.values()
+        description = f"{worst.description} This applies in {', '.join(envs)}{rest}."
+    else:
+        description = " ".join(
+            f"In {', '.join(envs)}: {text}" for text, envs in reasons.items()
+        )
+        if elsewhere:
+            description += f" Elsewhere: {'; '.join(elsewhere)}."
     return ContractChange(
         variable=worst.variable,
         category=worst.category,
-        description=(
-            f"{worst.description} This applies in {', '.join(where)} "
-            f"({'; '.join(elsewhere)})."
-        ),
+        description=description,
         detail={**worst.detail, "environments": categories},
     )
 
