@@ -2335,6 +2335,58 @@ Component: `core/schema_merge.py`, `cli.py::schema_merge_command`, `core/doctor.
 - **Not run:** the manual Zeus merge named in #26's acceptance criteria, dropped by the maintainer (2026-11-25).
 - **Relationships:** V2-1 (#18, project contract), V2-2 (#19), `BL-208`, `BL-209`.
 
+### BL-227 — V7-1 acceptance suite and real-project verification record
+
+Type: `TRACKING` · Evidence: `CONFIRMED` (2026-11-25) · Priority: **P3** (record) · Status: **record for [#27](https://github.com/rabbilyasar/envshield/issues/27)**
+Component: `envshield/tests/test_v5_acceptance.py`
+
+- **Suite:** the 16 acceptance scenarios in `envshield/tests/test_v5_acceptance.py`, through the real CLI in real git repositories with real commits. Scenario 8 uses a real clone, real installed hooks and a real `git pull`; without the hook installed, its assertion fails. Scenarios 2, 7 and 10 follow #22's run-command design, as amended on #27 (2026-11-25, maintainer).
+- **Scenario 9 against v4.8.0:** the scenario's legacy project (three schemas, `extends`), run through the released v4.8.0 (`pip install envshield==4.8.0`, `check --service S --json` per service) and through the branch (`check --json`). Every variable's result matches: v4.8.0's `ok`/`invalid`/`missing` statuses are v5's VALID, INVALID `invalid_value` and INVALID `missing`, and its exit codes match per service.
+- **KemonChilo with real Bitwarden Secrets Manager** (`~/envshield-trials/2026-11-01-bitwarden/kemonchilo`, `bws run --project-id … --`, approved):
+  - `check --with-secrets` in a pseudo-terminal: the 8 vault-held secrets are VALID. The 3 the vault doesn't hold are INVALID `missing` with "not supplied by your secret manager". The 4 plain variables this clone's `.env` lacks are INVALID `missing`. Exit 1, in 3.4 s.
+  - `bws run … -- envshield check --json` gives the same 8 VALID and the `BL-221` next step for the 3. `check --runtime` run wrapped: 8 valid, 7 missing.
+  - `setup --non-interactive`, wrapped: the 8 are READY "from your secret manager", `.env` is unchanged and stays 0600, exit 1. Unwrapped: all 11 vault variables are NEEDS ACCESS "no terminal", and nothing ran.
+  - `doctor` reports the command approved. None of the 13 vault or `.env` values appeared in any of the 10 outputs. Found `BL-228` (#136).
+- **Public Docker Compose repository: Plane** (a fresh copy of the 2026-11-07 clone). `init --yes` registers only the root service and suggests `service discover`; that registers 5 services and `docker-compose.yml` with `admin/api/live/space/web` mapped.
+  - `check` (775 results: 186 invalid, 589 not required) takes 13 s, `check --since HEAD` 3.4 s, `scan` 51 s.
+  - With `environments: [production]` and the manifest tagged: `check --env production` takes 10 s. Each app service is INVALID on its own gaps. The root `plane` service is ERROR "No deployment manifest for 'plane' is tagged 'production'", as designed (an environment with nothing to check is never a pass).
+  - `check --runtime --env production` without `--service`: "Several services are configured; name one", as designed. No traceback.
+- **Public Kubernetes repository: GoogleCloudPlatform/microservices-demo** (`c7cb6d5`, a shallow clone in `~/envshield-trials/2026-11-25-v7-1`). `init --yes`, then `service add` for the 11 services in `src/` with their `kubernetes-manifests/*.yaml` (container `server`, or `main` for loadgenerator). Each variable was scoped to the services whose code reads it, from EnvShield's own discovery.
+  - `check --env production`: every service is judged against its own manifest. `extra` and `out_of_scope` findings come from Go, C# and Java services, whose reads discovery doesn't see (Python and JS/TS only, as documented).
+  - `ENABLE_TRACING` and `GCP_PROJECT_ID` are INVALID `missing` for the Python services. `init` marked them required although the code reads them inside `try: … except KeyError` (`BL-229`, #137).
+  - `check` 11 s, `doctor` 13 s. No traceback.
+- **Also found:** `BL-230` (#138, `service add --help` loses `<directory>`).
+- **Relationships:** #22 (design), `BL-221`, `BL-226` (the #26 merge trial, which covers the dropped Zeus run).
+
+### BL-228 — `setup` inside the secret manager's run command says "no terminal" for a variable the vault doesn't hold
+
+Type: `UX` · Evidence: `CONFIRMED` (real Bitwarden run, 2026-11-25) · Priority: **P3** · Status: **open**, proposed issue [#136](https://github.com/rabbilyasar/envshield/issues/136)
+Component: `core/setup_manager.py` / `core/secret_manager.py` (the `setup` sibling of `BL-221`'s `pending_detail`)
+
+- **Current behavior:** `bws run --project-id … -- envshield setup --non-interactive` on KemonChilo. The 8 variables the vault supplies are READY "from your secret manager". The 3 it doesn't hold are NEEDS ACCESS "from your secret manager, not checked (no terminal: EnvShield never runs your secrets command without one); or run 'bws run … -- envshield setup'", which is the command already running.
+- **Expected:** the wording `BL-221` gave `check`: the value isn't in this environment, so if EnvShield ran inside the secrets command, add it to the secret manager; otherwise run `setup` in a terminal. The category stays NEEDS ACCESS.
+- **Impact:** a developer who followed the advice is told to do it again. No value is shown, and the exit code is right.
+- **Relationships:** `BL-221` (#121, the same fix for `check`), #22.
+
+### BL-229 — `init` marks a variable required when Python reads it inside `try: … except KeyError`
+
+Type: `BUG` / `CORRECTNESS` · Evidence: `CONFIRMED` (GoogleCloudPlatform/microservices-demo, 2026-11-25) · Priority: **P2** (a false INVALID `missing` in a deployment check, the pillar where false positives cost most trust, §7; `init` does say its guesses need review) · Status: **open**, proposed issue [#137](https://github.com/rabbilyasar/envshield/issues/137)
+Component: `core/init_suggestions.py::CodeRead.required` (`_REQUIRING_ACCESS = {"os.environ[]"}`)
+
+- **Current behavior:** any `os.environ["X"]` read counts as proof of a requirement, because a missing key raises. `src/emailservice/email_server.py` reads `project_id = os.environ["GCP_PROJECT_ID"]` inside `try: … except KeyError: pass`, and `if os.environ["ENABLE_TRACING"] == "1":` inside a `try` with an `except KeyError`. `init` writes both as required. With the Kubernetes manifests (which set neither for these services) tagged `production`, `check --env production` reports both as INVALID `missing` for emailservice and recommendationservice. The code runs fine without them.
+- **Expected:** a subscript read inside a `try` whose handlers catch `KeyError` (or `LookupError`, `Exception`, or a bare `except`) is not proof of a requirement. It should be treated like `os.getenv` with no fallback: required unknown, so `required = false` is written for review.
+- **Impact:** after accepting `init`'s guesses, a deploy check fails on variables the application treats as optional. That's the kind of false failure that makes users stop trusting the deploy gate.
+- **Relationships:** V2-3 (#44, `init` seeds from code), `core/discovery.py` (where the read and its `try` context are visible).
+
+### BL-230 — `service add --help` shows `Defaults to '/env.schema.toml'`
+
+Type: `DOCUMENTATION` / `UX` · Evidence: `CONFIRMED` (2026-11-25) · Priority: **P3** · Status: **open**, proposed issue [#138](https://github.com/rabbilyasar/envshield/issues/138)
+Component: `cli.py::service_add` (`--schema` help)
+
+- **Current behavior:** the help is written as `Defaults to '<directory>/env.schema.toml'.`, but Rich treats `<directory>` as markup and drops it, so it prints `'/env.schema.toml'`. It's also wrong once a project contract exists: a new service then uses the contract (V2-2, #19), not a file in its directory.
+- **Expected:** "Defaults to the project contract (the top-level 'schema:'), or DIRECTORY/env.schema.toml when there is none." with no markup-like text.
+- **Relationships:** `BL-220`/#120 (Rich markup in text), #19.
+
 ---
 
 ## Part 7 — Performance / Scalability (research, not yet benchmarked)

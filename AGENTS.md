@@ -1072,7 +1072,11 @@ The trial's bugs are fixed: #118–#121 (`BL-218`–`BL-221`; PRs #124,
 ([#26](https://github.com/rabbilyasar/envshield/issues/26)) adds
 `schema merge`, which turns several schemas into one project contract and
 refuses any merge that changes a verdict, and `doctor`'s legacy-layout
-notices. Next: Phase 7 (#27, #46, #28, #29). The full order is
+notices (merged `09af34a`, PR #135). Phase 7 has started: V7-1
+([#27](https://github.com/rabbilyasar/envshield/issues/27)) adds the
+16-scenario v5 acceptance suite and records the real-project runs
+(`BL-227`); it found `BL-228`–`BL-230` (#136–#138). Next: #46, #28, #29.
+The full order is
 ROADMAP.md's "v5 — in progress". Nothing since `v4.9.1` is released.
 
 **Previous phase (updated 2026-10-15): `v4.9.1` released; v5 V1 next.**
