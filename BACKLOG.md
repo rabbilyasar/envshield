@@ -2360,12 +2360,15 @@ Component: `envshield/tests/test_v5_acceptance.py`
 
 ### BL-228 — `setup` inside the secret manager's run command says "no terminal" for a variable the vault doesn't hold
 
-Type: `UX` · Evidence: `CONFIRMED` (real Bitwarden run, 2026-11-25) · Priority: **P3** · Status: **open**, proposed issue [#136](https://github.com/rabbilyasar/envshield/issues/136)
+Type: `UX` · Evidence: `CONFIRMED` (real Bitwarden run, 2026-11-25) · Priority: **P3** · Status: **fixed 2026-11-25, [#136](https://github.com/rabbilyasar/envshield/issues/136)**
 Component: `core/setup_manager.py` / `core/secret_manager.py` (the `setup` sibling of `BL-221`'s `pending_detail`)
 
 - **Current behavior:** `bws run --project-id … -- envshield setup --non-interactive` on KemonChilo. The 8 variables the vault supplies are READY "from your secret manager". The 3 it doesn't hold are NEEDS ACCESS "from your secret manager, not checked (no terminal: EnvShield never runs your secrets command without one); or run 'bws run … -- envshield setup'", which is the command already running.
 - **Expected:** the wording `BL-221` gave `check`: the value isn't in this environment, so if EnvShield ran inside the secrets command, add it to the secret manager; otherwise run `setup` in a terminal. The category stays NEEDS ACCESS.
 - **Impact:** a developer who followed the advice is told to do it again. No value is shown, and the exit code is right.
+- **Fix (2026-11-25):** `secret_manager.pending_detail`, for every reason the command didn't run here (no terminal, not approved, declined): "from your secret manager, and isn't in this environment: if EnvShield ran inside your secrets command, add it to your secret manager; otherwise run '<command> -- envshield setup' (not checked here: <reason>)". The same function serves `check --with-secrets` without a terminal, which had the same flaw and gets the same wording. Categories, verdicts and exit codes are unchanged.
+- **Tests:** `envshield/tests/test_secret_manager.py::test_setup_inside_the_run_command_says_to_add_a_missing_value` (wrapped by hand, the vault without `API_KEY`: the others are READY, and `API_KEY` is NEEDS ACCESS with the new text, keeping the wrapped command and the reason) and `test_check_with_secrets_without_a_terminal_has_the_same_wording`. Both fail on `main`.
+- **Re-run (2026-11-25):** `bws run … -- envshield setup --non-interactive` on KemonChilo: the 3 variables the vault doesn't hold get the new text, the 8 it holds are READY, and no vault or `.env` value is in the output.
 - **Relationships:** `BL-221` (#121, the same fix for `check`), #22.
 
 ### BL-229 — `init` marks a variable required when Python reads it inside `try: … except KeyError`

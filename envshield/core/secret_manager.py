@@ -403,7 +403,15 @@ def pending_detail(
         )
     )
     if reason:
-        return f"from your secret manager, not checked ({reason}); or run {wrapped}"
+        # Not run here (no terminal, not approved, declined). EnvShield may
+        # still be running inside the secrets command, wrapped by hand: then
+        # this value is one the vault doesn't hold, and running that command
+        # again changes nothing (BL-228, the setup side of BL-221).
+        return (
+            "from your secret manager, and isn't in this environment: if "
+            "EnvShield ran inside your secrets command, add it to your secret "
+            f"manager; otherwise run {wrapped} (not checked here: {reason})"
+        )
     if command == "check" and config is not None and config.run:
         # EnvShield can't tell whether it runs inside the secrets command
         # (BL-221): inside it, rerunning with --with-secrets runs the same

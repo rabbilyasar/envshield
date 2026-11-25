@@ -656,6 +656,44 @@ def test_setup_wrapped_by_hand(tmp_path, monkeypatch):
     assert "API_KEY" not in written
 
 
+def test_setup_inside_the_run_command_says_to_add_a_missing_value(
+    tmp_path, monkeypatch
+):
+    """BL-228 (#136): run inside the secrets command, a value the vault
+    doesn't hold must not be told to run that same command, as if nothing
+    else applied. EnvShield can't tell it's inside, so the text fits both."""
+    monkeypatch.setattr(secret_manager, "stdin_is_terminal", lambda: False)
+    without_key = {k: v for k, v in SUPPLIED.items() if k != "API_KEY"}
+    result, ran, _ = _setup(
+        tmp_path, args=("--non-interactive",), approve=False, env=without_key
+    )
+    assert not ran
+    outcomes = _outcomes(result.stdout)
+    assert outcomes["DATABASE_URL"] == ("READY", "from your secret manager")
+    category, detail = outcomes["API_KEY"]
+    assert category == "NEEDS ACCESS"
+    flat = " ".join(detail.split())
+    assert "isn't in this environment" in flat
+    assert "if EnvShield ran inside your secrets command, add it" in flat
+    # Not inside it: the way to check it, and why it wasn't, are kept.
+    assert "otherwise run './fakevault -- envshield setup'" in flat
+    assert "no terminal" in flat
+    assert result.exit_code == 1
+
+
+def test_check_with_secrets_without_a_terminal_has_the_same_wording(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(secret_manager, "stdin_is_terminal", lambda: False)
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _project()
+        result = runner.invoke(app, ["check", "--with-secrets", "--json"])
+    detail = _findings(json.loads(result.stdout))["API_KEY"]["detail"]
+    assert "isn't in this environment" in detail
+    assert "otherwise run './fakevault -- envshield check'" in detail
+    assert "no terminal" in detail
+
+
 def test_setup_keeps_a_local_value_the_vault_doesnt_supply(tmp_path, terminal):
     supplied = {k: v for k, v in SUPPLIED.items() if k != "API_KEY"}
     result, _, written = _setup(

@@ -577,8 +577,8 @@ def test_scenario_10_a_commit_changes_secrets_run(repo, prompts, monkeypatch):
     cli("secrets", "allow")
     result = cli("setup", "--non-interactive", code=1)
     assert not os.path.exists("ran.marker")
-    category, detail = outcomes(result.stdout)["API_KEY"]
-    assert category == "NEEDS ACCESS" and "no terminal" in detail
+    assert outcomes(result.stdout)["API_KEY"][0] == "NEEDS ACCESS"
+    assert "not checked here: no terminal" in flat(result.stdout)
 
 
 # -- 12. Optional locally, required in production ------------------------------
