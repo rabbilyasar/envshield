@@ -1,6 +1,7 @@
 # envshield/tests/test_service_cli.py
 import json
 import os
+import re
 
 from typer.testing import CliRunner
 
@@ -851,3 +852,13 @@ def test_service_add_rejects_joining_a_legacy_services_schema_at_its_directory(
         assert "app" in _flat(result.stdout) and "worker" in _flat(result.stdout)
         assert open("envshield.yml").read() == before
         assert config_manager.get_service_dir("app") == "."  # still valid
+
+
+def test_service_add_help_names_the_schema_default():
+    """BL-230 (#138): the --schema default is readable and right."""
+    result = runner.invoke(app, ["service", "add", "--help"], env={"COLUMNS": "300"})
+    text = " ".join(re.sub(r"\x1b\[[0-9;]*m", "", result.stdout).split())
+    text = text.replace("│ ", "").replace(" │", "")
+    assert "Defaults to the project contract (the top-level 'schema:')" in text
+    assert "DIRECTORY/env.schema.toml when there is none" in text
+    assert "'/env.schema.toml'" not in text
