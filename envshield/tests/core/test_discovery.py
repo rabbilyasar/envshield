@@ -1,4 +1,6 @@
 # envshield/tests/core/test_discovery.py
+import pytest
+
 from envshield.core import discovery
 
 
@@ -1032,3 +1034,124 @@ class TestBaseSettingsInReferences:
             u.variable for u in discovery.discover_python_usages(self.SOURCE, "s.py")
         }
         assert found == {"EXPLICIT_READ"}
+
+
+# --- BL-229 (#137): a subscript read the code catches a KeyError for ---------
+
+
+def _guarded(content):
+    return {u.variable: u.guarded for u in _usages(content)}
+
+
+def test_a_subscript_read_inside_a_keyerror_try_is_guarded():
+    src = (
+        "import os\n"
+        "try:\n"
+        '    A = os.environ["A"]\n'
+        "except KeyError:\n"
+        "    A = None\n"
+        'B = os.environ["B"]\n'
+    )
+    assert _guarded(src) == {"A": True, "B": False}
+
+
+@pytest.mark.parametrize(
+    "handler",
+    [
+        "except KeyError:",
+        "except LookupError:",
+        "except Exception:",
+        "except BaseException:",
+        "except:",
+        "except (KeyError, ValueError):",
+        "except (ValueError, KeyError) as e:",
+        "except builtins.KeyError:",
+        "except ValueError:\n    pass\nexcept KeyError:",
+    ],
+)
+def test_every_handler_that_catches_keyerror_guards(handler):
+    src = f'import os\ntry:\n    A = os.environ["A"]\n{handler}\n    pass\n'
+    assert _guarded(src) == {"A": True}
+
+
+@pytest.mark.parametrize(
+    "handler", ["except ValueError:", "except (TypeError, OSError):", "finally:"]
+)
+def test_a_handler_that_doesnt_catch_keyerror_doesnt_guard(handler):
+    src = f'import os\ntry:\n    A = os.environ["A"]\n{handler}\n    pass\n'
+    assert _guarded(src) == {"A": False}
+
+
+def test_only_the_try_body_is_guarded():
+    src = (
+        "import os\n"
+        "try:\n"
+        "    pass\n"
+        "except KeyError:\n"
+        '    A = os.environ["A"]\n'
+        "else:\n"
+        '    B = os.environ["B"]\n'
+        "finally:\n"
+        '    C = os.environ["C"]\n'
+    )
+    assert _guarded(src) == {"A": False, "B": False, "C": False}
+
+
+def test_a_function_defined_inside_the_try_runs_later_unguarded():
+    src = (
+        "import os\n"
+        "try:\n"
+        "    def f():\n"
+        '        return os.environ["A"]\n'
+        "    g = lambda: os.environ['B']\n"
+        "    class C:\n"
+        '        X = os.environ["C"]\n'
+        "except KeyError:\n"
+        "    pass\n"
+    )
+    assert _guarded(src) == {"A": False, "B": False, "C": True}
+
+
+def test_a_try_inside_a_function_guards_its_body():
+    src = (
+        "import os\n"
+        "def f():\n"
+        "    try:\n"
+        "        if os.environ['ENABLE_TRACING'] == '1':\n"
+        "            pass\n"
+        "    except (KeyError, RuntimeError):\n"
+        "        pass\n"
+    )
+    assert _guarded(src) == {"ENABLE_TRACING": True}
+
+
+def test_nested_trys_guard_when_any_enclosing_one_catches_it():
+    src = (
+        "import os\n"
+        "try:\n"
+        "    try:\n"
+        '        A = os.environ["A"]\n'
+        "    except ValueError:\n"
+        "        pass\n"
+        "except KeyError:\n"
+        "    pass\n"
+    )
+    assert _guarded(src) == {"A": True}
+
+
+def test_get_and_getenv_reads_are_never_marked_guarded():
+    src = (
+        "import os\n"
+        "try:\n"
+        '    A = os.environ.get("A")\n'
+        '    B = os.getenv("B")\n'
+        "except KeyError:\n"
+        "    pass\n"
+    )
+    assert _guarded(src) == {"A": False, "B": False}
+
+
+def test_guarded_is_not_part_of_the_reported_shape():
+    usage = _one('import os\ntry:\n    os.environ["A"]\nexcept KeyError:\n    pass\n')
+    assert usage.guarded is True
+    assert "guarded" not in usage.to_dict()

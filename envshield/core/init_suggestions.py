@@ -38,6 +38,9 @@ class CodeRead:
     # Every place it's read: (file, line).
     locations: List[Tuple[str, int]] = field(default_factory=list)
     access_types: List[str] = field(default_factory=list)
+    # Whether one read fails without the variable: a requiring access the
+    # code doesn't catch a KeyError for (BL-229).
+    proves_requirement: bool = False
 
     @property
     def secret(self) -> bool:
@@ -45,7 +48,7 @@ class CodeRead:
 
     @property
     def required(self) -> bool:
-        return any(a in _REQUIRING_ACCESS for a in self.access_types)
+        return self.proves_requirement
 
     def entry(self) -> Dict[str, Any]:
         """The contract table to append for this read."""
@@ -90,6 +93,8 @@ def code_read_suggestions(
             read.locations.append((usage.file_path, usage.line))
             if usage.access_type not in read.access_types:
                 read.access_types.append(usage.access_type)
+            if usage.access_type in _REQUIRING_ACCESS and not usage.guarded:
+                read.proves_requirement = True
     ordered = sorted(reads.values(), key=lambda r: (r.service, r.variable))
     return ordered, problems
 

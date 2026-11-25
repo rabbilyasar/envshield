@@ -69,6 +69,10 @@ class DiscoveredVariableUsage:
     language: str
     access_type: str
     confidence: str
+    # A Python `os.environ["X"]` read in the body of a `try` whose handlers
+    # catch KeyError: the code survives the variable being absent, so the
+    # read doesn't prove a requirement (BL-229). Not part of to_dict().
+    guarded: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -305,6 +309,25 @@ def _is_flask_config_get(node: ast.expr, flask_bindings: _FlaskBindings) -> bool
     )
 
 
+# Exception classes whose handler catches a missing os.environ key.
+_KEYERROR_CATCHERS = frozenset(
+    {"KeyError", "LookupError", "Exception", "BaseException"}
+)
+
+
+def _catches_keyerror(handler: ast.ExceptHandler) -> bool:
+    """Whether `except ...:` catches KeyError: bare, a catching class (by
+    name or attribute, e.g. builtins.KeyError), or a tuple holding one."""
+    if handler.type is None:
+        return True
+    types = handler.type.elts if isinstance(handler.type, ast.Tuple) else [handler.type]
+    for t in types:
+        name = t.id if isinstance(t, ast.Name) else getattr(t, "attr", None)
+        if name in _KEYERROR_CATCHERS:
+            return True
+    return False
+
+
 class _UsageVisitor(ast.NodeVisitor):
     def __init__(
         self,
@@ -319,6 +342,9 @@ class _UsageVisitor(ast.NodeVisitor):
         self.include_settings = include_settings
         self.usages: List[DiscoveredVariableUsage] = []
         self.dynamic: List[DynamicReference] = []
+        # How many enclosing `try` bodies (in the code running here, not in
+        # a function defined here) catch KeyError (BL-229).
+        self._keyerror_guards = 0
 
     def _record_dynamic(self, line: int, access_type: str) -> None:
         self.dynamic.append(
@@ -331,7 +357,12 @@ class _UsageVisitor(ast.NodeVisitor):
         )
 
     def _record(
-        self, variable: str, line: int, access_type: str, confidence: str = "high"
+        self,
+        variable: str,
+        line: int,
+        access_type: str,
+        confidence: str = "high",
+        guarded: bool = False,
     ) -> None:
         self.usages.append(
             DiscoveredVariableUsage(
@@ -341,8 +372,30 @@ class _UsageVisitor(ast.NodeVisitor):
                 language="python",
                 access_type=access_type,
                 confidence=confidence,
+                guarded=guarded,
             )
         )
+
+    def visit_Try(self, node: ast.Try) -> None:
+        """Only the try body is guarded: a handler, `else` or `finally`
+        runs outside it."""
+        catches = any(_catches_keyerror(h) for h in node.handlers)
+        self._keyerror_guards += catches
+        for stmt in node.body:
+            self.visit(stmt)
+        self._keyerror_guards -= catches
+        for part in (*node.handlers, *node.orelse, *node.finalbody):
+            self.visit(part)
+
+    visit_TryStar = visit_Try  # Python 3.11+ `except*`
+
+    def _visit_deferred(self, node: ast.AST) -> None:
+        """A function body runs when it's called, not inside this try."""
+        saved, self._keyerror_guards = self._keyerror_guards, 0
+        self.generic_visit(node)
+        self._keyerror_guards = saved
+
+    visit_FunctionDef = visit_AsyncFunctionDef = visit_Lambda = _visit_deferred
 
     def visit_Call(self, node: ast.Call) -> None:
         if not node.args:
@@ -379,7 +432,12 @@ class _UsageVisitor(ast.NodeVisitor):
         if _is_os_environ(node.value, self.bindings) and isinstance(node.ctx, ast.Load):
             key = _literal_str(node.slice)
             if key is not None:
-                self._record(key, node.lineno, "os.environ[]")
+                self._record(
+                    key,
+                    node.lineno,
+                    "os.environ[]",
+                    guarded=self._keyerror_guards > 0,
+                )
             else:
                 self._record_dynamic(node.lineno, "os.environ[]")
         elif _is_flask_config_attr(node.value, self.flask_bindings) and isinstance(

@@ -410,3 +410,48 @@ def test_containers_building_from_one_service_directory_all_map_to_it(tmp_path):
             "worker": "api",
             "web": "web",
         }
+
+
+# --- BL-229 (#137): a read the code catches a KeyError for isn't a requirement ----
+
+
+def test_a_read_inside_try_except_keyerror_is_not_required(tmp_path):
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        _git("init", "-q")
+        _write(
+            "app.py",
+            "import os\n"
+            "try:\n"
+            '    PROJECT = os.environ["GCP_PROJECT_ID"]\n'
+            "except KeyError:\n"
+            "    PROJECT = None\n"
+            "try:\n"
+            '    if os.environ["ENABLE_TRACING"] == "1":\n'
+            "        pass\n"
+            "except (KeyError, RuntimeError):\n"
+            "    pass\n"
+            'DB = os.environ["DATABASE_URL"]\n'
+            # Read guarded here but unguarded there: the unguarded read
+            # still proves it.
+            "try:\n"
+            '    T = os.environ["TOKEN"]\n'
+            "except KeyError:\n"
+            "    pass\n"
+            'T2 = os.environ["TOKEN"]\n',
+        )
+        result = runner.invoke(app, ["init", "--yes"])
+        assert result.exit_code == 0, result.stdout
+        schema = _schema()
+        assert schema["GCP_PROJECT_ID"]["required"] is False
+        assert schema["ENABLE_TRACING"]["required"] is False
+        assert "required" not in schema["DATABASE_URL"]
+        assert "required" not in schema["TOKEN"]
+        # Absent from a deploy: optional ones aren't a failure.
+        verdicts = {
+            v["name"]: v["verdict"]
+            for r in _check_json()["reports"]
+            for v in r["variables"]
+        }
+        assert verdicts["GCP_PROJECT_ID"] == "not_required"
+        assert verdicts["ENABLE_TRACING"] == "not_required"
+        assert verdicts["DATABASE_URL"] == "invalid"
