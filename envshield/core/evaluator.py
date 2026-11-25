@@ -13,9 +13,11 @@ Values never leave this module: a SourceEvaluation keeps only a SchemaDiff
 (names and constraint descriptions), and the report is built from that.
 """
 
+import contextlib
+import copy
 import os
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Mapping, Optional, Tuple
 
 from ..config import manager as config_manager
 from ..parsers._base import (
@@ -361,6 +363,29 @@ def service_source_filter(service_name: str):
     return belongs
 
 
+# (service, the exact files read) -> its CodeReferences, while
+# reuse_code_references() is active.
+_CODE_CACHE: Optional[Dict[Tuple[str, Tuple[str, ...]], CodeReferences]] = None
+
+
+@contextlib.contextmanager
+def reuse_code_references() -> Iterator[None]:
+    """
+    Within the block, a service whose code files are exactly the ones it
+    had before is not read again: 'schema merge' evaluates every service
+    under two layouts (#26), and what code reads doesn't depend on the
+    schema. A layout that changes which files a service owns changes the
+    key, so those files are read for it.
+    """
+    global _CODE_CACHE
+    previous = _CODE_CACHE
+    _CODE_CACHE = {}
+    try:
+        yield
+    finally:
+        _CODE_CACHE = previous
+
+
 def discover_code_references(
     service_name: str, files: Optional[List[str]] = None
 ) -> CodeReferences:
@@ -393,6 +418,9 @@ def discover_code_references(
     else:
         files = _walk_service_files(service_name)
 
+    key = (service_name, tuple(files))
+    if _CODE_CACHE is not None and key in _CODE_CACHE:
+        return copy.deepcopy(_CODE_CACHE[key])
     result = CodeReferences()
     for path in files:
         try:
@@ -408,6 +436,8 @@ def discover_code_references(
         usages, dynamic = discovery.discover_references(content, path)
         result.usages.extend(usages)
         result.dynamic.extend(dynamic)
+    if _CODE_CACHE is not None:
+        _CODE_CACHE[key] = copy.deepcopy(result)
     return result
 
 

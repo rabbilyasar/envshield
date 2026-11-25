@@ -727,6 +727,13 @@ def _build_checks(
             HealthCheck("Secret Manager", _check_secret_manager, fix_func=None)
         )
 
+    # Legacy layouts (#26): informational, never a failure.
+    layout = _schema_layout_notice()
+    if layout:
+        checks.append(
+            HealthCheck("Schema Layout", lambda: (True, layout), fix_func=None)
+        )
+
     # Only once Claude Code's agent setup is installed (#126).
     if agent_setup.missing_claude_rules(os.getcwd()) is not None:
         checks.append(
@@ -741,6 +748,43 @@ def _build_checks(
         )
 
     return checks
+
+
+def _schema_layout_notice() -> Optional[str]:
+    """
+    A pointer to the project contract for a legacy layout, or None (#26):
+    several services with schemas of their own, or one schema each service
+    names itself. Both stay supported; this never fails 'doctor'.
+    """
+    services = config_manager.get_services()
+    if len(services) < 2:
+        return None
+    own: dict = {}
+    try:
+        for name in services:
+            if config_manager.uses_project_schema(name):
+                continue
+            path = config_manager.get_service_schema_path(name)
+            if path:
+                own.setdefault(os.path.realpath(path), (path, []))[1].append(name)
+    except EnvShieldException:
+        return None
+    if len(own) >= 2:
+        count = sum(len(users) for _, users in own.values())
+        return (
+            f"{count} services have schemas of their own. 'envshield schema "
+            "merge' makes one project contract from them, checked to give "
+            "every service the same verdicts; the old files are kept."
+        )
+    for path, users in own.values():
+        if len(users) > 1:
+            return (
+                f"{', '.join(sorted(users))} each name '{path}' as their "
+                f"schema. Set it once as the top-level 'schema:' in "
+                f"{config_manager.CONFIG_FILE_NAME} and remove each service's "
+                "'schema:', so a service added later uses it too."
+            )
+    return None
 
 
 def _check_agent_setup():

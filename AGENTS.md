@@ -1066,7 +1066,13 @@ which completes #22 and Phase 3; a real Bitwarden trial passed (PR #122).
 Follow-ups merged: a `{command}` placeholder in `secrets.run` (#112, PR
 #117), `schema diff` reports a changed `source` (#113, PR #115), and an
 unserved Compose `env_file` pipe is COULD NOT VERIFY (#114, PR #116).
-Next: the trial's bugs (#118–#121, `BL-218`–`BL-221`), then #26. The full order is
+The trial's bugs are fixed: #118–#121 (`BL-218`–`BL-221`; PRs #124,
+#129, #132, #133), with `BL-222` (#123, PR #125), `BL-223` (#126, PR
+#131), `BL-224` (P0, #127, PR #130) and `BL-225` (#128, PR #134). V6-1
+([#26](https://github.com/rabbilyasar/envshield/issues/26)) adds
+`schema merge`, which turns several schemas into one project contract and
+refuses any merge that changes a verdict, and `doctor`'s legacy-layout
+notices. Next: Phase 7 (#27, #46, #28, #29). The full order is
 ROADMAP.md's "v5 — in progress". Nothing since `v4.9.1` is released.
 
 **Previous phase (updated 2026-10-15): `v4.9.1` released; v5 V1 next.**

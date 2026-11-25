@@ -1,5 +1,7 @@
+import contextlib
+import copy
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 import toml
 import yaml
@@ -128,10 +130,32 @@ def find_project_root(start: str = ".") -> Optional[str]:
         current = parent
 
 
+# A proposed envshield.yml, in memory (config_override).
+_CONFIG_OVERRIDE: Optional[Dict[str, Any]] = None
+
+
+@contextlib.contextmanager
+def config_override(config: Dict[str, Any]) -> Iterator[None]:
+    """
+    Within the block, load_config() returns `config` instead of reading
+    envshield.yml: 'schema merge' evaluates a proposed layout this way
+    before anything is written (#26). Each load gets its own copy.
+    """
+    global _CONFIG_OVERRIDE
+    previous = _CONFIG_OVERRIDE
+    _CONFIG_OVERRIDE = config
+    try:
+        yield
+    finally:
+        _CONFIG_OVERRIDE = previous
+
+
 def load_config(path: Optional[str] = None) -> Dict[str, Any]:
     """
     Loads and parses the envshield.yml file.
     """
+    if path is None and _CONFIG_OVERRIDE is not None:
+        return copy.deepcopy(_CONFIG_OVERRIDE)
     config_path = path or CONFIG_FILE_NAME
     if not os.path.exists(config_path):
         if path:

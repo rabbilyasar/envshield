@@ -2318,6 +2318,23 @@ Component: `core/contract_diff.py::_per_environment`
 - **Tests:** `envshield/tests/core/test_environments.py`: the case above names each environment's reason; no `()` for either case over two and three environments; agreeing environments unchanged. Full suite 2794 passed, 1 skipped.
 - **Relationships:** V4-2 (#24, environment-aware `schema diff`).
 
+### BL-226 — V6-1 `schema merge`: real-repository trial record
+
+Type: `TRACKING` · Evidence: `CONFIRMED` (real-repository trial, 2026-11-25) · Priority: **P3** (no defect open) · Status: **record for [#26](https://github.com/rabbilyasar/envshield/issues/26)**
+Component: `core/schema_merge.py`, `cli.py::schema_merge_command`, `core/doctor.py::_schema_layout_notice`, `core/evaluator.py::reuse_code_references`
+
+- **Trial (2026-11-25):** throwaway clones under `~/envshield-trials/2026-11-07-schema-merge` (read-only toward every remote) of Cal.com, Dify, Documenso, Formbricks, Langfuse, n8n, Plane, PostHog and Twenty. Each clone was reset, then given a v4 layout with the released v4.9.1 (`init`, `service discover --yes`, and `import` for each discovered service that had a `.env.example` and no schema). Then the branch ran `doctor`, `check --json`, `schema merge --output contract.toml` (no `--yes`), `schema merge --output contract.toml --yes`, `check --json` again, and, after a merge, `schema diff`, `check --since HEAD` and `doctor`. `--output` was needed because each repository's root service already uses `./env.schema.toml`.
+- **Results:**
+  - Merged with equivalent verdicts: Plane (6 schemas, 63 variables), Twenty (6 schemas), Cal.com, Documenso, Formbricks, Langfuse and n8n (one schema each). For all seven, the `check --json` findings were identical before and after the merge, compared by service, variable, verdict and reason (Plane 234, Twenty 138, n8n 311 and Cal.com 270 findings, among others).
+  - Refused with a precise conflict list, nothing written: Dify, 10 variables whose `type` differs (`api/.env.example` holds `CONSOLE_API_URL=http://localhost:5001`, from which v4 inferred `url`; `docker/.env.example` leaves it empty, so it has no type). PostHog, 1 conflict (`BILLING_SERVICE_URL`, `ee` vs `posthog`). Both are real differences in what a service accepts, so refusing is correct.
+  - Without `--yes`, `envshield.yml` was unchanged in all 9. The old schema files were byte-identical in all 9.
+  - `doctor`'s notice appeared in the four multi-schema repositories (Plane, Twenty, Dify, PostHog) and in none of the single-schema ones. No traceback.
+- **Found and fixed during the trial:** the equivalence gate read every service's code once per layout. On Twenty that was about 150 s of code discovery for each layout. Because what code reads doesn't depend on the schema, `evaluator.reuse_code_references()` now reuses a service's code references when its file list is unchanged; a changed file list is read again. After the fix, merge times were Twenty 221 s, n8n 145 s, Langfuse 32 s, Formbricks 24 s, Cal.com 17 s, Plane 14 s and Documenso 9 s. `check --json` took Twenty 150 s, n8n 125 s and PostHog 367 s. Tests: `test_the_gate_reads_each_services_code_once` (fails without the cache) and `test_reused_code_references_are_keyed_on_the_files_read`.
+- **Secret safety:** every output was compared with the repositories' real `.env` values (PostHog 40, Twenty 22, Cal.com 1, the rest none). The only match was PostHog's development value `posthog` (the database user and password in its `.env`), which is also the service's name in the conflict line and the `doctor` heading. That is not a leak.
+- **v4.9.1 credential defaults:** v4.9.1's `init`/`import` still writes a password-holding URL as a default (`BL-208`, fixed in v5), which the branch refuses to load (`BL-209`). The driver removed those defaults before the merge: Plane `apps/api`, Dify `api` and `docker`. A v4.9.1 user upgrading will see that refusal before `schema merge` can run. That is `BL-209`'s intended behavior, already documented there.
+- **Not run:** the manual Zeus merge named in #26's acceptance criteria, dropped by the maintainer (2026-11-25).
+- **Relationships:** V2-1 (#18, project contract), V2-2 (#19), `BL-208`, `BL-209`.
+
 ---
 
 ## Part 7 — Performance / Scalability (research, not yet benchmarked)
