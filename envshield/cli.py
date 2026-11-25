@@ -1,4 +1,5 @@
 # envshield/cli.py
+import difflib
 import json
 import os
 import sys
@@ -7,6 +8,7 @@ from typing import Any, Dict, List, Optional, cast
 import questionary
 import toml
 import typer
+import yaml
 from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
@@ -32,6 +34,7 @@ from .core import (
     inspector,
     scanner,
     schema_manager,
+    schema_merge,
     schema_snapshot,
     schema_types,
     secret_manager,
@@ -2561,6 +2564,180 @@ def undeclared(
 
 
 _FAIL_ON_DEFAULT = ",".join(sorted(contract_diff.DEFAULT_BLOCKING_CATEGORIES))
+
+
+@schema_app.command("merge")
+def schema_merge_command(
+    output: Optional[str] = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help=f"Where to write the contract (default: {config_manager.SCHEMA_FILE_NAME}). An existing file is never overwritten.",
+    ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Apply the envshield.yml change without asking.",
+    ),
+):
+    """Merges every service's schema into one project contract, checked to give every service the same verdicts.
+
+    Variables defined the same way become one table; a differing
+    description or default becomes a per-service override; any other
+    difference is a conflict, and nothing is written. Secrets stay granted
+    to exactly the services that had them. The old schema files are never
+    edited or deleted, and their comments are not carried over.
+    """
+    services = sorted(config_manager.get_services())
+    if not services:
+        console.print(
+            "[bold red]Error:[/bold red] No services are registered. Run "
+            "'envshield init' first."
+        )
+        raise typer.Exit(code=1)
+    try:
+        environments = config_manager.get_environments()
+        per_service = {s: config_manager.load_schema(s) for s in services}
+        sources = sorted(
+            {
+                os.path.relpath(f)
+                for s in services
+                for f in config_manager.get_schema_files(
+                    cast(str, config_manager.get_service_schema_path(s))
+                )
+            }
+        )
+    except EnvShieldException as e:
+        console.print(f"[bold red]Error:[/bold red] {escape(str(e))}")
+        raise typer.Exit(code=1)
+
+    result = schema_merge.merge(per_service, environments)
+    if result.conflicts:
+        console.print(
+            f"[bold red]{len(result.conflicts)} conflict(s): these variables are "
+            "defined differently by different services.[/bold red]"
+        )
+        for conflict in result.conflicts:
+            console.print(f"  ✗ {escape(conflict.text())}")
+        console.print(
+            "Make each one the same in every schema (or rename one), then run "
+            "'envshield schema merge' again. Nothing was written."
+        )
+        raise typer.Exit(code=1)
+
+    target = output or config_manager.SCHEMA_FILE_NAME
+    try:
+        target = config_manager._ensure_within_project(target, "--output")
+        file_updater.assert_safe_write_target(target)
+        text = schema_merge.render(result.contract, sources)
+        exists = os.path.exists(target)
+        if exists:
+            with open(target) as f:
+                same = f.read() == text
+            if not same:
+                hint = "" if output else " Pass --output PATH to write it elsewhere."
+                raise EnvShieldException(
+                    f"'{target}' already exists and is never overwritten.{hint}"
+                )
+        old_config = config_manager.load_config()
+        new_config = schema_merge.proposed_config(old_config, target)
+    except EnvShieldException as e:
+        console.print(f"[bold red]Error:[/bold red] {escape(str(e))}")
+        raise typer.Exit(code=1)
+
+    # Judge the merge before anything is applied: the contract goes to a
+    # temporary file next to the target first.
+    staging = os.path.join(
+        os.path.dirname(target), f".{os.path.basename(target)}.merge-tmp"
+    )
+    console.print(
+        f"Checking that every service gets the same verdicts from "
+        f"[bold cyan]{escape(target)}[/bold cyan]..."
+    )
+    try:
+        if not exists:
+            with file_updater.open_for_write(staging) as f:
+                f.write(text)
+        gate_config = (
+            new_config if exists else schema_merge.proposed_config(old_config, staging)
+        )
+        differences = schema_merge.compare(services, environments, gate_config)
+        if differences:
+            console.print(
+                f"[bold red]Not merged: {len(differences)} verdict(s) would "
+                "change.[/bold red]"
+            )
+            for line in differences:
+                console.print(f"  ✗ {escape(line)}")
+            console.print("Nothing was written.")
+            raise typer.Exit(code=1)
+        if not exists:
+            os.replace(staging, target)
+    except EnvShieldException as e:
+        console.print(f"[bold red]Error:[/bold red] {escape(str(e))}")
+        raise typer.Exit(code=1)
+    finally:
+        if os.path.exists(staging):
+            os.remove(staging)
+
+    console.print(
+        f"[bold green]✓[/bold green] {'Wrote' if not exists else 'Already wrote'} "
+        f"[bold cyan]{escape(target)}[/bold cyan]: {len(result.contract)} "
+        f"variable(s) from {len(sources)} schema file(s), same verdicts for every "
+        "service. The old schema files are unchanged; their comments are not "
+        "carried over."
+    )
+    if new_config == old_config:
+        console.print("envshield.yml already uses it.")
+        return
+
+    with open(config_manager.CONFIG_FILE_NAME) as f:
+        old_text = f.read()
+    new_text = yaml.dump(new_config, sort_keys=False, indent=2)
+    console.print(
+        f"\nThe {config_manager.CONFIG_FILE_NAME} change (every service onto "
+        "the project contract, each keeping its directory):"
+    )
+    for line in difflib.unified_diff(
+        old_text.splitlines(),
+        new_text.splitlines(),
+        config_manager.CONFIG_FILE_NAME,
+        config_manager.CONFIG_FILE_NAME + " (merged)",
+        lineterm="",
+    ):
+        style = (
+            "green"
+            if line.startswith("+")
+            else "red"
+            if line.startswith("-")
+            else "dim"
+        )
+        console.print(f"[{style}]{escape(line)}[/{style}]", highlight=False)
+    apply = yes or (
+        hooks_manager._is_interactive()
+        and bool(
+            questionary.confirm(
+                f"Apply this change to {config_manager.CONFIG_FILE_NAME}?",
+                default=False,
+            ).ask()
+        )
+    )
+    if not apply:
+        console.print(
+            f"{config_manager.CONFIG_FILE_NAME} unchanged. Run 'envshield schema "
+            "merge --yes' to apply it."
+        )
+        return
+    try:
+        file_updater.atomic_write(config_manager.CONFIG_FILE_NAME, new_text)
+    except EnvShieldException as e:
+        console.print(f"[bold red]Error:[/bold red] {escape(str(e))}")
+        raise typer.Exit(code=1)
+    console.print(
+        f"[bold green]✓[/bold green] Updated {config_manager.CONFIG_FILE_NAME}: "
+        f"every service uses {escape(target)}."
+    )
 
 
 @schema_app.command("diff")
