@@ -1075,7 +1075,9 @@ refuses any merge that changes a verdict, and `doctor`'s legacy-layout
 notices (merged `09af34a`, PR #135). Phase 7 has started: V7-1
 ([#27](https://github.com/rabbilyasar/envshield/issues/27)) adds the
 16-scenario v5 acceptance suite and records the real-project runs
-(`BL-227`); it found `BL-228`–`BL-230` (#136–#138). Next: #46, #28, #29.
+(`BL-227`); it found `BL-228`–`BL-230` (#136–#138). #137 (`BL-229`):
+`init` no longer marks a read inside `try: … except KeyError` required.
+Next: #46, #28, #29.
 The full order is
 ROADMAP.md's "v5 — in progress". Nothing since `v4.9.1` is released.
 
