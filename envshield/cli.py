@@ -3712,7 +3712,7 @@ def service_add(
     schema: Optional[str] = typer.Option(
         None,
         "--schema",
-        help="Path to the schema file. Defaults to '<directory>/env.schema.toml'.",
+        help="Path to the schema file. Defaults to the project contract (the top-level 'schema:'), or DIRECTORY/env.schema.toml when there is none.",
     ),
     import_from: Optional[str] = typer.Option(
         None,

@@ -2387,11 +2387,12 @@ Component: `core/init_suggestions.py::CodeRead.required` (`_REQUIRING_ACCESS = {
 
 ### BL-230 — `service add --help` shows `Defaults to '/env.schema.toml'`
 
-Type: `DOCUMENTATION` / `UX` · Evidence: `CONFIRMED` (2026-11-25) · Priority: **P3** · Status: **open**, proposed issue [#138](https://github.com/rabbilyasar/envshield/issues/138)
+Type: `DOCUMENTATION` / `UX` · Evidence: `CONFIRMED` (2026-11-25) · Priority: **P3** · Status: **fixed 2026-11-25, [#138](https://github.com/rabbilyasar/envshield/issues/138)**
 Component: `cli.py::service_add` (`--schema` help)
 
 - **Current behavior:** the help is written as `Defaults to '<directory>/env.schema.toml'.`, but Rich treats `<directory>` as markup and drops it, so it prints `'/env.schema.toml'`. It's also wrong once a project contract exists: a new service then uses the contract (V2-2, #19), not a file in its directory.
 - **Expected:** "Defaults to the project contract (the top-level 'schema:'), or DIRECTORY/env.schema.toml when there is none." with no markup-like text.
+- **Fix (2026-11-25):** the help now reads "Path to the schema file. Defaults to the project contract (the top-level 'schema:'), or DIRECTORY/env.schema.toml when there is none." No other `help=` text in `cli.py` has an angle-bracket placeholder. Test: `envshield/tests/test_service_cli.py::test_service_add_help_names_the_schema_default` (fails on `main`).
 - **Relationships:** `BL-220`/#120 (Rich markup in text), #19.
 
 ---
